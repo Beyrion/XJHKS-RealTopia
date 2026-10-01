@@ -19,7 +19,7 @@ import java.util.List;
 final class WarmCamera implements AutoCloseable {
     private static final String TAG = "RealiaCamera";
     private static final long COLD_WARMUP_MS = 1_200;
-    private static final long HOT_WARMUP_MS = 250;
+    private static final long HOT_WARMUP_MS = 350;
     private static final long CAPTURE_TIMEOUT_MS = 3_000;
 
     interface Callback {
