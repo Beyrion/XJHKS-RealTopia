@@ -1,0 +1,46 @@
+.gradle/
+**/build/
+**/target/
+**/node_modules/
+**/dist/
+local.properties
+*.apk
+*.aab
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local configuration, credentials and signing material.
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Tool caches and generated reports.
+.cache/
+coverage/
+reports/
+
+# Keep the manually bootstrapped Tauri Android project under source control.
+!phone/app/src-tauri/gen/
+!phone/app/src-tauri/gen/**
+
+pc/
+artifacts/
+phone/.build/
+model/face/*
+!model/face/.gitkeep
+!model/face/README.md
+!model/face/manifest.json
+
+# Local model artifacts are provisioned separately.
+/model/
+*.mnn
+*.onnx
+*.safetensors

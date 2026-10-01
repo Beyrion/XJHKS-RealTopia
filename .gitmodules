@@ -1,0 +1,3 @@
+[submodule "phone/MNN"]
+	path = phone/MNN
+	url = https://github.com/Embedded-AI-Systems/MNN-Agent.git
