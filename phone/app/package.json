@@ -1,0 +1,26 @@
+{
+  "name": "realtopia-phone",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test:ui": "node ../../scripts/ui-smoke.mjs",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "lucide": "^1.30.0",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/three": "^0.179.0",
+    "playwright-core": "^1.54.2",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}
