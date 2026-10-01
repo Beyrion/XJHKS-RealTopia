@@ -26,6 +26,7 @@ Thumbs.db
 .cache/
 coverage/
 reports/
+dev/.runtime/
 
 # Keep the manually bootstrapped Tauri Android project under source control.
 !phone/app/src-tauri/gen/

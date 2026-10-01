@@ -1,0 +1,401 @@
+diff --git a/src/app/player/WebCodecsPlayer.ts b/src/app/player/WebCodecsPlayer.ts
+index 9b0dd32..aee5e29 100644
+--- a/src/app/player/WebCodecsPlayer.ts
++++ b/src/app/player/WebCodecsPlayer.ts
+@@ -130,8 +130,8 @@ export class WebCodecsPlayer extends BaseCanvasBasedPlayer {
+                 if (this.decoder.state === 'configured') {
+                     this.decoder.flush().catch(() => {});
+                 }
+-                // Supply SPS/PPS (and VPS for H.265) once via `description` so the
+-                // per-frame keyframe path no longer concatenates config + frame data.
++                // scrcpy sends Annex-B parameter sets. Keep description absent;
++                // WebCodecs otherwise interprets these bytes as avcC/hvcC.
+                 this.decoder.configure(
+                     buildDecoderConfig({
+                         codec: result.codec,
+@@ -153,17 +153,29 @@ export class WebCodecsPlayer extends BaseCanvasBasedPlayer {
+                 this.receivedFirstFrame = true;
+             }
+ 
+-            // SPS/PPS (and VPS for H.265) were handed to the decoder via the
+-            // `description` field of VideoDecoderConfig at configure() time, and
+-            // AV1 carries its sequence header inline — so decode the keyframe
+-            // data directly with no per-frame config concatenation (finding #41).
+-            this.decoder.decode(
+-                new EncodedVideoChunk({
+-                    type: 'key',
+-                    timestamp: Number(pts),
+-                    data,
+-                }),
+-            );
++            if (this.detectedCodec === 'av1') {
++                this.decoder.decode(
++                    new EncodedVideoChunk({
++                        type: 'key',
++                        timestamp: Number(pts),
++                        data,
++                    }),
++                );
++            } else {
++                // In Annex-B mode a random-access chunk must contain the VPS/SPS/PPS
++                // required to decode it. scrcpy sends those in a separate config
++                // packet, so join them with the keyframe for WebCodecs.
++                const fullData = new Uint8Array(this.configData.length + data.length);
++                fullData.set(this.configData);
++                fullData.set(data, this.configData.length);
++                this.decoder.decode(
++                    new EncodedVideoChunk({
++                        type: 'key',
++                        timestamp: Number(pts),
++                        data: fullData,
++                    }),
++                );
++            }
+             return;
+         }
+ 
+@@ -237,8 +249,12 @@ export class WebCodecsPlayer extends BaseCanvasBasedPlayer {
+ 
+     /** Set fallback dimensions from stream metadata (used by AV1 which doesn't include dimensions in config). */
+     public setMetadataSize(width: number, height: number): void {
++        const changed = this.metadataWidth !== width || this.metadataHeight !== height;
+         this.metadataWidth = width;
+         this.metadataHeight = height;
++        if (changed && this.decoder.state === 'configured' && width > 0 && height > 0) {
++            this.scaleCanvas(width, height);
++        }
+     }
+ 
+     protected scaleCanvas(width: number, height: number): void {
+diff --git a/src/app/player/__tests__/animationFrameGuard.test.ts b/src/app/player/__tests__/animationFrameGuard.test.ts
+index e851c41..8d7edd9 100644
+--- a/src/app/player/__tests__/animationFrameGuard.test.ts
++++ b/src/app/player/__tests__/animationFrameGuard.test.ts
+@@ -37,6 +37,30 @@ describe('AnimationFrameGuard', () => {
+         expect(g.isPending()).toBe(true);
+     });
+ 
++    it('does not rebind the browser requestAnimationFrame receiver', () => {
++        const originalRaf = globalThis.requestAnimationFrame;
++        const originalCaf = globalThis.cancelAnimationFrame;
++        const raf = vi.fn(function (this: unknown, _cb: FrameRequestCallback) {
++            expect(this).toBe(globalThis);
++            return 1;
++        });
++        const caf = vi.fn(function (this: unknown, _id: number) {
++            expect(this).toBe(globalThis);
++        });
++        globalThis.requestAnimationFrame = raf;
++        globalThis.cancelAnimationFrame = caf;
++        try {
++            const g = new AnimationFrameGuard();
++            g.start(vi.fn());
++            g.stop();
++            expect(raf).toHaveBeenCalledOnce();
++            expect(caf).toHaveBeenCalledOnce();
++        } finally {
++            globalThis.requestAnimationFrame = originalRaf;
++            globalThis.cancelAnimationFrame = originalCaf;
++        }
++    });
++
+     it('does NOT double-start while a frame is already pending', () => {
+         const { raf, caf } = makeFakes();
+         const g = new AnimationFrameGuard(raf, caf);
+diff --git a/src/app/player/__tests__/webCodecsConfig.test.ts b/src/app/player/__tests__/webCodecsConfig.test.ts
+index 48a63e8..100eb8b 100644
+--- a/src/app/player/__tests__/webCodecsConfig.test.ts
++++ b/src/app/player/__tests__/webCodecsConfig.test.ts
+@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
+ import { buildDecoderConfig } from '../webCodecsConfig';
+ 
+ describe('buildDecoderConfig', () => {
+-    it('carries the SPS/PPS config bytes via description for H.264', () => {
++    it('keeps description absent for Annex-B H.264', () => {
+         const configData = new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0, 0, 0, 1, 0x68, 0xce]);
+         const cfg = buildDecoderConfig({
+             codec: 'avc1.42001E',
+@@ -15,12 +15,10 @@ describe('buildDecoderConfig', () => {
+         expect(cfg.codedWidth).toBe(1280);
+         expect(cfg.codedHeight).toBe(720);
+         expect(cfg.optimizeForLatency).toBe(true);
+-        // The whole point of #41: the SPS/PPS travels in `description`, not prepended per frame.
+-        expect(cfg.description).toBeInstanceOf(Uint8Array);
+-        expect(Array.from(cfg.description as Uint8Array)).toEqual(Array.from(configData));
++        expect(cfg.description).toBeUndefined();
+     });
+ 
+-    it('carries the VPS/SPS/PPS config bytes via description for H.265', () => {
++    it('keeps description absent for Annex-B H.265', () => {
+         const configData = new Uint8Array([0, 0, 0, 1, 0x40, 0x01, 0, 0, 0, 1, 0x42, 0x01]);
+         const cfg = buildDecoderConfig({
+             codec: 'hev1.1.6.L93.B0',
+@@ -29,8 +27,7 @@ describe('buildDecoderConfig', () => {
+             codedHeight: 1088,
+             configData,
+         });
+-        expect(cfg.description).toBeInstanceOf(Uint8Array);
+-        expect(Array.from(cfg.description as Uint8Array)).toEqual(Array.from(configData));
++        expect(cfg.description).toBeUndefined();
+     });
+ 
+     it('does NOT set a description for AV1 (config record is handled differently)', () => {
+@@ -44,19 +41,4 @@ describe('buildDecoderConfig', () => {
+         });
+         expect(cfg.description).toBeUndefined();
+     });
+-
+-    it('returns a description copy that is decoupled from the source buffer', () => {
+-        const configData = new Uint8Array([0, 0, 0, 1, 0x67, 0x42]);
+-        const cfg = buildDecoderConfig({
+-            codec: 'avc1.42001E',
+-            detectedCodec: 'h264',
+-            codedWidth: 640,
+-            codedHeight: 480,
+-            configData,
+-        });
+-        const desc = cfg.description as Uint8Array;
+-        // Mutating the original config buffer must not corrupt the decoder description.
+-        configData[4] = 0xff;
+-        expect(desc[4]).toBe(0x67);
+-    });
+ });
+diff --git a/src/app/player/__tests__/webCodecsPlayerKeyframe.test.ts b/src/app/player/__tests__/webCodecsPlayerKeyframe.test.ts
+index c0fd88e..ce15592 100644
+--- a/src/app/player/__tests__/webCodecsPlayerKeyframe.test.ts
++++ b/src/app/player/__tests__/webCodecsPlayerKeyframe.test.ts
+@@ -2,10 +2,9 @@
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+ 
+ /**
+- * Behavioural guard for finding #41: on a keyframe, WebCodecsPlayer must hand the
+- * raw frame bytes to the decoder UNPREPENDED (the SPS/PPS now travel via the
+- * VideoDecoderConfig.description set at configure() time), and the configure()
+- * call must include that `description`.
++ * scrcpy emits Annex-B config separately from keyframes. WebCodecsPlayer must
++ * leave VideoDecoderConfig.description absent and prepend the parameter sets to
++ * each random-access chunk.
+  *
+  * We stub the WebCodecs globals and the canvas 2d context so the player can be
+  * instantiated and driven in jsdom without real WebCodecs support.
+@@ -85,24 +84,23 @@ describe('WebCodecsPlayer keyframe decode (finding #41)', () => {
+         vi.restoreAllMocks();
+     });
+ 
+-    it('configures with a description and decodes keyframe data unprepended', async () => {
++    it('configures Annex B without description and prepends config to keyframes', async () => {
+         const { WebCodecsPlayer } = await import('../WebCodecsPlayer');
+         const player = new WebCodecsPlayer('udid-test');
+         player.setMetadataSize(1280, 720);
+ 
+-        // Config frame: should drive a configure() carrying the SPS/PPS via description.
++        // Config frame selects Annex-B mode by leaving description absent.
+         player.pushVideoFrame(H264_CONFIG, 0n, true, false);
+         expect(decoderState).toBe('configured');
+         expect(lastConfig).toBeDefined();
+-        expect(lastConfig?.description).toBeInstanceOf(Uint8Array);
+-        expect(Array.from(lastConfig?.description as Uint8Array)).toEqual(Array.from(H264_CONFIG));
++        expect(lastConfig?.description).toBeUndefined();
+ 
+-        // Keyframe: the chunk data must equal the raw keyframe bytes — NOT config+frame.
++        // Keyframe must carry SPS/PPS followed by the encoded picture.
+         player.pushVideoFrame(H264_KEYFRAME, 100n, false, true);
+         expect(decodedChunks.length).toBe(1);
+         const chunk = decodedChunks[0]!;
+         expect(chunk.type).toBe('key');
+-        expect(chunk.data.length).toBe(H264_KEYFRAME.length); // would be longer if prepended
+-        expect(Array.from(chunk.data)).toEqual(Array.from(H264_KEYFRAME));
++        expect(chunk.data.length).toBe(H264_CONFIG.length + H264_KEYFRAME.length);
++        expect(Array.from(chunk.data)).toEqual(Array.from([...H264_CONFIG, ...H264_KEYFRAME]));
+     });
+ });
+diff --git a/src/app/player/animationFrameGuard.ts b/src/app/player/animationFrameGuard.ts
+index e4b7525..86aeddc 100644
+--- a/src/app/player/animationFrameGuard.ts
++++ b/src/app/player/animationFrameGuard.ts
+@@ -17,8 +17,8 @@ export class AnimationFrameGuard {
+     private id: number | null = null;
+ 
+     constructor(
+-        private readonly raf: Raf = requestAnimationFrame,
+-        private readonly caf: Caf = cancelAnimationFrame,
++        private readonly raf: Raf = (cb) => globalThis.requestAnimationFrame(cb),
++        private readonly caf: Caf = (handle) => globalThis.cancelAnimationFrame(handle),
+     ) {}
+ 
+     public isPending(): boolean {
+diff --git a/src/app/player/webCodecsConfig.ts b/src/app/player/webCodecsConfig.ts
+index a6c7c72..c02455d 100644
+--- a/src/app/player/webCodecsConfig.ts
++++ b/src/app/player/webCodecsConfig.ts
+@@ -2,10 +2,11 @@
+  * Pure builder for the {@link VideoDecoderConfig} passed to
+  * `VideoDecoder.configure()`.
+  *
+- * For H.264 / H.265 the SPS/PPS (and VPS) parameter sets are supplied once via
+- * `description`, so the per-frame hot path no longer has to prepend the config
+- * bytes to every keyframe (see finding #41). AV1 carries its sequence header in
+- * the keyframe data itself, so no `description` is set for it.
++ * scrcpy emits H.264/H.265 as Annex B. WebCodecs interprets a present
++ * `description` as avcC/hvcC, so raw Annex-B parameter sets must not be placed
++ * there. They are prepended to keyframes by WebCodecsPlayer instead. AV1 carries
++ * its sequence header inline too, so no supported codec needs `description`
++ * here.
+  */
+ export interface BuildDecoderConfigParams {
+     /** WebCodecs codec string, e.g. `avc1.42E01E` / `hev1.1.6.L93.B0` / `av01.0.04M.08`. */
+@@ -24,10 +25,5 @@ export function buildDecoderConfig(params: BuildDecoderConfigParams): VideoDecod
+         codedHeight: params.codedHeight,
+         optimizeForLatency: true,
+     };
+-    // H.264/H.265: hand the parameter sets to the decoder once via `description`.
+-    // Copy so the decoder's view can't be mutated by later reuse of the source buffer.
+-    if (params.detectedCodec === 'h264' || params.detectedCodec === 'h265') {
+-        config.description = new Uint8Array(params.configData);
+-    }
+     return config;
+ }
+diff --git a/src/app/googDevice/client/StreamClientScrcpy.ts b/src/app/googDevice/client/StreamClientScrcpy.ts
+index 654a7ee..57cce8b 100644
+--- a/src/app/googDevice/client/StreamClientScrcpy.ts
++++ b/src/app/googDevice/client/StreamClientScrcpy.ts
+@@ -345,7 +345,7 @@ export class StreamClientScrcpy
+             resolution: `${meta.screenWidth ?? 0}x${meta.screenHeight ?? 0}`,
+         });
+ 
+-        if (meta.audioCodec !== 'disabled' && meta.audioCodec !== 'error') {
++        if (!this.audioPlayer && meta.audioCodec !== 'disabled' && meta.audioCodec !== 'error') {
+             this.audioPlayer = new AudioPlayer(meta.audioCodec);
+             this.audioPlayer.start().catch((err) => {
+                 console.error(TAG, 'Failed to start audio:', err.message);
+diff --git a/src/server/FrameReader.ts b/src/server/FrameReader.ts
+index 2d728b3..70504c8 100644
+--- a/src/server/FrameReader.ts
++++ b/src/server/FrameReader.ts
+@@ -21,9 +21,16 @@ export interface ScrcpyFrame {
+     data: Buffer;
+ }
+ 
++export interface ScrcpySessionUpdate {
++    width: number;
++    height: number;
++    clientResized: boolean;
++}
++
+ export class FrameReader {
+     private buffer: Buffer = Buffer.alloc(0);
+     private frameCallback?: ((frame: ScrcpyFrame) => void) | undefined;
++    private sessionCallback?: ((session: ScrcpySessionUpdate) => void) | undefined;
+     private endCallback?: (() => void) | undefined;
+ 
+     constructor(private readonly socket: net.Socket) {
+@@ -36,6 +43,10 @@ export class FrameReader {
+         this.frameCallback = callback;
+     }
+ 
++    onSession(callback: (session: ScrcpySessionUpdate) => void): void {
++        this.sessionCallback = callback;
++    }
++
+     onEnd(callback: () => void): void {
+         this.endCallback = callback;
+     }
+@@ -61,7 +72,13 @@ export class FrameReader {
+                 // Session packet: total 12 bytes (4 flags + 4 width + 4 height).
+                 // HEADER_SIZE is also 12, so the length check at loop top suffices.
+                 // No `data` segment follows — just consume the 12 bytes and continue.
++                const flags = this.buffer.readUInt32BE(0);
++                const width = this.buffer.readUInt32BE(4);
++                const height = this.buffer.readUInt32BE(8);
+                 this.buffer = this.buffer.subarray(HEADER_SIZE);
++                if (width > 0 && height > 0) {
++                    this.sessionCallback?.({ width, height, clientResized: (flags & 1) !== 0 });
++                }
+                 continue;
+             }
+ 
+@@ -87,6 +104,7 @@ export class FrameReader {
+     destroy(): void {
+         this.socket.removeListener('data', this.onData);
+         this.frameCallback = undefined;
++        this.sessionCallback = undefined;
+         this.endCallback = undefined;
+     }
+ }
+diff --git a/src/server/ScrcpyConnection.ts b/src/server/ScrcpyConnection.ts
+index d4a6d15..d8b4caf 100644
+--- a/src/server/ScrcpyConnection.ts
++++ b/src/server/ScrcpyConnection.ts
+@@ -151,7 +151,7 @@ export class ScrcpyConnection extends Mw {
+         this.sendChannel(ChannelId.METADATA, Buffer.from(JSON.stringify(metadata)));
+ 
+         // 5. Start forwarding
+-        this.startForwarding();
++        this.startForwarding(metadata);
+     }
+ 
+     private async getSdkInt(): Promise<number> {
+@@ -450,7 +450,7 @@ export class ScrcpyConnection extends Mw {
+     private static readonly PTS_FLAG_CONFIG = 0x8000000000000000n;
+     private static readonly PTS_FLAG_KEYFRAME = 0x4000000000000000n;
+ 
+-    private startForwarding(): void {
++    private startForwarding(metadata: SessionMetadata): void {
+         // Video: TCP → channel 0 → WS
+         this.videoReader = new FrameReader(this.videoSocket!);
+         this.videoReader.onFrame((frame) => {
+@@ -462,6 +462,14 @@ export class ScrcpyConnection extends Mw {
+             header.writeUInt32BE(frame.data.length, 8);
+             this.sendChannel(ChannelId.VIDEO, Buffer.concat([header, frame.data]));
+         });
++        this.videoReader.onSession((session) => {
++            metadata.screenWidth = session.width;
++            metadata.screenHeight = session.height;
++            log.info(
++                `Session resized: ${metadata.deviceName} ${session.width}x${session.height} (client=${session.clientResized})`,
++            );
++            this.sendChannel(ChannelId.METADATA, Buffer.from(JSON.stringify(metadata)));
++        });
+         this.videoReader.onEnd(() => this.release());
+ 
+         // Audio: TCP → channel 1 → WS
+diff --git a/src/server/__tests__/frameReader.session.test.ts b/src/server/__tests__/frameReader.session.test.ts
+new file mode 100644
+index 0000000..81f93f9
+--- /dev/null
++++ b/src/server/__tests__/frameReader.session.test.ts
+@@ -0,0 +1,34 @@
++import { EventEmitter } from 'node:events';
++import type net from 'node:net';
++import { describe, expect, it, vi } from 'vitest';
++import { FrameReader } from '../FrameReader';
++
++describe('FrameReader scrcpy v4 session packets', () => {
++    it('emits rotated dimensions and continues parsing media frames', () => {
++        const socket = new EventEmitter() as net.Socket;
++        const reader = new FrameReader(socket);
++        const onSession = vi.fn();
++        const onFrame = vi.fn();
++        reader.onSession(onSession);
++        reader.onFrame(onFrame);
++
++        const session = Buffer.alloc(12);
++        session.writeUInt32BE(0x80000000, 0);
++        session.writeUInt32BE(1920, 4);
++        session.writeUInt32BE(1080, 8);
++
++        const payload = Buffer.from([1, 2, 3]);
++        const media = Buffer.alloc(12 + payload.length);
++        media.writeBigUInt64BE(123n, 0);
++        media.writeUInt32BE(payload.length, 8);
++        payload.copy(media, 12);
++
++        socket.emit('data', Buffer.concat([session, media]));
++
++        expect(onSession).toHaveBeenCalledOnce();
++        expect(onSession).toHaveBeenCalledWith({ width: 1920, height: 1080, clientResized: false });
++        expect(onFrame).toHaveBeenCalledOnce();
++        expect(onFrame.mock.calls[0]?.[0]).toMatchObject({ type: 'frame', pts: 123n });
++        expect(onFrame.mock.calls[0]?.[0].data).toEqual(payload);
++    });
++});
