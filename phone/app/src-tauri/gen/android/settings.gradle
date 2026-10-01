@@ -1,0 +1,5 @@
+include ':app'
+
+
+include ':tauri-android'
+project(':tauri-android').projectDir = new File(rootDir, 'tauri-android')
