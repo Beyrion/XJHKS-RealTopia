@@ -1,3 +1,6 @@
 [submodule "phone/MNN"]
 	path = phone/MNN
 	url = https://github.com/Embedded-AI-Systems/MNN-Agent.git
+[submodule "dev/ws-scrcpy-web"]
+	path = dev/ws-scrcpy-web
+	url = https://github.com/bilbospocketses/ws-scrcpy-web.git
