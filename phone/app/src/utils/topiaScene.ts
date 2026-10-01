@@ -1,5 +1,17 @@
 import * as THREE from "three";
 
+export type TopiaMood="joyful"|"calm"|"sad"|"anxious"|"angry"|"tired"|"neutral";
+
+const moodLooks:Record<TopiaMood,{fog:number;fogDensity:number;sky:number;ground:number;sun:number;sunIntensity:number;exposure:number;sparkle:number;sparkleOpacity:number;cloudSpeed:number;glow:number}>={
+  joyful:{fog:0xffefd5,fogDensity:.012,sky:0xfff7db,ground:0x8ebd91,sun:0xffdc78,sunIntensity:4.8,exposure:1.24,sparkle:0xffffa8,sparkleOpacity:.96,cloudSpeed:.00008,glow:0xffd578},
+  calm:{fog:0xddefff,fogDensity:.016,sky:0xe7f5ff,ground:0x8eaa99,sun:0xfff0c5,sunIntensity:3.8,exposure:1.1,sparkle:0xcceeff,sparkleOpacity:.62,cloudSpeed:.00009,glow:0x8de1f1},
+  sad:{fog:0x7890a8,fogDensity:.027,sky:0x9eb8ce,ground:0x506b6b,sun:0xb8cee0,sunIntensity:2.1,exposure:.79,sparkle:0xa6c9dd,sparkleOpacity:.24,cloudSpeed:.00017,glow:0x6fa8cf},
+  anxious:{fog:0xd6dcf2,fogDensity:.021,sky:0xdfe6ff,ground:0x778590,sun:0xe6e9ff,sunIntensity:3.3,exposure:1.02,sparkle:0xe9ddff,sparkleOpacity:.56,cloudSpeed:.00034,glow:0x9a96ff},
+  angry:{fog:0x695c6b,fogDensity:.025,sky:0xc29a9f,ground:0x493d49,sun:0xff9b7a,sunIntensity:3.7,exposure:.9,sparkle:0xff9d76,sparkleOpacity:.74,cloudSpeed:.00028,glow:0xff755f},
+  tired:{fog:0x51587b,fogDensity:.03,sky:0x8993bd,ground:0x393c57,sun:0xbfc8ff,sunIntensity:1.9,exposure:.72,sparkle:0xd8d9ff,sparkleOpacity:.88,cloudSpeed:.000055,glow:0x8a8de8},
+  neutral:{fog:0xd9efff,fogDensity:.018,sky:0xf8fbff,ground:0x8aa57d,sun:0xfff0c5,sunIntensity:4,exposure:1.12,sparkle:0xffef9a,sparkleOpacity:.78,cloudSpeed:.00012,glow:0x8de1f1},
+};
+
 const C={
   ink:0x3b4168,cream:0xfff3d6,wall:0xf8e8c8,wood:0xb77952,woodDark:0x76506a,
   coral:0xff8292,blue:0x6c78ff,sky:0x8de1f1,mint:0x69d4a3,yellow:0xffd75e,
@@ -70,22 +82,23 @@ function floatingRoom(stage:number){
   return room;
 }
 
-export function mountTopiaScene(canvas:HTMLCanvasElement){
+export function mountTopiaScene(canvas:HTMLCanvasElement,mood:TopiaMood="neutral",intensity=0){
   const container=canvas.parentElement;if(!container)return()=>undefined;
+  const look=moodLooks[mood]??moodLooks.neutral,mix=THREE.MathUtils.clamp(intensity/100,0,1);
   let renderer:THREE.WebGLRenderer;
   try{renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true,powerPreference:"high-performance"})}catch{return()=>undefined}
-  renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;
-  const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(0xd9efff,.018);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=THREE.MathUtils.lerp(1.12,look.exposure,mix);
+  const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(look.fog,THREE.MathUtils.lerp(.018,look.fogDensity,mix));
   const camera=new THREE.OrthographicCamera(-5,5,3,-3,.1,100);
-  scene.add(new THREE.HemisphereLight(0xf8fbff,0x8aa57d,3.2));const sun=new THREE.DirectionalLight(0xfff0c5,4);sun.position.set(-5,9,6);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);scene.add(sun);
+  scene.add(new THREE.HemisphereLight(look.sky,look.ground,THREE.MathUtils.lerp(3.2,2.6,mix)));const sun=new THREE.DirectionalLight(look.sun,THREE.MathUtils.lerp(4,look.sunIntensity,mix));sun.position.set(-5,9,6);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);scene.add(sun);
   const stage=Number([...container.classList].find(value=>value.startsWith("stage-"))?.slice(6)??1),world=floatingRoom(stage);scene.add(world);
   const sparkleGeometry=new THREE.BufferGeometry(),sparklePositions=new Float32Array(42*3);
   for(let index=0;index<42;index++){const angle=index*2.39996,radius=3.7+(index%7)*.38;sparklePositions[index*3]=Math.cos(angle)*radius;sparklePositions[index*3+1]=-.4+(index%9)*.56;sparklePositions[index*3+2]=Math.sin(angle)*radius;}
   sparkleGeometry.setAttribute("position",new THREE.BufferAttribute(sparklePositions,3));
-  const sparkles=new THREE.Points(sparkleGeometry,new THREE.PointsMaterial({color:0xffef9a,size:.075,transparent:true,opacity:.78,depthWrite:false,blending:THREE.AdditiveBlending}));scene.add(sparkles);
+  const sparkles=new THREE.Points(sparkleGeometry,new THREE.PointsMaterial({color:look.sparkle,size:.075,transparent:true,opacity:THREE.MathUtils.lerp(.78,look.sparkleOpacity,mix),depthWrite:false,blending:THREE.AdditiveBlending}));scene.add(sparkles);
   const driftingClouds=new THREE.Group();driftingClouds.add(cloud(-4.7,-1.1,-2.8,.62),cloud(4.5,-.75,-1.8,.5),cloud(.6,3.8,-4.3,.42));
   driftingClouds.traverse(object=>{if(object instanceof THREE.Mesh){object.castShadow=false;object.receiveShadow=false;const material=object.material as THREE.MeshStandardMaterial;material.transparent=true;material.opacity=.34;material.depthWrite=false;}});scene.add(driftingClouds);
-  const ambientGlow=new THREE.PointLight(0x8de1f1,1.1,11);ambientGlow.position.set(0,2.2,1.5);scene.add(ambientGlow);
+  const ambientGlow=new THREE.PointLight(look.glow,1.1,11);ambientGlow.position.set(0,2.2,1.5);scene.add(ambientGlow);
   container.classList.add("webgl-ready");
   let frame=0,disposed=false,targetYaw=.68,currentYaw=.68,targetPitch=.55,currentPitch=.55;
   const pointers=new Map<number,{x:number;y:number}>();let lastX=0,lastY=0,pinchDistance=0,pinchZoom=1;
@@ -96,6 +109,6 @@ export function mountTopiaScene(canvas:HTMLCanvasElement){
   const up=(event:PointerEvent)=>{pointers.delete(event.pointerId);if(pointers.size===1){const remaining=[...pointers.values()][0];lastX=remaining.x;lastY=remaining.y}};
   const wheel=(event:WheelEvent)=>{event.preventDefault();camera.zoom=THREE.MathUtils.clamp(camera.zoom-event.deltaY*.0008,.78,1.65);camera.updateProjectionMatrix()};
   canvas.addEventListener("pointerdown",down);canvas.addEventListener("pointermove",move);canvas.addEventListener("pointerup",up);canvas.addEventListener("pointercancel",up);canvas.addEventListener("wheel",wheel,{passive:false});
-  const animate=()=>{if(disposed)return;const now=performance.now();currentYaw+=(targetYaw-currentYaw)*.09;currentPitch+=(targetPitch-currentPitch)*.09;const radius=9.5,flat=radius*Math.cos(currentPitch);camera.position.set(Math.sin(currentYaw)*flat,1+Math.sin(currentPitch)*radius,Math.cos(currentYaw)*flat);camera.lookAt(0,1,0);world.position.y=Math.sin(now*.00055)*.05;sparkles.rotation.y=now*.000045;sparkles.position.y=Math.sin(now*.0007)*.08;driftingClouds.position.x=Math.sin(now*.00012)*.65;driftingClouds.position.y=Math.cos(now*.0002)*.08;ambientGlow.intensity=1.05+Math.sin(now*.0011)*.24;renderer.render(scene,camera);frame=requestAnimationFrame(animate)};animate();
+  const animate=()=>{if(disposed)return;const now=performance.now();currentYaw+=(targetYaw-currentYaw)*.09;currentPitch+=(targetPitch-currentPitch)*.09;const radius=9.5,flat=radius*Math.cos(currentPitch);camera.position.set(Math.sin(currentYaw)*flat,1+Math.sin(currentPitch)*radius,Math.cos(currentYaw)*flat);camera.lookAt(0,1,0);world.position.y=Math.sin(now*.00055)*.05;sparkles.rotation.y=now*.000045;sparkles.position.y=Math.sin(now*.0007)*.08;driftingClouds.position.x=Math.sin(now*THREE.MathUtils.lerp(.00012,look.cloudSpeed,mix))*.65;driftingClouds.position.y=Math.cos(now*.0002)*.08;ambientGlow.intensity=1.05+Math.sin(now*(mood==="angry"?.004:.0011))*.24;renderer.render(scene,camera);frame=requestAnimationFrame(animate)};animate();
   return()=>{disposed=true;cancelAnimationFrame(frame);observer.disconnect();canvas.removeEventListener("pointerdown",down);canvas.removeEventListener("pointermove",move);canvas.removeEventListener("pointerup",up);canvas.removeEventListener("pointercancel",up);canvas.removeEventListener("wheel",wheel);scene.traverse(object=>{if(object instanceof THREE.Mesh||object instanceof THREE.Points){object.geometry.dispose();const materials=Array.isArray(object.material)?object.material:[object.material];materials.forEach(value=>value.dispose())}});renderer.dispose();container.classList.remove("webgl-ready")};
 }

@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 /** Provider-neutral model contracts. Business code never imports a vendor SDK. */
 export type ModelSide = "edge" | "cloud";
 export type ModelPurpose = "speech" | "task-planning" | "memory" | "vision";
@@ -19,29 +21,21 @@ export interface ModelResponse {
   latencyMs: number;
 }
 
-export interface AudioRequest {
-  pcm:Uint8Array;
-  sampleRate:number;
-  channels:number;
-  language?:string;
-}
-
 export interface ModelProvider {
   readonly id: string;
   readonly side: ModelSide;
   complete(request: ModelRequest): Promise<ModelResponse>;
-  transcribe?(request:AudioRequest):Promise<ModelResponse>;
 }
 
 export interface ModelSettings {
   edge: { name:string; stt:string; quantization:string };
-  cloud: { provider:string; baseUrl:string; model:string; sttModel:string; apiKey:string };
+  cloud: { provider:string; baseUrl:string; model:string; sttModel:string; hasApiKey:boolean };
   routing: { privateOnEdge:boolean; complexOnCloud:boolean };
 }
 
 const defaults: ModelSettings = {
   edge: { name:"Local Quest Planner", stt:"Qwen3-ASR 0.6B INT8 · MNN", quantization:"INT8" },
-  cloud: { provider:"OpenAI Compatible", baseUrl:"https://api.openai.com/v1", model:"gpt-4.1-mini", sttModel:"whisper-1", apiKey:"" },
+  cloud: { provider:"阿里云百炼 · OpenAI Compatible", baseUrl:"https://llm-91vwfbm1df53hn0g.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", model:"qwen-plus", sttModel:"qwen3-asr-flash", hasApiKey:false },
   routing: { privateOnEdge:true, complexOnCloud:true },
 };
 
@@ -64,37 +58,17 @@ class LocalEdgeProvider implements ModelProvider {
   }
 }
 
-class OpenAICompatibleProvider implements ModelProvider {
-  readonly id="openai-compatible";readonly side="cloud" as const;
+type NativeCloudResult={text:string;provider:string;model:string;side:"cloud";latency_ms:number};
+type NativeCloudConfig={provider:string;base_url:string;model:string;stt_model:string;has_api_key:boolean};
+
+class SecureCloudProvider implements ModelProvider {
+  readonly id="android-keystore-cloud";readonly side="cloud" as const;
   constructor(private readonly settings:ModelSettings["cloud"]){ }
   async complete(request:ModelRequest):Promise<ModelResponse>{
-    if(!this.settings.apiKey)throw new Error("cloud API key is not configured");
-    const started=performance.now();
-    const endpoint=`${this.settings.baseUrl.replace(/\/$/,"")}/chat/completions`;
-    const response=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/json",authorization:`Bearer ${this.settings.apiKey}`},body:JSON.stringify({model:this.settings.model,messages:[{role:"system",content:request.system??"You are RealTopia's planning engine."},{role:"user",content:request.prompt}],temperature:.2,response_format:request.json?{type:"json_object"}:undefined})});
-    if(!response.ok)throw new Error(`cloud model returned HTTP ${response.status}`);
-    const payload=await response.json() as {choices?:{message?:{content?:string}}[]};
-    const text=payload.choices?.[0]?.message?.content;
-    if(!text)throw new Error("cloud model returned an empty response");
-    return {text,provider:this.id,model:this.settings.model,side:this.side,latencyMs:Math.round(performance.now()-started)};
+    if(!this.settings.hasApiKey)throw new Error("请先安全配置百炼 API Key");
+    const result=await invoke<NativeCloudResult>("cloud_complete",{prompt:request.prompt,system:request.system??null,json:request.json??false});
+    return {text:result.text,provider:result.provider,model:result.model,side:"cloud",latencyMs:result.latency_ms};
   }
-  async transcribe(request:AudioRequest):Promise<ModelResponse>{
-    if(!this.settings.apiKey)throw new Error("cloud API key is not configured");
-    const started=performance.now(),wav=pcmToWav(request),form=new FormData();
-    form.append("model",this.settings.sttModel);form.append("language",request.language??"zh");form.append("file",new Blob([wav],{type:"audio/wav"}),"realtopia-recording.wav");
-    const endpoint=`${this.settings.baseUrl.replace(/\/$/,"")}/audio/transcriptions`;
-    const response=await fetch(endpoint,{method:"POST",headers:{authorization:`Bearer ${this.settings.apiKey}`},body:form});
-    if(!response.ok)throw new Error(`transcription model returned HTTP ${response.status}`);
-    const payload=await response.json() as {text?:string};if(!payload.text?.trim())throw new Error("transcription model returned empty text");
-    return {text:payload.text.trim(),provider:this.id,model:this.settings.sttModel,side:this.side,latencyMs:Math.round(performance.now()-started)};
-  }
-}
-
-function pcmToWav(request:AudioRequest){
-  if(request.channels!==1||request.sampleRate<=0)throw new Error("only mono PCM is supported");
-  const header=new ArrayBuffer(44),view=new DataView(header),write=(offset:number,value:string)=>[...value].forEach((char,index)=>view.setUint8(offset+index,char.charCodeAt(0)));
-  write(0,"RIFF");view.setUint32(4,36+request.pcm.byteLength,true);write(8,"WAVEfmt ");view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,request.channels,true);view.setUint32(24,request.sampleRate,true);view.setUint32(28,request.sampleRate*request.channels*2,true);view.setUint16(32,request.channels*2,true);view.setUint16(34,16,true);write(36,"data");view.setUint32(40,request.pcm.byteLength,true);
-  const wav=new Uint8Array(44+request.pcm.byteLength);wav.set(new Uint8Array(header));wav.set(request.pcm,44);return wav;
 }
 
 class ModelHub {
@@ -102,11 +76,11 @@ class ModelHub {
   register(provider:ModelProvider){this.providers.set(provider.side,provider)}
   route(request:ModelRequest,settings=this.load()):ModelSide{
     if(request.purpose==="speech"||(request.private&&settings.routing.privateOnEdge))return "edge";
-    return settings.routing.complexOnCloud&&settings.cloud.apiKey?"cloud":"edge";
+    return settings.routing.complexOnCloud&&settings.cloud.hasApiKey?"cloud":"edge";
   }
   async complete(request:ModelRequest){
     const settings=this.load();
-    if(settings.cloud.apiKey)this.register(new OpenAICompatibleProvider(settings.cloud));
+    if(settings.cloud.hasApiKey)this.register(new SecureCloudProvider(settings.cloud));
     const side=this.route(request,settings),provider=this.providers.get(side);
     if(!provider)throw new Error(`${side} model provider is not configured`);
     try{return await provider.complete(request)}catch(error){
@@ -115,15 +89,25 @@ class ModelHub {
       return fallback.complete(request);
     }
   }
-  async transcribe(request:AudioRequest){
-    const settings=this.load();if(!settings.cloud.apiKey)throw new Error("请先配置支持音频转写的云端 API Key");
-    const provider=new OpenAICompatibleProvider(settings.cloud);this.register(provider);if(!provider.transcribe)throw new Error("cloud provider does not support transcription");return provider.transcribe(request);
+  async completeCloud(request:ModelRequest){
+    const settings=this.load();
+    if(!settings.cloud.hasApiKey)throw new Error("请先在设置 → 智能中安全配置百炼 API Key");
+    return new SecureCloudProvider(settings.cloud).complete({...request,private:false});
   }
   async testCloud(){
-    const settings=this.load();if(!settings.cloud.apiKey)throw new Error("请先填写云端 API Key");const provider=new OpenAICompatibleProvider(settings.cloud);return provider.complete({purpose:"memory",prompt:"Reply with REALTOPIA_OK only.",system:"This is a provider connectivity check.",private:false});
+    const settings=this.load();if(!settings.cloud.hasApiKey)throw new Error("请先安全保存百炼 API Key");const provider=new SecureCloudProvider(settings.cloud);return provider.complete({purpose:"memory",prompt:"Reply with REALTOPIA_OK only.",system:"This is a provider connectivity check.",private:false});
+  }
+  async refreshSecureConfig(){
+    const value=await invoke<NativeCloudConfig>("cloud_config");const settings=this.load();settings.cloud={provider:value.provider,baseUrl:value.base_url,model:value.model,sttModel:value.stt_model,hasApiKey:value.has_api_key};this.save(settings);return settings;
+  }
+  async saveSecureConfig(settings:ModelSettings,apiKey?:string){
+    const value=await invoke<NativeCloudConfig>("save_cloud_config",{provider:settings.cloud.provider,baseUrl:settings.cloud.baseUrl,model:settings.cloud.model,sttModel:settings.cloud.sttModel,apiKey:apiKey?.trim()||null});settings.cloud={provider:value.provider,baseUrl:value.base_url,model:value.model,sttModel:value.stt_model,hasApiKey:value.has_api_key};this.save(settings);return settings;
+  }
+  async clearSecureApiKey(){
+    const value=await invoke<NativeCloudConfig>("clear_cloud_api_key");const settings=this.load();settings.cloud={provider:value.provider,baseUrl:value.base_url,model:value.model,sttModel:value.stt_model,hasApiKey:value.has_api_key};this.save(settings);return settings;
   }
   load():ModelSettings {
-    try{const saved=JSON.parse(localStorage.getItem("realtopia.models")??"{}") as Partial<ModelSettings>;return {edge:{...defaults.edge,...saved.edge},cloud:{...defaults.cloud,...saved.cloud},routing:{...defaults.routing,...saved.routing}}}catch{return structuredClone(defaults)}
+    try{const saved=JSON.parse(localStorage.getItem("realtopia.models")??"{}") as Partial<ModelSettings>&{cloud?:Partial<ModelSettings["cloud"]>&{apiKey?:string}};const settings={edge:{...defaults.edge,...saved.edge},cloud:{...defaults.cloud,...saved.cloud},routing:{...defaults.routing,...saved.routing}};delete (settings.cloud as ModelSettings["cloud"]&{apiKey?:string}).apiKey;localStorage.setItem("realtopia.models",JSON.stringify(settings));return settings}catch{return structuredClone(defaults)}
   }
   save(settings:ModelSettings){localStorage.setItem("realtopia.models",JSON.stringify(settings))}
 }

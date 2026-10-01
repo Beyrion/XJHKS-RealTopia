@@ -131,6 +131,40 @@ struct LocalAsrResult {
     model_load_ms: i64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CloudConfig {
+    provider: String,
+    base_url: String,
+    model: String,
+    stt_model: String,
+    has_api_key: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CloudModelResult {
+    text: String,
+    provider: String,
+    model: String,
+    side: String,
+    latency_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct MoodSpeechResult {
+    transcript: String,
+    confidence: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoodAudioResult {
+    path: String,
+    sample_rate: u32,
+    channels: u32,
+    bytes: u64,
+    duration_ms: i64,
+}
+
 #[cfg(mobile)]
 #[derive(Clone, Debug, Deserialize, Default)]
 struct NativeTransportState {
@@ -567,6 +601,115 @@ mod mobile_asr {
     }
 }
 
+#[cfg(mobile)]
+mod mobile_cloud {
+    use super::{CloudConfig, CloudModelResult};
+    use serde::Serialize;
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        Manager, Runtime,
+    };
+
+    pub struct RealiaCloud<R: Runtime>(PluginHandle<R>);
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SaveConfigRequest<'a> {
+        pub provider: &'a str,
+        pub base_url: &'a str,
+        pub model: &'a str,
+        pub stt_model: &'a str,
+        pub api_key: Option<&'a str>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct CompleteRequest<'a> {
+        pub prompt: &'a str,
+        pub system: Option<&'a str>,
+        pub json: bool,
+    }
+
+    impl<R: Runtime> RealiaCloud<R> {
+        pub fn config(&self) -> Result<CloudConfig, String> {
+            self.0
+                .run_mobile_plugin("config", ())
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn save_config(&self, request: SaveConfigRequest<'_>) -> Result<CloudConfig, String> {
+            self.0
+                .run_mobile_plugin("saveConfig", request)
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn clear_api_key(&self) -> Result<CloudConfig, String> {
+            self.0
+                .run_mobile_plugin("clearApiKey", ())
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn complete(&self, request: CompleteRequest<'_>) -> Result<CloudModelResult, String> {
+            self.0
+                .run_mobile_plugin("complete", request)
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+        Builder::new("realia-cloud")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("com.realtopia.phone.cloud", "RealiaCloudPlugin")?;
+                app.manage(RealiaCloud(handle));
+                Ok(())
+            })
+            .build()
+    }
+}
+
+#[cfg(mobile)]
+mod mobile_mood {
+    use super::MoodAudioResult;
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        Manager, Runtime,
+    };
+
+    pub struct RealiaMood<R: Runtime>(PluginHandle<R>);
+
+    impl<R: Runtime> RealiaMood<R> {
+        pub fn listen(&self) -> Result<MoodAudioResult, String> {
+            self.0
+                .run_mobile_plugin("listen", ())
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn finish(&self) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin("finish", ())
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn cancel(&self) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin("cancel", ())
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+        Builder::new("realia-mood")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("com.realtopia.phone.mood", "RealiaMoodPlugin")?;
+                app.manage(RealiaMood(handle));
+                Ok(())
+            })
+            .build()
+    }
+}
+
 #[tauri::command]
 fn model_download_status(app: tauri::AppHandle) -> Result<ModelDownloadStatus, String> {
     #[cfg(mobile)]
@@ -580,9 +723,8 @@ fn model_download_status(app: tauri::AppHandle) -> Result<ModelDownloadStatus, S
         let _ = app;
         Ok(ModelDownloadStatus {
             model_id: "huangzhengxiang/Qwen3-ASR-0.6B-INT8-MNN".into(),
-            repository_url:
-                "https://modelscope.cn/models/huangzhengxiang/Qwen3-ASR-0.6B-INT8-MNN/"
-                    .into(),
+            repository_url: "https://modelscope.cn/models/huangzhengxiang/Qwen3-ASR-0.6B-INT8-MNN/"
+                .into(),
             state: "mobile_only".into(),
             ready: false,
             automatic: true,
@@ -786,14 +928,172 @@ fn transcribe_recording(
     }
     #[cfg(mobile)]
     {
-        return app
-            .state::<mobile_asr::RealiaAsr<tauri::Wry>>()
-            .transcribe(&recording.path, recording.sample_rate, recording.channels);
+        return app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
+            &recording.path,
+            recording.sample_rate,
+            recording.channels,
+        );
     }
     #[cfg(not(mobile))]
     {
         let _ = app;
         Err("本地 ASR 仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+fn cloud_config(app: tauri::AppHandle) -> Result<CloudConfig, String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
+            .config();
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(CloudConfig {
+            provider: "阿里云百炼 · OpenAI Compatible".into(),
+            base_url:
+                "https://llm-91vwfbm1df53hn0g.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+                    .into(),
+            model: "qwen-plus".into(),
+            stt_model: "qwen3-asr-flash".into(),
+            has_api_key: false,
+        })
+    }
+}
+
+#[tauri::command]
+fn save_cloud_config(
+    provider: String,
+    base_url: String,
+    model: String,
+    stt_model: String,
+    api_key: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<CloudConfig, String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
+            .save_config(mobile_cloud::SaveConfigRequest {
+                provider: &provider,
+                base_url: &base_url,
+                model: &model,
+                stt_model: &stt_model,
+                api_key: api_key.as_deref().filter(|value| !value.trim().is_empty()),
+            });
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (provider, base_url, model, stt_model, api_key, app);
+        Err("安全云端配置仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+fn clear_cloud_api_key(app: tauri::AppHandle) -> Result<CloudConfig, String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
+            .clear_api_key();
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("安全云端配置仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+fn cloud_complete(
+    prompt: String,
+    system: Option<String>,
+    json: bool,
+    app: tauri::AppHandle,
+) -> Result<CloudModelResult, String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
+            .complete(mobile_cloud::CompleteRequest {
+                prompt: &prompt,
+                system: system.as_deref(),
+                json,
+            });
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (prompt, system, json, app);
+        Err("安全云端调用仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn listen_mood(app: tauri::AppHandle) -> Result<MoodSpeechResult, String> {
+    #[cfg(mobile)]
+    {
+        // The Android listen command intentionally remains pending for the entire
+        // recording. Run that blocking plugin call away from Tauri's command
+        // dispatcher so finish/cancel invocations and WebView input remain live.
+        return tauri::async_runtime::spawn_blocking(move || {
+            let audio = app
+                .state::<mobile_mood::RealiaMood<tauri::Wry>>()
+                .listen()?;
+            if audio.sample_rate != 16_000
+                || audio.channels != 1
+                || audio.bytes == 0
+                || audio.bytes > 2 * 1024 * 1024
+            {
+                let _ = std::fs::remove_file(&audio.path);
+                return Err("心情录音格式无效或超过 30 秒".into());
+            }
+            let transcription = app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
+                &audio.path,
+                audio.sample_rate,
+                audio.channels,
+            );
+            let _ = std::fs::remove_file(&audio.path);
+            transcription.map(|result| MoodSpeechResult {
+                transcript: result.text,
+                confidence: -1.0,
+            })
+        })
+        .await
+        .map_err(|error| format!("心情语音后台任务失败: {error}"))?;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("心情语音仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+fn finish_mood_listen(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return app.state::<mobile_mood::RealiaMood<tauri::Wry>>().finish();
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn cancel_mood_listen(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return app.state::<mobile_mood::RealiaMood<tauri::Wry>>().cancel();
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(())
     }
 }
 
@@ -1175,6 +1475,13 @@ pub fn run() {
             set_person_alert,
             recording_audio,
             transcribe_recording,
+            cloud_config,
+            save_cloud_config,
+            clear_cloud_api_key,
+            cloud_complete,
+            listen_mood,
+            finish_mood_listen,
+            cancel_mood_listen,
             mark_recording_processed,
             gallery_list,
             enroll_last_face,
@@ -1188,7 +1495,9 @@ pub fn run() {
         .plugin(mobile_transport::init())
         .plugin(mobile_face::init())
         .plugin(mobile_models::init())
-        .plugin(mobile_asr::init());
+        .plugin(mobile_asr::init())
+        .plugin(mobile_cloud::init())
+        .plugin(mobile_mood::init());
     builder
         .run(tauri::generate_context!())
         .expect("error while running RealTopia phone application");

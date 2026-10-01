@@ -132,6 +132,60 @@ small { font-size: 13px!important; line-height: 1.4; }
 .streak i { width: 15px; height: 15px; border: 2px solid #b8baca; border-radius: 50%; }
 .streak i.done { border-color: var(--blue); background: var(--blue); box-shadow: 0 0 0 4px rgba(89,104,255,.13); }
 
+/* The mood system keeps effects local and deterministic; cloud output only selects a known class. */
+.world { transition: background 1.1s ease, filter 1.1s ease; }
+.world.mood-joyful { background: linear-gradient(#ffd990 0 50%,#a8dea0 50%); }
+.world.mood-calm { background: linear-gradient(#bde7f5 0 50%,#b9d8bd 50%); }
+.world.mood-sad { background: linear-gradient(#7893aa 0 50%,#637f7c 50%); }
+.world.mood-anxious { background: linear-gradient(#afb9da 0 50%,#91a49f 50%); }
+.world.mood-angry { background: linear-gradient(#a66f78 0 50%,#6f6d64 50%); }
+.world.mood-tired { background: linear-gradient(#59658d 0 50%,#4c5a60 50%); }
+.mood-weather { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; opacity: calc(.25 + var(--mood-intensity) * .75); }
+.mood-weather i { position: absolute; display: block; left: var(--x); animation-delay: var(--delay)!important; }
+.mood-weather.mood-sad i { top: -22%; width: 2px; height: 34px; border-radius: 2px; background: linear-gradient(transparent,rgba(218,239,255,.92)); transform: rotate(12deg); animation: mood-rain var(--speed) linear infinite; }
+.mood-weather.mood-joyful i { top: var(--x); width: 6px; height: 6px; border-radius: 50%; background: #fffbd0; box-shadow: 0 0 12px 4px #ffe675; animation: mood-glint 2.4s ease-in-out infinite; }
+.mood-weather.mood-calm i { top: var(--x); width: 38px; height: 2px; border-radius: 50%; background: rgba(255,255,255,.55); animation: mood-breeze 5s ease-in-out infinite; }
+.mood-weather.mood-anxious i { top: var(--x); width: 54px; height: 2px; background: rgba(240,244,255,.72); animation: mood-wind 1.7s linear infinite; }
+.mood-weather.mood-angry i { top: var(--x); width: 4px; height: 4px; border-radius: 50%; background: #ffb07a; box-shadow: 0 0 11px 4px #ff755f; animation: mood-ember 1.8s ease-out infinite; }
+.mood-weather.mood-tired i { top: var(--x); width: 4px; height: 4px; border-radius: 50%; background: #e8e7ff; box-shadow: 0 0 8px #c9c7ff; animation: mood-glint 3.4s ease-in-out infinite; }
+@keyframes mood-rain { to { transform: translate(-42px,125vh) rotate(12deg); } }
+@keyframes mood-glint { 0%,100% { opacity:.15; transform:scale(.55) } 50% { opacity:1; transform:scale(1.35) } }
+@keyframes mood-breeze { 0%,100% { opacity:.12; transform:translateX(-20px) } 50% { opacity:.7; transform:translateX(52px) } }
+@keyframes mood-wind { from { transform:translateX(-120px);opacity:0 } 25% { opacity:.85 } to { transform:translateX(90vw);opacity:0 } }
+@keyframes mood-ember { from { transform:translateY(40px) scale(.6);opacity:0 } 35% { opacity:1 } to { transform:translate(20px,-90px) scale(1.4);opacity:0 } }
+.mood-badge { position: absolute; right: 22px; bottom: 20px; z-index: 7; display: flex; gap: 9px; align-items: center; padding: 9px 12px; border: 1.5px solid var(--ink); border-radius: 13px; background: rgba(255,253,248,.88); box-shadow: 3px 3px 0 var(--ink); backdrop-filter: blur(8px); }
+.mood-badge > .ui-icon { width: 22px; height: 22px; color: var(--blue-dark); }
+.mood-badge b,.mood-badge small { display:block; }
+.mood-badge b { font-size:13px; }
+.mood-badge small { margin-top:2px; color:var(--muted); font-size:10px; }
+.mood-dialog-backdrop { position:fixed; inset:0; z-index:80; display:grid; place-items:center; padding:18px; background:rgba(32,34,55,.46); backdrop-filter:blur(8px); }
+.mood-dialog { width:min(520px,calc(100vw - 30px)); max-height:calc(100vh - 30px); overflow:auto; border:2px solid var(--ink); border-radius:24px; background:#fffdf8; box-shadow:8px 9px 0 var(--ink); }
+.mood-dialog > header { display:flex; justify-content:space-between; align-items:center; padding:20px 22px 14px; border-bottom:1.5px solid var(--line); }
+.mood-dialog > header small { color:var(--blue-dark); font-weight:900; }
+.mood-dialog > header h2 { margin:3px 0 0; font-size:24px; }
+.mood-dialog > header button { width:40px; height:40px; display:grid; place-items:center; border:1.5px solid var(--ink); border-radius:12px; background:#fff; }
+.mood-intro,.mood-listening,.mood-analyzing,.mood-result,.mood-error { padding:27px 32px 30px; display:flex; flex-direction:column; align-items:center; text-align:center; }
+.mood-intro h3,.mood-listening h3,.mood-analyzing h3,.mood-result h3,.mood-error h3 { margin:12px 0 4px; font-size:22px; }
+.mood-intro p,.mood-listening p,.mood-analyzing p,.mood-result p,.mood-error p { margin:5px 0 18px; color:var(--muted); line-height:1.55; }
+.mood-orb,.mood-result-icon,.mood-error > span { width:72px; height:72px; display:grid; place-items:center; border:2px solid var(--ink); border-radius:50%; background:linear-gradient(145deg,#ffd3df,#fff3ad); box-shadow:4px 4px 0 var(--ink); color:#b33f5b; }
+.mood-orb .ui-icon,.mood-result-icon .ui-icon,.mood-error > span .ui-icon { width:33px; height:33px; }
+.mood-intro > small,.mood-result > small { margin-top:13px; color:var(--blue-dark); font-weight:900; }
+.mood-intro > .primary,.mood-result > .primary { min-width:210px; min-height:48px; display:flex; justify-content:center; align-items:center; gap:8px; border:2px solid var(--ink); border-radius:14px; background:var(--yellow); box-shadow:3px 3px 0 var(--ink); font-weight:900; }
+.mood-privacy { margin:18px 0 0!important; display:flex; gap:7px; align-items:flex-start; color:var(--muted)!important; font-size:11px; text-align:left; }
+.mood-privacy .ui-icon { flex:0 0 auto; width:16px; height:16px; color:#167a59; }
+.mood-listening > .ui-icon { width:38px; height:38px; color:var(--coral); animation:mood-pulse 1.2s ease-in-out infinite; }
+.mood-wave { height:48px; margin:11px 0 3px; display:flex; gap:5px; align-items:center; }
+.mood-wave i { width:5px; height:16px; border-radius:5px; background:var(--blue); animation:mood-wave .8s ease-in-out infinite alternate; }
+.mood-wave i:nth-child(2n) { animation-delay:-.4s; }.mood-wave i:nth-child(3n) { animation-delay:-.2s; }
+@keyframes mood-wave { to { height:45px; background:var(--coral); } } @keyframes mood-pulse { 50% { transform:scale(1.14);opacity:.65 } }
+.mood-analyzing > span { width:54px; height:54px; border:6px solid #e3e5f0; border-top-color:var(--blue); border-radius:50%; animation:mood-spin .8s linear infinite; }
+@keyframes mood-spin { to { transform:rotate(360deg) } }
+.mood-result blockquote { margin:0 0 18px; padding:13px 16px; border-radius:13px; background:#f0f2ff; color:var(--blue-dark); line-height:1.55; }
+.mood-error .buttons { justify-content:center; }
+
+@media (prefers-reduced-motion:reduce) { .mood-weather i,.mood-wave i,.mood-listening > .ui-icon,.mood-analyzing > span { animation:none!important; } }
+@media (max-height:500px) { .mood-dialog { width:min(680px,calc(100vw - 24px)); }.mood-dialog > header { padding:9px 15px; }.mood-dialog > header h2 { font-size:17px; }.mood-intro,.mood-listening,.mood-analyzing,.mood-result,.mood-error { min-height:205px; padding:12px 22px 15px; }.mood-orb,.mood-result-icon,.mood-error > span { width:46px;height:46px; }.mood-orb .ui-icon,.mood-result-icon .ui-icon,.mood-error > span .ui-icon { width:23px;height:23px; }.mood-intro h3,.mood-listening h3,.mood-analyzing h3,.mood-result h3,.mood-error h3 { margin-top:6px;font-size:17px; }.mood-intro p,.mood-listening p,.mood-analyzing p,.mood-result p,.mood-error p { margin:3px 0 8px; }.mood-privacy { margin-top:8px!important; }.mood-badge { right:10px;bottom:8px;padding:6px 8px; } }
+
 /* Quests */
 .quests { height: 100%; display: grid; grid-template-columns: 430px 1fr; position: relative; }
 .q-list { min-height: 0; display: flex; flex-direction: column; border-right: 2px solid var(--ink); background: rgba(255,253,248,.86); }
