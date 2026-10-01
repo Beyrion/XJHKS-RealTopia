@@ -1,0 +1,255 @@
+package com.realtopia.phone;
+
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import com.rokid.cxr.Caps;
+import com.rokid.cxr.client.controllers.CxrController;
+import com.rokid.cxr.client.extend.controllers.WifiController;
+import com.rokid.cxr.client.utils.ValueUtil;
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+/** CXR-M control plus a socket bound only to Rokid's Wi-Fi Direct network. */
+final class RokidPhotoTransport implements CxrController.Callback, WifiController.Callback {
+    interface Listener {
+        void onPhase(String phase, String transport, String detail);
+        void onPhoto(RealiaFrameReader.Frame frame);
+        void onAudio(RealiaFrameReader.Frame frame);
+        void onError(String message);
+    }
+
+    private static final String TAG = "RealiaPhoneTransport";
+    private static final String CXR_SOCKET_UUID = "8f599222-e9dd-450c-8844-d09d0b2cccef";
+    private static final String CAPTURE_COMMAND = "Realia_Capture";
+    private static final String CONTROL_COMMAND = "Realia_Control";
+    private static final String PERSON_COMMAND = "Realia_Person";
+    private static final int PHOTO_PORT = 39831;
+    private final Context context;
+    private final Listener listener;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean connectingSocket = new AtomicBoolean(false);
+    private final AtomicBoolean p2pRetryScheduled = new AtomicBoolean(false);
+    private final CxrController cxr = CxrController.getInstance();
+    private volatile WifiController wifi;
+    private volatile Socket socket;
+    private volatile boolean started;
+    private volatile boolean ready;
+    private volatile String p2pAddress = "";
+
+    RokidPhotoTransport(Context context, Listener listener) {
+        this.context = context.getApplicationContext();
+        this.listener = listener;
+    }
+
+    synchronized void start(String glassAddress) {
+        if (started) return;
+        started = true;
+        listener.onPhase("bt_connecting", "CXR Bluetooth", "connecting " + glassAddress);
+        cxr.setCallback(this);
+        cxr.connectBluetooth(context, CXR_SOCKET_UUID, glassAddress, "RealTopia");
+    }
+
+    boolean isReady() {
+        Socket value = socket;
+        return ready && value != null && value.isConnected() && !value.isClosed();
+    }
+
+    boolean requestCapture(long requestId, int width, int quality, boolean forceCold) {
+        if (!isReady() || !cxr.isBluetoothConnected()) return false;
+        Caps caps = new Caps();
+        caps.writeInt64(requestId);
+        caps.writeInt32(width);
+        caps.writeInt32(quality);
+        caps.writeInt32(forceCold ? 1 : 0);
+        ValueUtil.CxrStatus result = cxr.request(4, CAPTURE_COMMAND, caps, null);
+        Log.i(TAG, "CAPTURE_REQUEST requestId=" + requestId + " cold=" + forceCold
+                + " result=" + result);
+        return result == ValueUtil.CxrStatus.REQUEST_SUCCEED;
+    }
+
+    boolean setPerception(boolean enabled,int intervalSeconds,int width,int quality) {
+        if (!cxr.isBluetoothConnected()) return false;
+        Caps caps=new Caps();caps.writeInt32(enabled?1:0);caps.writeInt32(intervalSeconds);caps.writeInt32(width);caps.writeInt32(quality);
+        ValueUtil.CxrStatus result=cxr.request(4,CONTROL_COMMAND,caps,null);
+        Log.i(TAG,"PERCEPTION enabled="+enabled+" interval="+intervalSeconds+" width="+width+" quality="+quality+" result="+result);
+        return result==ValueUtil.CxrStatus.REQUEST_SUCCEED;
+    }
+
+    boolean showPerson(String personId,String name,String title,int affinity,String quest,String story) {
+        if (!cxr.isBluetoothConnected()) return false;
+        Caps caps=new Caps();caps.write(personId);caps.write(name);caps.write(title);
+        caps.writeInt32(affinity);caps.write(quest);caps.write(story);
+        ValueUtil.CxrStatus result=cxr.request(6,PERSON_COMMAND,caps,null);
+        Log.i(TAG,"PERSON_HUD personId="+personId+" affinity="+affinity+" result="+result);
+        return result==ValueUtil.CxrStatus.REQUEST_SUCCEED;
+    }
+
+    private void startP2p() {
+        if (!started || !cxr.isBluetoothConnected()) return;
+        listener.onPhase("p2p_negotiating", "CXR Bluetooth", "requesting Wi-Fi Direct");
+        Caps caps = new Caps();
+        caps.write("Sync_Start");
+        caps.write("{\"type\":\"Android\"}");
+        ValueUtil.CxrStatus result = cxr.request(2, "Med", caps, null);
+        Log.i(TAG, "P2P_INIT result=" + result);
+        if (result != ValueUtil.CxrStatus.REQUEST_SUCCEED) postError("P2P request rejected: " + result);
+    }
+
+    @Override public void onStatusUpdate(ValueUtil.CxrStatus status,
+                                          ValueUtil.CxrBluetoothErrorCode error) {
+        Log.i(TAG, "BT_STATUS status=" + status + " error=" + error);
+        if (status == ValueUtil.CxrStatus.BLUETOOTH_AVAILABLE) startP2p();
+        else if (status == ValueUtil.CxrStatus.BLUETOOTH_UNAVAILABLE) {
+            ready = false;
+            listener.onPhase("bt_connecting", "CXR Bluetooth", "Bluetooth unavailable: " + error);
+        }
+    }
+
+    @Override public void onStatusUpdateWithExtra(ValueUtil.CxrStatus status,
+                                                   ValueUtil.CxrBluetoothErrorCode error,
+                                                   String uuid, String address) {
+        onStatusUpdate(status, error);
+    }
+
+    @Override public void onValueUpdate(String command, Caps caps) {
+        if (!"Med".equals(command) || caps == null || caps.size() < 2
+                || !"Med_WifiP2PSuc".equals(caps.at(0).getString())) return;
+        try {
+            JSONObject info = new JSONObject(caps.at(1).getString());
+            wifi = WifiController.getInstance();
+            wifi.init(context, info.optString("deviceName"),
+                    info.optString("deviceAddress"), this);
+            Log.i(TAG, "P2P_CREDENTIALS received");
+        } catch (JSONException e) {
+            postError("invalid P2P credentials");
+        }
+    }
+
+    @Override public void onStatusUpdate(ValueUtil.CxrStatus status,
+                                          ValueUtil.CxrWifiErrorCode error) {
+        Log.i(TAG, "P2P_STATUS status=" + status + " error=" + error);
+        if (status == ValueUtil.CxrStatus.WIFI_AVAILABLE) {
+            p2pRetryScheduled.set(false);
+            connectSocket();
+        }
+        else if (status == ValueUtil.CxrStatus.WIFI_UNAVAILABLE) {
+            ready = false;
+            listener.onPhase("p2p_negotiating", "Wi-Fi Direct", "Wi-Fi unavailable: " + error);
+            // CXR-M 1.0.8 can keep a stale peer callback queued after provision
+            // discovery fails and dereference a removed device. Tear the failed
+            // controller down before asking CXR for fresh credentials.
+            WifiController failed = wifi;
+            wifi = null;
+            if (failed != null) {
+                try { failed.deinit(error); }
+                catch (RuntimeException deinitError) {
+                    Log.w(TAG, "P2P deinit after failure", deinitError);
+                }
+            }
+            if (started && p2pRetryScheduled.compareAndSet(false, true)) {
+                main.postDelayed(() -> {
+                    p2pRetryScheduled.set(false);
+                    if (started && !ready) startP2p();
+                }, 5_000);
+            }
+        }
+    }
+
+    @Override public void onAddress(String address) {
+        p2pAddress = address == null ? "" : address;
+        Log.i(TAG, "P2P_ADDRESS ready=" + !p2pAddress.isBlank());
+        connectSocket();
+    }
+
+    private void connectSocket() {
+        if (!started || p2pAddress.isBlank() || !connectingSocket.compareAndSet(false, true)) return;
+        io.execute(() -> {
+            try {
+                Socket connected = createP2pSocket();
+                connected.setTcpNoDelay(true);
+                connected.setReceiveBufferSize(2 * 1024 * 1024);
+                connected.connect(new InetSocketAddress(p2pAddress, PHOTO_PORT), 8_000);
+                socket = connected;
+                ready = true;
+                listener.onPhase("ready", "Wi-Fi Direct / TCP", "photo socket connected");
+                Log.i(TAG, "SOCKET_READY");
+                readLoop(connected);
+            } catch (IOException e) {
+                ready = false;
+                socket = null;
+                if (started) {
+                    Log.e(TAG, "socket connect/read failed", e);
+                    listener.onPhase("p2p_negotiating", "Wi-Fi Direct / TCP", e.getMessage());
+                    main.postDelayed(this::connectSocket, 2_000);
+                }
+            } finally {
+                connectingSocket.set(false);
+            }
+        });
+    }
+
+    private Socket createP2pSocket() throws IOException {
+        ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
+        if (manager != null) {
+            for (Network network : manager.getAllNetworks()) {
+                LinkProperties properties = manager.getLinkProperties(network);
+                String name = properties == null ? null : properties.getInterfaceName();
+                if (name != null && name.startsWith("p2p")) {
+                    Log.i(TAG, "SOCKET_BIND interface=" + name);
+                    return network.getSocketFactory().createSocket();
+                }
+            }
+        }
+        Log.w(TAG, "P2P Network not exposed; using route-selected socket");
+        return new Socket();
+    }
+
+    private void readLoop(Socket connected) throws IOException {
+        DataInputStream input = new DataInputStream(connected.getInputStream());
+        while (started && !connected.isClosed()) {
+            RealiaFrameReader.Frame frame=RealiaFrameReader.read(input);
+            if(frame.isAudio())listener.onAudio(frame);else listener.onPhoto(frame);
+        }
+    }
+
+    private void postError(String message) {
+        Log.e(TAG, message);
+        main.post(() -> listener.onError(message));
+    }
+
+    @Override public void onConnectionInfo(String uuid, String address, String account, int type) { }
+    @Override public void onStartAudioStream(int id, int rate, int channels, String command, Caps caps) { }
+    @Override public void onAudioStream(int id, byte[] data, int offset, int length) { }
+    @Override public void onAudioStreamFinish(int id) { }
+    @Override public void onARTCFrame(byte[] data, long timestamp) { }
+    @Override public void onBtClientsInfo(List<ValueUtil.BtClientInfo> clients) { }
+
+    synchronized void close() {
+        started = false;
+        ready = false;
+        p2pRetryScheduled.set(false);
+        main.removeCallbacksAndMessages(null);
+        try { if (socket != null) socket.close(); } catch (IOException ignored) { }
+        socket = null;
+        if (wifi != null) {
+            wifi.deinit(ValueUtil.CxrWifiErrorCode.SUCCEED);
+            wifi = null;
+        }
+        cxr.deinitBluetooth();
+        io.shutdownNow();
+    }
+}
