@@ -1,0 +1,62 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  LocalAsrResult,
+  ModelDownloadStatus,
+  MoodSpeechResult,
+  NativeCloudConfig,
+  NativeCloudResult,
+  PairedGlass,
+  SessionState,
+} from "../models";
+
+export const nativeService = {
+  sessionState: () => invoke<SessionState>("session_state"),
+  pairedGlasses: () => invoke<PairedGlass[]>("paired_glasses"),
+  beginSession: (glassAddress: string) =>
+    invoke<SessionState>("begin_session", { glassAddress }),
+  openBluetoothSettings: () => invoke<void>("open_bluetooth_settings"),
+  setPersonAlert: (enabled: boolean) =>
+    invoke<void>("set_person_alert", { enabled }),
+  setPerception: (
+    enabled: boolean,
+    intervalSeconds: number,
+    width: number,
+    quality: number,
+  ) =>
+    invoke<void>("set_perception", {
+      enabled,
+      intervalSeconds,
+      width,
+      quality,
+    }),
+  requestCapture: (mode: "cold" | "hot", width: number, quality: number) =>
+    invoke<{ request_id: number }>("request_capture", { mode, width, quality }),
+  enrollLastFace: (personId: string) =>
+    invoke<void>("enroll_last_face", { personId }),
+
+  markRecordingProcessed: (recordingId: number, status: string) =>
+    invoke<void>("mark_recording_processed", { recordingId, status }),
+  transcribeRecording: (recordingId: number) =>
+    invoke<LocalAsrResult>("transcribe_recording", { recordingId }),
+  listenMood: () => invoke<MoodSpeechResult>("listen_mood"),
+  finishMoodListen: () => invoke<void>("finish_mood_listen"),
+  cancelMoodListen: () => invoke<void>("cancel_mood_listen"),
+
+  modelDownloadStatus: () =>
+    invoke<ModelDownloadStatus>("model_download_status"),
+  startAsrDownload: () => invoke<void>("start_asr_download"),
+  openModelRepository: (modelId: string) =>
+    invoke<void>("open_model_repository", { modelId }),
+
+  cloudComplete: (prompt: string, system: string | null, json: boolean) =>
+    invoke<NativeCloudResult>("cloud_complete", { prompt, system, json }),
+  cloudConfig: () => invoke<NativeCloudConfig>("cloud_config"),
+  saveCloudConfig: (config: {
+    provider: string;
+    baseUrl: string;
+    model: string;
+    sttModel: string;
+    apiKey: string | null;
+  }) => invoke<NativeCloudConfig>("save_cloud_config", config),
+  clearCloudApiKey: () => invoke<NativeCloudConfig>("clear_cloud_api_key"),
+};

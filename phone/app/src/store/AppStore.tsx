@@ -1,0 +1,436 @@
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type {
+  GlassSettings,
+  Memory,
+  ModelDownloadStatus,
+  MoodSnapshot,
+  Person,
+  Quest,
+  Recording,
+  SessionState,
+} from "../models";
+import { modelHub } from "../services/modelHub";
+import { nativeService } from "../services/native";
+import { processRecordingPipeline } from "../services/recordingPipeline";
+import { storage } from "../services/storage";
+
+type Updater<T> = T | ((current: T) => T);
+
+interface AppStoreValue {
+  quests: Quest[];
+  people: Person[];
+  memories: Memory[];
+  currentMood: MoodSnapshot;
+  glassSettings: GlassSettings;
+  perception: boolean;
+  session: SessionState;
+  asrDownload: ModelDownloadStatus | null;
+  logs: string[];
+  toastMessage: string;
+  updateQuests: (next: Updater<Quest[]>) => void;
+  updatePeople: (next: Updater<Person[]>) => void;
+  updateMemories: (next: Updater<Memory[]>) => void;
+  updateMood: (next: MoodSnapshot) => void;
+  updateGlassSettings: (next: Updater<GlassSettings>) => void;
+  updatePerception: (next: boolean) => void;
+  notify: (message: string) => void;
+  addLog: (message: string) => void;
+  clearLogs: () => void;
+  refreshSession: () => Promise<void>;
+  refreshModelDownload: (force?: boolean) => Promise<void>;
+  connectGlasses: (silent?: boolean) => Promise<void>;
+  capture: (mode: "cold" | "hot") => Promise<void>;
+  retryLastRecording: () => void;
+}
+
+const emptySession: SessionState = {
+  phase: "idle",
+  session_id: null,
+  transport: "未连接",
+  completed_captures: 0,
+  detail: "",
+  last_error: null,
+  last_capture: null,
+};
+
+const AppStoreContext = createContext<AppStoreValue | null>(null);
+
+export function AppStoreProvider({ children }: { children: ReactNode }) {
+  const [quests, setQuests] = useState(storage.loadQuests);
+  const [people, setPeople] = useState(storage.loadPeople);
+  const [memories, setMemories] = useState(storage.loadMemories);
+  const [currentMood, setCurrentMood] = useState(storage.loadMood);
+  const [glassSettings, setGlassSettings] = useState(storage.loadGlassSettings);
+  const [perception, setPerception] = useState(storage.loadPerception);
+  const [session, setSession] = useState<SessionState>(emptySession);
+  const [asrDownload, setAsrDownload] = useState<ModelDownloadStatus | null>(
+    null,
+  );
+  const [logs, setLogs] = useState([
+    "系统启动 · 记忆索引加载完成",
+    "端侧 MNN 人物模型待命",
+    "等待连接眼镜",
+  ]);
+  const [toastMessage, setToastMessage] = useState("");
+
+  const questsRef = useRef(quests);
+  const peopleRef = useRef(people);
+  const memoriesRef = useRef(memories);
+  const settingsRef = useRef(glassSettings);
+  const perceptionRef = useRef(perception);
+  const sessionRef = useRef(session);
+  const asrRef = useRef(asrDownload);
+  const connectingRef = useRef(false);
+  const syncedSessionRef = useRef<string | null>(null);
+  const lastModelStatusFetchRef = useRef(0);
+  const processingRecordings = useRef(new Set<number>());
+  const recordingRetryAfter = useRef(new Map<number, number>());
+  const toastTimer = useRef<number | undefined>(undefined);
+
+  const notify = useCallback((message: string) => {
+    window.clearTimeout(toastTimer.current);
+    setToastMessage(message);
+    toastTimer.current = window.setTimeout(() => setToastMessage(""), 2_000);
+  }, []);
+
+  const updateQuests = useCallback((next: Updater<Quest[]>) => {
+    setQuests((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      questsRef.current = value;
+      storage.saveQuests(value);
+      return value;
+    });
+  }, []);
+
+  const updatePeople = useCallback((next: Updater<Person[]>) => {
+    setPeople((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      peopleRef.current = value;
+      storage.savePeople(value);
+      return value;
+    });
+  }, []);
+
+  const updateMemories = useCallback((next: Updater<Memory[]>) => {
+    setMemories((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      memoriesRef.current = value;
+      storage.saveMemories(value);
+      return value;
+    });
+  }, []);
+
+  const updateMood = useCallback((next: MoodSnapshot) => {
+    setCurrentMood(next);
+    storage.saveMood(next);
+  }, []);
+
+  const updateGlassSettings = useCallback((next: Updater<GlassSettings>) => {
+    setGlassSettings((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      settingsRef.current = value;
+      storage.saveGlassSettings(value);
+      return value;
+    });
+  }, []);
+
+  const updatePerception = useCallback((next: boolean) => {
+    perceptionRef.current = next;
+    setPerception(next);
+    storage.savePerception(next);
+  }, []);
+
+  const appendLog = useCallback((message: string) => {
+    setLogs((current) => [message, ...current]);
+  }, []);
+
+  const refreshModelDownload = useCallback(async (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastModelStatusFetchRef.current < 1_500) return;
+    lastModelStatusFetchRef.current = now;
+    try {
+      const next = await nativeService.modelDownloadStatus();
+      asrRef.current = next;
+      setAsrDownload(next);
+    } catch {
+      // Browser preview and Android builds without the model plugin use the empty state.
+    }
+  }, []);
+
+  const syncGlassSettings = useCallback(
+    async (nextSession: SessionState) => {
+      if (
+        nextSession.phase !== "ready" ||
+        !nextSession.session_id ||
+        syncedSessionRef.current === nextSession.session_id
+      )
+        return;
+      syncedSessionRef.current = nextSession.session_id;
+      const settings = settingsRef.current;
+      try {
+        await nativeService.setPersonAlert(settings.personAlert === "poster");
+        await nativeService.setPerception(
+          perceptionRef.current,
+          settings.intervalSeconds,
+          settings.width,
+          settings.quality,
+        );
+        appendLog(
+          `眼镜参数已同步 · ${settings.intervalSeconds}s / ${settings.width}px / Q${settings.quality}`,
+        );
+      } catch {
+        syncedSessionRef.current = null;
+      }
+    },
+    [appendLog],
+  );
+
+  const ingestState = useCallback(
+    (nextSession: SessionState) => {
+      const now = new Date().toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      let nextMemories = memoriesRef.current;
+      const recording = nextSession.last_recording;
+      if (
+        recording &&
+        !nextMemories.some(
+          (item) => item.id === `recording-${recording.recording_id}`,
+        )
+      ) {
+        nextMemories = [
+          {
+            id: `recording-${recording.recording_id}`,
+            time: now,
+            title: `眼镜对话录音 #${recording.recording_id}`,
+            meta: `${(recording.duration_ms / 1_000).toFixed(1)} 秒 · ${Math.round(recording.bytes / 1_024)} KB · 待转写`,
+            kind: "recording",
+          },
+          ...nextMemories,
+        ];
+      }
+      const match = nextSession.last_face?.matches.find(
+        (item) => item.decision === "known" && item.person_id,
+      );
+      if (match && nextSession.last_face) {
+        const id = `face-${nextSession.last_face.request_id}-${match.person_id}`;
+        if (!nextMemories.some((item) => item.id === id)) {
+          const known = peopleRef.current.find(
+            (item) => item.id === match.person_id,
+          );
+          nextMemories = [
+            {
+              id,
+              time: now,
+              title: `再次遇见 ${known?.name ?? match.person_id}`,
+              meta: `眼镜人物识别 · 相似度 ${match.score.toFixed(3)}`,
+              kind: "person",
+            },
+            ...nextMemories,
+          ];
+        }
+      }
+      if (nextMemories !== memoriesRef.current) updateMemories(nextMemories);
+    },
+    [updateMemories],
+  );
+
+  const processRecording = useCallback(
+    async (recording: Recording) => {
+      if (
+        processingRecordings.current.has(recording.recording_id) ||
+        (recordingRetryAfter.current.get(recording.recording_id) ?? 0) >
+          Date.now()
+      )
+        return;
+      processingRecordings.current.add(recording.recording_id);
+      try {
+        const result = await processRecordingPipeline(recording, {
+          quests: questsRef.current,
+          people: peopleRef.current,
+          memories: memoriesRef.current,
+        });
+        updateQuests(result.quests);
+        updatePeople(result.people);
+        updateMemories(result.memories);
+        [...result.logs].reverse().forEach(appendLog);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "录音处理失败";
+        appendLog(`录音 #${recording.recording_id} · ${message}`);
+        if (!asrRef.current?.ready) {
+          processingRecordings.current.delete(recording.recording_id);
+          recordingRetryAfter.current.set(
+            recording.recording_id,
+            Date.now() + 15_000,
+          );
+          void refreshModelDownload(true);
+        }
+      }
+    },
+    [
+      appendLog,
+      refreshModelDownload,
+      updateMemories,
+      updatePeople,
+      updateQuests,
+    ],
+  );
+
+  const refreshSession = useCallback(async () => {
+    try {
+      const next = await nativeService.sessionState();
+      sessionRef.current = next;
+      setSession(next);
+      void syncGlassSettings(next);
+      ingestState(next);
+      if (next.last_recording) void processRecording(next.last_recording);
+    } catch {
+      // The browser UI baseline intentionally runs without a Tauri host.
+    }
+  }, [ingestState, processRecording, syncGlassSettings]);
+
+  const connectGlasses = useCallback(
+    async (silent = false) => {
+      if (connectingRef.current) return;
+      connectingRef.current = true;
+      try {
+        const devices = await nativeService.pairedGlasses();
+        const selected =
+          devices.find((item) => /rokid|glass/i.test(item.name)) ?? devices[0];
+        if (!selected) throw new Error("no paired glasses");
+        syncedSessionRef.current = null;
+        const next = await nativeService.beginSession(selected.address);
+        sessionRef.current = next;
+        setSession(next);
+        localStorage.setItem("realtopia.glassName", selected.name);
+        appendLog(`已选择 ${selected.name}，正在建立 CXR 会话`);
+        if (!silent) notify(`正在连接 ${selected.name}`);
+      } catch {
+        if (!silent) notify("未找到已配对眼镜，请打开蓝牙设置");
+      } finally {
+        connectingRef.current = false;
+      }
+    },
+    [appendLog, notify],
+  );
+
+  const capture = useCallback(
+    async (mode: "cold" | "hot") => {
+      const settings = settingsRef.current;
+      try {
+        const result = await nativeService.requestCapture(
+          mode,
+          settings.width,
+          settings.quality,
+        );
+        appendLog(
+          `#${result.request_id} ${mode} · ${settings.width}px / Q${settings.quality}`,
+        );
+        notify(`拍摄 #${result.request_id} 已发送`);
+        window.setTimeout(() => void refreshSession(), 900);
+      } catch {
+        notify("眼镜尚未连接");
+      }
+    },
+    [appendLog, notify, refreshSession],
+  );
+
+  const retryLastRecording = useCallback(() => {
+    const recording = sessionRef.current.last_recording;
+    if (!recording) return;
+    processingRecordings.current.delete(recording.recording_id);
+    void processRecording(recording);
+  }, [processRecording]);
+
+  useEffect(() => {
+    void modelHub.refreshSecureConfig().catch(() => undefined);
+    void refreshSession();
+    void refreshModelDownload(true);
+    if (!sessionRef.current.session_id) void connectGlasses(true);
+    const timer = window.setInterval(() => {
+      void refreshSession();
+      void refreshModelDownload();
+    }, 1_000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(toastTimer.current);
+    };
+  }, [connectGlasses, refreshModelDownload, refreshSession]);
+
+  const value = useMemo<AppStoreValue>(
+    () => ({
+      quests,
+      people,
+      memories,
+      currentMood,
+      glassSettings,
+      perception,
+      session,
+      asrDownload,
+      logs,
+      toastMessage,
+      updateQuests,
+      updatePeople,
+      updateMemories,
+      updateMood,
+      updateGlassSettings,
+      updatePerception,
+      notify,
+      addLog: appendLog,
+      clearLogs: () => setLogs([]),
+      refreshSession,
+      refreshModelDownload,
+      connectGlasses,
+      capture,
+      retryLastRecording,
+    }),
+    [
+      asrDownload,
+      appendLog,
+      capture,
+      connectGlasses,
+      currentMood,
+      glassSettings,
+      logs,
+      memories,
+      notify,
+      people,
+      perception,
+      quests,
+      refreshModelDownload,
+      refreshSession,
+      retryLastRecording,
+      session,
+      toastMessage,
+      updateGlassSettings,
+      updateMemories,
+      updateMood,
+      updatePeople,
+      updatePerception,
+      updateQuests,
+    ],
+  );
+
+  return (
+    <AppStoreContext.Provider value={value}>
+      {children}
+    </AppStoreContext.Provider>
+  );
+}
+
+export function useAppStore() {
+  const value = useContext(AppStoreContext);
+  if (!value)
+    throw new Error("useAppStore must be used inside AppStoreProvider");
+  return value;
+}

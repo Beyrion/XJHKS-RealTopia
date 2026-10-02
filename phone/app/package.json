@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "check": "tsc --noEmit",
+    "capture:ui": "node ../../scripts/capture-phone-ui.mjs",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\"",
     "test:ui": "node ../../scripts/ui-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -13,13 +17,20 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
-    "lucide": "^1.30.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2",
     "three": "^0.179.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@types/three": "^0.179.0",
+    "@vitejs/plugin-react": "^4.7.0",
     "playwright-core": "^1.54.2",
+    "prettier": "^3.9.6",
     "typescript": "~5.6.2",
     "vite": "^6.0.3"
   }
