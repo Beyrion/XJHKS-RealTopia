@@ -3,11 +3,13 @@ import { moodProfiles } from "../data/appData";
 import type { Quest } from "../models";
 import { nativeService } from "../services/native";
 import { useAppStore } from "../store/AppStore";
+import { inferQuestCategory } from "../utils/gameRules";
+import { analyzeConversation } from "../utils/memoryPlanner";
 import { analyzeMood } from "../utils/moodPlanner";
 import { planQuest } from "../utils/taskPlanner";
 import { sanitizeText } from "../utils/text";
 
-export type QuickVoiceKind = "task" | "mood";
+export type QuickVoiceKind = "task" | "conversation" | "mood";
 export type QuickVoicePhase = "idle" | "listening" | "processing";
 
 export function useQuickVoiceRecording() {
@@ -15,10 +17,13 @@ export function useQuickVoiceRecording() {
     quests,
     people,
     addQuest,
+    updateQuests,
+    updatePeople,
     updateMemories,
     updateMood,
     addLog,
     notify,
+    applyConversationInteractions,
   } = useAppStore();
   const [kind, setKind] = useState<QuickVoiceKind | null>(null);
   const [phase, setPhase] = useState<QuickVoicePhase>("idle");
@@ -122,8 +127,127 @@ export function useQuickVoiceRecording() {
     [addLog, addQuest, people, quests, updateMemories],
   );
 
+  const recordConversation = useCallback(
+    async (transcript: string, selectedPersonId?: string | null) => {
+      const sourceId = Date.now();
+      const { insight, model } = await analyzeConversation(transcript, {
+        tasks: quests.map((item) => ({
+          id: item.id,
+          title: item.title,
+          body: item.body,
+          personId: item.personId ?? null,
+        })),
+        people: people.map((item) => ({ id: item.id, name: item.name })),
+        selectedPersonId,
+      });
+      const taskIds = new Set(insight.taskIds);
+      const createdTitles: string[] = [];
+      insight.taskOperations.forEach((operation, index) => {
+        if (operation.operation === "create") {
+          const person = people.find((item) => item.id === operation.personId);
+          const id = `voice-conversation-${sourceId}-task-${index}`;
+          const quest: Quest = {
+            id,
+            group: "对话任务",
+            title: sanitizeText(operation.title).slice(0, 48),
+            meta: `${operation.deadline || "待安排"} · 对话提取 ${Math.round(operation.confidence * 100)}%`,
+            body: sanitizeText(operation.evidence || insight.summary),
+            priority: /(今天|明天|尽快|马上|截止)/.test(operation.deadline)
+              ? "首要"
+              : "普通",
+            progress: 0,
+            steps: operation.steps.map(sanitizeText).filter(Boolean),
+            personId: person?.id,
+            person: person?.name,
+            reward: person
+              ? `完成后提升与 ${person.name} 的羁绊`
+              : "记忆经验 +5",
+            status: "inbox",
+            source: "voice",
+            assignerPersonId: person?.id,
+            deadline: operation.deadline || undefined,
+            createdAt: new Date().toISOString(),
+          };
+          quest.category = inferQuestCategory(quest);
+          addQuest(quest);
+          taskIds.add(id);
+          createdTitles.push(quest.title);
+          return;
+        }
+        if (!operation.taskId) return;
+        taskIds.add(operation.taskId);
+        updateQuests((items) =>
+          items.map((quest) => {
+            if (quest.id !== operation.taskId) return quest;
+            const steps = [...quest.steps];
+            for (const step of operation.steps.map(sanitizeText)) {
+              if (step && !steps.includes(step)) steps.push(step);
+            }
+            return { ...quest, steps };
+          }),
+        );
+      });
+      const speakerName = people.find(
+        (item) => item.id === insight.speakerPersonId,
+      )?.name;
+      updateMemories((items) => [
+        ...insight.memories.map((memory, index) => ({
+          id: `voice-person-memory-${sourceId}-${index}`,
+          time: new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          title: sanitizeText(memory.summary).slice(0, 48),
+          meta: `${people.find((item) => item.id === memory.personId)?.name ?? "未关联人物"} · ${Math.round(memory.confidence * 100)}% · ${model.model}`,
+          kind: "person" as const,
+          summary: sanitizeText(memory.summary),
+          transcript,
+          personIds: [memory.personId],
+          taskIds: [...taskIds],
+          personMemoryKind: memory.kind,
+          evidence: sanitizeText(memory.evidence),
+          confidence: memory.confidence,
+          status: "active" as const,
+          dedupeKey: `voice-person-memory-${sourceId}-${memory.personId}-${index}`,
+        })),
+        ...items,
+      ]);
+      updatePeople((items) =>
+        items.map((person) =>
+          person.id === insight.speakerPersonId
+            ? {
+                ...person,
+                seen: "刚刚 · 手机对话记录",
+                quests: [...new Set([...createdTitles, ...person.quests])],
+              }
+            : person,
+        ),
+      );
+      applyConversationInteractions(
+        insight.interactionEvents,
+        `voice-conversation-${sourceId}`,
+      );
+      addLog(
+        `人物对话已记录 · 人物 ${insight.personIds.length} / 任务 ${taskIds.size} · ${model.latencyMs}ms`,
+      );
+      return insight.speakerPersonId
+        ? `已记录与 ${speakerName ?? "该人物"} 的对话${insight.mentionedPersonIds.length ? `，并识别到 ${insight.mentionedPersonIds.length} 位被提及人物` : ""}`
+        : "对话已保存，但没有识别到明确人物";
+    },
+    [
+      addLog,
+      addQuest,
+      applyConversationInteractions,
+      people,
+      quests,
+      updateMemories,
+      updatePeople,
+      updateQuests,
+    ],
+  );
+
   const start = useCallback(
-    async (nextKind: QuickVoiceKind) => {
+    async (nextKind: QuickVoiceKind, selectedPersonId?: string | null) => {
       if (phaseRef.current !== "idle") return;
       const run = ++runRef.current;
       phaseRef.current = "listening";
@@ -139,7 +263,9 @@ export function useQuickVoiceRecording() {
         const message =
           nextKind === "task"
             ? await recordTask(transcript)
-            : await recordMood(transcript);
+            : nextKind === "conversation"
+              ? await recordConversation(transcript, selectedPersonId)
+              : await recordMood(transcript);
         if (runRef.current === run) notify(message);
       } catch (reason) {
         if (runRef.current !== run) return;
@@ -147,14 +273,14 @@ export function useQuickVoiceRecording() {
           reason instanceof Error ? reason.message : String(reason);
         if (!message.includes("心情语音已取消")) {
           notify(
-            `${nextKind === "task" ? "任务" : "心情"}记录失败：${message || "请稍后重试"}`,
+            `${nextKind === "task" ? "任务" : nextKind === "conversation" ? "人物对话" : "心情"}记录失败：${message || "请稍后重试"}`,
           );
         }
       } finally {
         if (runRef.current === run) reset();
       }
     },
-    [notify, recordMood, recordTask, reset],
+    [notify, recordConversation, recordMood, recordTask, reset],
   );
 
   const stop = useCallback(async () => {

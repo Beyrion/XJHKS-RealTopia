@@ -334,7 +334,7 @@ try {
     topiaAudit.weatherIconCount ||
     topiaAudit.interactionPromptCount ||
     topiaAudit.hasInteractionPrompt ||
-    topiaAudit.quickActions !== 2 ||
+    topiaAudit.quickActions !== 3 ||
     topiaAudit.quickActionHeight < 40 ||
     !topiaAudit.quickActionsOutsideToday ||
     !topiaAudit.quickActionsAboveToday ||
@@ -569,6 +569,25 @@ try {
     window.__finishQuickVoiceTest = () =>
       finish?.({ transcript: "明天整理旅行照片" });
   });
+  await page.locator("#record-conversation").click();
+  await page.locator(".conversation-person-dialog").waitFor();
+  const conversationPickerAudit = await page.evaluate(() => ({
+    title: document.querySelector("#conversation-person-title")?.textContent,
+    people: document.querySelectorAll(".conversation-person-list > button")
+      .length,
+    unknown: Boolean(document.querySelector(".conversation-unknown")),
+    autoStarted: Boolean(document.querySelector("#record-conversation.is-listening")),
+  }));
+  if (
+    conversationPickerAudit.title !== "你正在和谁对话？" ||
+    conversationPickerAudit.people < 4 ||
+    !conversationPickerAudit.unknown ||
+    conversationPickerAudit.autoStarted
+  )
+    throw new Error(
+      `conversation picker audit failed: ${JSON.stringify(conversationPickerAudit)}`,
+    );
+  await page.locator('[aria-label="关闭人物选择"]').click();
   await page.locator("#record-task").click();
   await page.locator("#record-task.is-listening").waitFor();
   const quickListeningAudit = await page.evaluate(() => ({
@@ -1022,7 +1041,7 @@ try {
       `browser errors: ${[...consoleErrors, ...httpErrors].join(" | ")}`,
     );
   process.stdout.write(
-    `${JSON.stringify({ ok: true, gameplayAudit, visualAudit, topiaAudit, anchorAudit, interiorDrawerAudit, gardenAudit, quickListeningAudit, quickProcessingAudit, quickSuccessAudit, quickErrorAudit, moodEffectAudit, filterAudit, peopleAudit, intelligenceAudit, settingsDecorationAudit, memoryPaginationAudit, memoryDrawerAudit, promptAudit, dynamicWorldAudit })}\n`,
+    `${JSON.stringify({ ok: true, gameplayAudit, visualAudit, topiaAudit, anchorAudit, interiorDrawerAudit, gardenAudit, conversationPickerAudit, quickListeningAudit, quickProcessingAudit, quickSuccessAudit, quickErrorAudit, moodEffectAudit, filterAudit, peopleAudit, intelligenceAudit, settingsDecorationAudit, memoryPaginationAudit, memoryDrawerAudit, promptAudit, dynamicWorldAudit })}\n`,
   );
 } finally {
   await browser.close();

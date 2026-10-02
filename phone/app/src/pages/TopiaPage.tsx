@@ -44,6 +44,7 @@ export default function TopiaPage() {
     currentMood,
     activeQuestId,
     gameEvents,
+    session,
     notify,
   } = useAppStore();
   const [location, setLocation] = useState<TopiaLocation>("exterior");
@@ -52,6 +53,7 @@ export default function TopiaPage() {
   const [topiaPayload, setTopiaPayload] = useState<TopiaWorldPayload | null>(
     null,
   );
+  const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
   const moodCheckIn = useMoodCheckIn();
   const quickVoice = useQuickVoiceRecording();
   useEffect(() => {
@@ -100,11 +102,33 @@ export default function TopiaPage() {
       void quickVoice.stop();
       return;
     }
+    if (kind === "conversation") {
+      setConversationPickerOpen(true);
+      return;
+    }
     void quickVoice.start(kind);
   };
   const quickActionIcon = (kind: QuickVoiceKind) => {
-    if (quickVoice.kind !== kind) return kind === "task" ? "ListTodo" : "Heart";
+    if (quickVoice.kind !== kind)
+      return kind === "task"
+        ? "ListTodo"
+        : kind === "conversation"
+          ? "UsersRound"
+          : "Heart";
     return quickVoice.phase === "listening" ? "Square" : "LoaderCircle";
+  };
+  const recentlyRecognizedIds = [
+    ...new Set(
+      (session.last_face?.matches ?? []).flatMap((match) =>
+        match.decision === "known" && match.person_id ? [match.person_id] : [],
+      ),
+    ),
+  ];
+  const suggestedPersonId =
+    recentlyRecognizedIds.length === 1 ? recentlyRecognizedIds[0] : null;
+  const beginConversation = (personId: string | null) => {
+    setConversationPickerOpen(false);
+    void quickVoice.start("conversation", personId);
   };
 
   if (!topiaPayload) {
@@ -224,6 +248,33 @@ export default function TopiaPage() {
             记录任务
           </button>
           <button
+            id="record-conversation"
+            className={
+              quickVoice.kind === "conversation"
+                ? `is-${quickVoice.phase}`
+                : undefined
+            }
+            aria-label={
+              quickVoice.kind === "conversation" &&
+              quickVoice.phase === "listening"
+                ? "停止记录人物对话"
+                : "记录人物对话"
+            }
+            aria-busy={
+              quickVoice.kind === "conversation" &&
+              quickVoice.phase === "processing"
+            }
+            disabled={
+              quickVoice.phase === "processing" ||
+              (quickVoice.phase === "listening" &&
+                quickVoice.kind !== "conversation")
+            }
+            onClick={() => quickAction("conversation")}
+          >
+            <Icon name={quickActionIcon("conversation")} />
+            人物对话
+          </button>
+          <button
             id="record-mood"
             className={
               quickVoice.kind === "mood" ? `is-${quickVoice.phase}` : undefined
@@ -304,6 +355,70 @@ export default function TopiaPage() {
           </button>
         </aside>
       </div>
+      {conversationPickerOpen && (
+        <div
+          className="person-enroll-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget)
+              setConversationPickerOpen(false);
+          }}
+        >
+          <section
+            className="person-enroll-dialog conversation-person-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="conversation-person-title"
+          >
+            <header>
+              <span>
+                <small>人物记忆</small>
+                <h2 id="conversation-person-title">你正在和谁对话？</h2>
+              </span>
+              <button
+                type="button"
+                aria-label="关闭人物选择"
+                onClick={() => setConversationPickerOpen(false)}
+              >
+                <Icon name="X" />
+              </button>
+            </header>
+            <p>
+              先确认对话对象，系统才能把任务、共同记忆和好感度记到正确的人身上。
+            </p>
+            <div className="conversation-person-list">
+              {people.map((person) => (
+                <button
+                  key={person.id}
+                  type="button"
+                  className={
+                    person.id === suggestedPersonId ? "suggested" : undefined
+                  }
+                  onClick={() => beginConversation(person.id)}
+                >
+                  <span>
+                    <b>{person.name}</b>
+                    <small>{person.role}</small>
+                  </span>
+                  {person.id === suggestedPersonId && (
+                    <em>眼镜最近识别 · 建议</em>
+                  )}
+                  <Icon name="ChevronRight" />
+                </button>
+              ))}
+            </div>
+            <button
+              className="conversation-unknown"
+              type="button"
+              onClick={() => beginConversation(null)}
+            >
+              暂时不确定，先保存为待关联对话
+            </button>
+            <small className="conversation-privacy">
+              最近人脸只用于提供建议；未经你点击确认，不会自动绑定。
+            </small>
+          </section>
+        </div>
+      )}
       <MoodDialog
         open={moodCheckIn.open}
         phase={moodCheckIn.phase}
