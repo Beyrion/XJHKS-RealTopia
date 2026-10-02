@@ -630,10 +630,11 @@ try {
       `quick voice success audit failed: ${JSON.stringify(quickSuccessAudit)}`,
     );
   await page.evaluate(() => {
-    window.__TAURI_INTERNALS__.invoke = (command) =>
+    const previousInvoke = window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke = (command, args) =>
       command === "listen_mood"
         ? Promise.reject(new Error("麦克风不可用"))
-        : Promise.resolve();
+        : previousInvoke(command, args);
   });
   await page.locator("#record-mood").click();
   await page.waitForFunction(() =>
