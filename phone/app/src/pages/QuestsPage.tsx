@@ -7,7 +7,7 @@ import { useAppStore } from "../store/AppStore";
 
 export default function QuestsPage() {
   const location = useLocation();
-  const { quests, memories, updateQuests, updateMemories } = useAppStore();
+  const { quests, activeQuestId, focusQuest, toggleQuestStep } = useAppStore();
   const [selectedId, setSelectedId] = useState(quests[0]?.id ?? "");
   const [filter, setFilter] = useState<QuestFilter>("active");
   const [collapsed, setCollapsed] = useState(new Set<string>());
@@ -34,35 +34,7 @@ export default function QuestsPage() {
 
   const toggleStep = (index: number) => {
     if (!selected) return;
-    const completed = Math.round(
-      (selected.progress * selected.steps.length) / 100,
-    );
-    const progress = Math.round(
-      (100 * (index < completed ? index : index + 1)) / selected.steps.length,
-    );
-    updateQuests((items) =>
-      items.map((item) =>
-        item.id === selected.id ? { ...item, progress } : item,
-      ),
-    );
-    if (
-      progress === 100 &&
-      !memories.some((item) => item.id === `complete-${selected.id}`)
-    ) {
-      updateMemories((items) => [
-        {
-          id: `complete-${selected.id}`,
-          time: new Date().toLocaleTimeString("zh-CN", {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-          title: `任务完成 · ${selected.title}`,
-          meta: `世界变化已保存 · ${selected.reward}`,
-          kind: "task",
-        },
-        ...items,
-      ]);
-    }
+    toggleQuestStep(selected.id, index);
   };
 
   if (!selected) return null;
@@ -88,6 +60,8 @@ export default function QuestsPage() {
         quests={quests}
         onSelect={setSelectedId}
         onToggleStep={toggleStep}
+        isFocused={selected.id === activeQuestId}
+        onFocus={() => focusQuest(selected.id)}
       />
     </div>
   );

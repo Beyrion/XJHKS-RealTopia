@@ -7,6 +7,7 @@ import {
 } from "../data/appData";
 import {
   moodKinds,
+  type GameEvent,
   type GlassSettings,
   type Memory,
   type MoodKind,
@@ -14,6 +15,7 @@ import {
   type Person,
   type Quest,
 } from "../models";
+import { inferQuestCategory } from "../utils/gameRules";
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -33,6 +35,17 @@ export const storage = {
         personId:
           item.personId ??
           (item.person ? personIdByName[item.person] : undefined),
+        assignerPersonId: item.assignerPersonId ?? item.personId,
+        category: item.category ?? inferQuestCategory(item),
+        status:
+          item.status ??
+          (item.progress >= 100
+            ? "done"
+            : item.progress > 0
+              ? "active"
+              : "inbox"),
+        source: item.source ?? "seed",
+        createdAt: item.createdAt ?? new Date(0).toISOString(),
       }),
     );
   },
@@ -88,6 +101,22 @@ export const storage = {
   },
   saveMood(value: MoodSnapshot) {
     localStorage.setItem("realtopia.mood", JSON.stringify(value));
+  },
+  loadGameEvents(): GameEvent[] {
+    return loadJson<GameEvent[]>("realtopia.gameEvents.v1", []).slice(0, 500);
+  },
+  saveGameEvents(value: GameEvent[]) {
+    localStorage.setItem(
+      "realtopia.gameEvents.v1",
+      JSON.stringify(value.slice(0, 500)),
+    );
+  },
+  loadActiveQuestId() {
+    return localStorage.getItem("realtopia.activeQuestId");
+  },
+  saveActiveQuestId(value: string | null) {
+    if (value) localStorage.setItem("realtopia.activeQuestId", value);
+    else localStorage.removeItem("realtopia.activeQuestId");
   },
   loadPerception() {
     return localStorage.getItem("realtopia.perception") !== "off";

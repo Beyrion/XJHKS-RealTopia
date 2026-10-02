@@ -81,7 +81,7 @@ function heuristic(
     story: compact(sentences.slice(0, 3).join("。"), 180),
     personIds,
     taskIds: ranked,
-    affinityDelta: personIds.length ? 2 : 0,
+    affinityDelta: personIds.length ? 1 : 0,
     followUps,
   };
 }
@@ -103,7 +103,7 @@ export async function analyzeConversation(
     };
   const model = await modelHub.complete({
     purpose: "memory",
-    prompt: `<transcript>${clean}</transcript>\n<context>${JSON.stringify(promptContext)}</context>\nReturn JSON with summary, story, personIds, taskIds, affinityDelta (-2..5), and followUps. Use only IDs from context.`,
+    prompt: `<transcript>${clean}</transcript>\n<context>${JSON.stringify(promptContext)}</context>\nReturn JSON with summary, story, personIds, taskIds, and followUps. Use only IDs from context.`,
     system:
       "You extract durable RPG memory from a real conversation. Link only clearly supported people and tasks. Return JSON only.",
     json: true,
@@ -144,10 +144,10 @@ export async function analyzeConversation(
           : fallback.story,
       personIds: people.length ? people : fallback.personIds,
       taskIds: tasks.length ? tasks : fallback.taskIds,
-      affinityDelta:
-        typeof raw.affinityDelta === "number"
-          ? Math.max(-2, Math.min(5, Math.round(raw.affinityDelta)))
-          : fallback.affinityDelta,
+      // The model may identify a relationship event, but it cannot assign its
+      // own reward. A bounded local rule awards one point for a meaningfully
+      // linked conversation.
+      affinityDelta: fallback.affinityDelta,
       followUps,
     },
   };

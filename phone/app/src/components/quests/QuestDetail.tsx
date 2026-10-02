@@ -1,4 +1,5 @@
 import type { Quest } from "../../models";
+import { inferQuestCategory, questCategoryMeta } from "../../utils/gameRules";
 import { Icon } from "../ui/Icon";
 
 export function QuestDetail({
@@ -6,13 +7,18 @@ export function QuestDetail({
   quests,
   onSelect,
   onToggleStep,
+  isFocused,
+  onFocus,
 }: {
   quest: Quest;
   quests: Quest[];
   onSelect: (id: string) => void;
   onToggleStep: (index: number) => void;
+  isFocused: boolean;
+  onFocus: () => void;
 }) {
   const completed = Math.round((quest.progress * quest.steps.length) / 100);
+  const category = quest.category ?? inferQuestCategory(quest);
   const parent = quest.parentId
     ? quests.find((item) => item.id === quest.parentId)
     : null;
@@ -25,8 +31,23 @@ export function QuestDetail({
           {quest.group}
         </span>
         <b>{quest.priority}优先级</b>
+        <span>
+          {questCategoryMeta[category].emoji}{" "}
+          {questCategoryMeta[category].label}
+        </span>
       </div>
       <h1>{quest.title}</h1>
+      {quest.progress < 100 && (
+        <button
+          className={`focus-quest-button ${isFocused ? "active" : ""}`}
+          data-focus-quest={quest.id}
+          aria-pressed={isFocused}
+          onClick={onFocus}
+        >
+          <Icon name={isFocused ? "Orbit" : "Telescope"} />
+          {isFocused ? "主页正在追踪" : "设为当前任务"}
+        </button>
+      )}
       <small>
         {quest.meta}
         {quest.person ? `　·　关联人物 ${quest.person}` : ""}

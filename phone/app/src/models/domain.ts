@@ -2,6 +2,10 @@ export type Tab = "topia" | "quests" | "people" | "settings";
 export type Setting = "glasses" | "intelligence" | "memory" | "testing";
 export type PersonPanel = "quests" | "memories" | "profile";
 export type QuestFilter = "active" | "done" | "all";
+export type QuestCategory =
+  "creative" | "relationship" | "health" | "home" | "outdoor" | "general";
+export type QuestStatus = "inbox" | "active" | "blocked" | "done" | "cancelled";
+export type QuestSource = "seed" | "voice" | "glasses" | "manual" | "memory";
 
 export const moodKinds = [
   "joyful",
@@ -49,6 +53,33 @@ export interface Quest {
   personId?: string;
   parentId?: string;
   reward: string;
+  category?: QuestCategory;
+  status?: QuestStatus;
+  source?: QuestSource;
+  assignerPersonId?: string;
+  deadline?: string;
+  createdAt?: string;
+  completedAt?: string;
+}
+
+export type GameEventType =
+  | "task_created"
+  | "task_focused"
+  | "task_progressed"
+  | "task_completed"
+  | "affinity_changed";
+
+export interface GameEvent {
+  id: string;
+  type: GameEventType;
+  createdAt: string;
+  questId?: string;
+  personId?: string;
+  progress?: number;
+  vitalityDelta?: number;
+  affinityDelta?: number;
+  source: "user" | "asr" | "vision" | "llm" | "system";
+  summary: string;
 }
 
 export interface Person {

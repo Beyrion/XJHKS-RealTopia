@@ -10,6 +10,7 @@ import {
 } from "react";
 import type {
   GlassSettings,
+  GameEvent,
   Memory,
   ModelDownloadStatus,
   MoodSnapshot,
@@ -22,6 +23,11 @@ import { modelHub } from "../services/modelHub";
 import { nativeService } from "../services/native";
 import { processRecordingPipeline } from "../services/recordingPipeline";
 import { storage } from "../services/storage";
+import {
+  completionReward,
+  inferQuestCategory,
+  recommendedQuest,
+} from "../utils/gameRules";
 
 type Updater<T> = T | ((current: T) => T);
 
@@ -36,12 +42,17 @@ interface AppStoreValue {
   asrDownload: ModelDownloadStatus | null;
   logs: string[];
   toastMessage: string;
+  activeQuestId: string | null;
+  gameEvents: GameEvent[];
   updateQuests: (next: Updater<Quest[]>) => void;
   updatePeople: (next: Updater<Person[]>) => void;
   updateMemories: (next: Updater<Memory[]>) => void;
   updateMood: (next: MoodSnapshot) => void;
   updateGlassSettings: (next: Updater<GlassSettings>) => void;
   updatePerception: (next: boolean) => void;
+  addQuest: (quest: Quest, focus?: boolean) => void;
+  focusQuest: (questId: string) => void;
+  toggleQuestStep: (questId: string, stepIndex: number) => void;
   notify: (message: string) => void;
   addLog: (message: string) => void;
   clearLogs: () => void;
@@ -69,6 +80,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [people, setPeople] = useState(storage.loadPeople);
   const [memories, setMemories] = useState(storage.loadMemories);
   const [currentMood, setCurrentMood] = useState(storage.loadMood);
+  const [gameEvents, setGameEvents] = useState(storage.loadGameEvents);
+  const [activeQuestId, setActiveQuestId] = useState(storage.loadActiveQuestId);
   const [glassSettings, setGlassSettings] = useState(storage.loadGlassSettings);
   const [perception, setPerception] = useState(storage.loadPerception);
   const [session, setSession] = useState<SessionState>(emptySession);
@@ -89,6 +102,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const perceptionRef = useRef(perception);
   const sessionRef = useRef(session);
   const asrRef = useRef(asrDownload);
+  const gameEventsRef = useRef(gameEvents);
+  const activeQuestIdRef = useRef(activeQuestId);
   const connectingRef = useRef(false);
   const syncedSessionRef = useRef<string | null>(null);
   const lastModelStatusFetchRef = useRef(0);
@@ -148,6 +163,180 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     setPerception(next);
     storage.savePerception(next);
   }, []);
+
+  const appendGameEvent = useCallback(
+    (event: Omit<GameEvent, "id" | "createdAt">) => {
+      const value: GameEvent = {
+        ...event,
+        id: `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+      };
+      setGameEvents((current) => {
+        const next = [value, ...current].slice(0, 500);
+        gameEventsRef.current = next;
+        storage.saveGameEvents(next);
+        return next;
+      });
+      return value;
+    },
+    [],
+  );
+
+  const focusQuest = useCallback(
+    (questId: string) => {
+      const quest = questsRef.current.find(
+        (item) => item.id === questId && item.progress < 100,
+      );
+      if (!quest) return;
+      activeQuestIdRef.current = questId;
+      setActiveQuestId(questId);
+      storage.saveActiveQuestId(questId);
+      updateQuests((items) =>
+        items.map((item) =>
+          item.id === questId ? { ...item, status: "active" } : item,
+        ),
+      );
+      appendGameEvent({
+        type: "task_focused",
+        questId,
+        source: "user",
+        summary: `设为当前任务 · ${quest.title}`,
+      });
+      notify(`正在专注「${quest.title}」`);
+    },
+    [appendGameEvent, notify, updateQuests],
+  );
+
+  const addQuest = useCallback(
+    (quest: Quest, focus = false) => {
+      const normalized: Quest = {
+        ...quest,
+        category: quest.category ?? inferQuestCategory(quest),
+        status: focus ? "active" : (quest.status ?? "inbox"),
+        source: quest.source ?? "manual",
+        assignerPersonId: quest.assignerPersonId ?? quest.personId,
+        createdAt: quest.createdAt ?? new Date().toISOString(),
+      };
+      updateQuests((items) => [normalized, ...items]);
+      appendGameEvent({
+        type: "task_created",
+        questId: normalized.id,
+        personId: normalized.assignerPersonId,
+        source: normalized.source === "voice" ? "asr" : "user",
+        summary: `创建任务 · ${normalized.title}`,
+      });
+      if (
+        focus ||
+        !recommendedQuest(questsRef.current, activeQuestIdRef.current)
+      ) {
+        activeQuestIdRef.current = normalized.id;
+        setActiveQuestId(normalized.id);
+        storage.saveActiveQuestId(normalized.id);
+      }
+    },
+    [appendGameEvent, updateQuests],
+  );
+
+  const toggleQuestStep = useCallback(
+    (questId: string, stepIndex: number) => {
+      const quest = questsRef.current.find((item) => item.id === questId);
+      if (!quest || !quest.steps.length) return;
+      const completed = Math.round((quest.progress * quest.steps.length) / 100);
+      const progress = Math.round(
+        (100 * (stepIndex < completed ? stepIndex : stepIndex + 1)) /
+          quest.steps.length,
+      );
+      const completedNow = quest.progress < 100 && progress === 100;
+      const nextQuests = questsRef.current.map((item) =>
+        item.id === questId
+          ? {
+              ...item,
+              progress,
+              status:
+                progress === 100 ? ("done" as const) : ("active" as const),
+              completedAt:
+                progress === 100
+                  ? (item.completedAt ?? new Date().toISOString())
+                  : undefined,
+            }
+          : item,
+      );
+      updateQuests(nextQuests);
+      appendGameEvent({
+        type: "task_progressed",
+        questId,
+        progress,
+        source: "user",
+        summary: `任务进度 · ${quest.title} ${progress}%`,
+      });
+      if (!completedNow) return;
+      const alreadyRewarded = gameEventsRef.current.some(
+        (event) => event.type === "task_completed" && event.questId === questId,
+      );
+      if (alreadyRewarded) return;
+      const reward = completionReward(quest, gameEventsRef.current);
+      appendGameEvent({
+        type: "task_completed",
+        questId,
+        personId: reward.personId,
+        vitalityDelta: reward.vitalityDelta,
+        source: "user",
+        summary: `完成任务 · ${quest.title}`,
+      });
+      if (reward.personId && reward.affinityDelta > 0) {
+        updatePeople((items) =>
+          items.map((person) =>
+            person.id === reward.personId
+              ? {
+                  ...person,
+                  affinity: Math.min(
+                    100,
+                    person.affinity + reward.affinityDelta,
+                  ),
+                }
+              : person,
+          ),
+        );
+        appendGameEvent({
+          type: "affinity_changed",
+          questId,
+          personId: reward.personId,
+          affinityDelta: reward.affinityDelta,
+          source: "system",
+          summary: `履行承诺 · 好感度 +${reward.affinityDelta}`,
+        });
+      }
+      if (
+        !memoriesRef.current.some((item) => item.id === `complete-${questId}`)
+      ) {
+        updateMemories((items) => [
+          {
+            id: `complete-${questId}`,
+            time: new Date().toLocaleTimeString("zh-CN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+            title: `任务完成 · ${quest.title}`,
+            meta: `生命力 +${reward.vitalityDelta} · ${quest.reward}`,
+            kind: "task",
+            personIds: reward.personId ? [reward.personId] : [],
+            taskIds: [questId],
+          },
+          ...items,
+        ]);
+      }
+      if (activeQuestIdRef.current === questId) {
+        const next = recommendedQuest(nextQuests, null);
+        activeQuestIdRef.current = next?.id ?? null;
+        setActiveQuestId(next?.id ?? null);
+        storage.saveActiveQuestId(next?.id ?? null);
+      }
+      notify(
+        `任务完成 · 生命力 +${reward.vitalityDelta}${reward.affinityDelta ? ` · 好感度 +${reward.affinityDelta}` : ""}`,
+      );
+    },
+    [appendGameEvent, notify, updateMemories, updatePeople, updateQuests],
+  );
 
   const appendLog = useCallback((message: string) => {
     setLogs((current) => [message, ...current]);
@@ -255,14 +444,58 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         return;
       processingRecordings.current.add(recording.recording_id);
       try {
+        const previousQuestIds = new Set(
+          questsRef.current.map((item) => item.id),
+        );
+        const previousPeople = new Map(
+          peopleRef.current.map((person) => [person.id, person]),
+        );
         const result = await processRecordingPipeline(recording, {
           quests: questsRef.current,
           people: peopleRef.current,
           memories: memoriesRef.current,
         });
         updateQuests(result.quests);
-        updatePeople(result.people);
+        const today = new Date().toLocaleDateString("zh-CN");
+        const rewardedPeople = result.people.map((person) => {
+          const previous = previousPeople.get(person.id);
+          if (!previous || person.affinity <= previous.affinity) return person;
+          const gainedToday = gameEventsRef.current
+            .filter(
+              (event) =>
+                event.personId === person.id &&
+                (event.affinityDelta ?? 0) > 0 &&
+                new Date(event.createdAt).toLocaleDateString("zh-CN") === today,
+            )
+            .reduce((sum, event) => sum + (event.affinityDelta ?? 0), 0);
+          const delta = Math.max(
+            0,
+            Math.min(8 - gainedToday, person.affinity - previous.affinity),
+          );
+          if (delta > 0) {
+            appendGameEvent({
+              type: "affinity_changed",
+              personId: person.id,
+              affinityDelta: delta,
+              source: "asr",
+              summary: `共同对话 · ${person.name} 好感度 +${delta}`,
+            });
+          }
+          return { ...person, affinity: previous.affinity + delta };
+        });
+        updatePeople(rewardedPeople);
         updateMemories(result.memories);
+        result.quests
+          .filter((quest) => !previousQuestIds.has(quest.id))
+          .forEach((quest) =>
+            appendGameEvent({
+              type: "task_created",
+              questId: quest.id,
+              personId: quest.assignerPersonId ?? quest.personId,
+              source: "asr",
+              summary: `对话生成任务 · ${quest.title}`,
+            }),
+          );
         [...result.logs].reverse().forEach(appendLog);
       } catch (error) {
         const message = error instanceof Error ? error.message : "录音处理失败";
@@ -279,6 +512,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     },
     [
       appendLog,
+      appendGameEvent,
       refreshModelDownload,
       updateMemories,
       updatePeople,
@@ -379,12 +613,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       asrDownload,
       logs,
       toastMessage,
+      activeQuestId,
+      gameEvents,
       updateQuests,
       updatePeople,
       updateMemories,
       updateMood,
       updateGlassSettings,
       updatePerception,
+      addQuest,
+      focusQuest,
+      toggleQuestStep,
       notify,
       addLog: appendLog,
       clearLogs: () => setLogs([]),
@@ -396,22 +635,27 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       asrDownload,
+      activeQuestId,
+      addQuest,
       appendLog,
       capture,
       connectGlasses,
       currentMood,
       glassSettings,
+      gameEvents,
       logs,
       memories,
       notify,
       people,
       perception,
+      focusQuest,
       quests,
       refreshModelDownload,
       refreshSession,
       retryLastRecording,
       session,
       toastMessage,
+      toggleQuestStep,
       updateGlassSettings,
       updateMemories,
       updateMood,

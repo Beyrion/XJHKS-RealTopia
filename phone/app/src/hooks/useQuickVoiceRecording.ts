@@ -14,7 +14,7 @@ export function useQuickVoiceRecording() {
   const {
     quests,
     people,
-    updateQuests,
+    addQuest,
     updateMemories,
     updateMood,
     addLog,
@@ -91,8 +91,14 @@ export function useQuickVoiceRecording() {
         personId: plan.personId ?? undefined,
         parentId: plan.parentTaskId ?? undefined,
         reward: sanitizeText(plan.reward),
+        category: undefined,
+        status: "inbox",
+        source: "voice",
+        assignerPersonId: plan.personId ?? undefined,
+        deadline: plan.deadline === "待安排" ? undefined : plan.deadline,
+        createdAt: new Date().toISOString(),
       };
-      updateQuests((items) => [quest, ...items]);
+      addQuest(quest);
       updateMemories((items) => [
         {
           id: `memory-${id}`,
@@ -113,7 +119,7 @@ export function useQuickVoiceRecording() {
       addLog(`语音任务已记录 · ${quest.title} · ${model.latencyMs}ms`);
       return `任务「${quest.title}」已记录`;
     },
-    [addLog, people, quests, updateMemories, updateQuests],
+    [addLog, addQuest, people, quests, updateMemories],
   );
 
   const start = useCallback(

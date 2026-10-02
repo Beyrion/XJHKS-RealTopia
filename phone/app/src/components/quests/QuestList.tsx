@@ -25,6 +25,7 @@ export function QuestList({
       filter === "all" ||
       (filter === "done" ? item.progress === 100 : item.progress < 100),
   );
+  const groups = [...new Set(filtered.map((item) => item.group))];
   return (
     <aside className="q-list">
       <div className="q-list-head">
@@ -49,7 +50,7 @@ export function QuestList({
         </div>
       </div>
       <div className="q-scroll">
-        {["世界任务", "突发任务"].map((group) => {
+        {groups.map((group) => {
           const items = filtered.filter((item) => item.group === group);
           return (
             <section className="q-group" key={group}>

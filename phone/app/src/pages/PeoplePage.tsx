@@ -6,6 +6,7 @@ import { Icon } from "../components/ui/Icon";
 import type { PersonPanel as Panel } from "../models";
 import { nativeService } from "../services/native";
 import { useAppStore } from "../store/AppStore";
+import { affinityLevel } from "../utils/gameRules";
 
 export default function PeoplePage() {
   const navigate = useNavigate();
@@ -98,7 +99,7 @@ export default function PeoplePage() {
             <div className="affinity">
               <span>
                 <Icon name="Heart" />
-                好感度
+                好感度 · {affinityLevel(person.affinity)}
               </span>
               <b>
                 {person.affinity}
