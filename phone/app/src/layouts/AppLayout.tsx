@@ -1,7 +1,13 @@
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { KeepAliveRoutes } from "../components/routing/KeepAliveRoutes";
 import type { IconName } from "../components/ui/Icon";
 import { Icon } from "../components/ui/Icon";
+import PeoplePage from "../pages/PeoplePage";
+import QuestsPage from "../pages/QuestsPage";
+import TopiaPage from "../pages/TopiaPage";
 import { useAppStore } from "../store/AppStore";
+import SettingsLayout from "./SettingsLayout";
 
 const tabs: { to: string; id: string; icon: IconName; label: string }[] = [
   { to: "/topia", id: "topia", icon: "House", label: "Topia" },
@@ -14,6 +20,23 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { quests, session, toastMessage } = useAppStore();
+  const activeRoute = pathname.startsWith("/settings")
+    ? "settings"
+    : pathname === "/quests"
+      ? "quests"
+      : pathname === "/people"
+        ? "people"
+        : "topia";
+
+  useEffect(() => {
+    if (pathname === "/settings")
+      navigate("/settings/glasses", { replace: true });
+    else if (
+      !["/topia", "/quests", "/people"].includes(pathname) &&
+      !pathname.startsWith("/settings/")
+    )
+      navigate("/topia", { replace: true });
+  }, [navigate, pathname]);
 
   return (
     <div className="shell">
@@ -64,7 +87,15 @@ export default function AppLayout() {
         </div>
       </header>
       <main className="body">
-        <Outlet />
+        <KeepAliveRoutes
+          activeId={activeRoute}
+          routes={[
+            { id: "topia", element: <TopiaPage /> },
+            { id: "quests", element: <QuestsPage /> },
+            { id: "people", element: <PeoplePage /> },
+            { id: "settings", element: <SettingsLayout /> },
+          ]}
+        />
       </main>
       <div className={`toast ${toastMessage ? "show" : ""}`}>
         {toastMessage}

@@ -11,15 +11,40 @@ export default function QuestsPage() {
   const [selectedId, setSelectedId] = useState(quests[0]?.id ?? "");
   const [filter, setFilter] = useState<QuestFilter>("active");
   const [collapsed, setCollapsed] = useState(new Set<string>());
+  const visibleQuests = useMemo(
+    () =>
+      quests.filter(
+        (item) =>
+          filter === "all" ||
+          (filter === "done" ? item.progress === 100 : item.progress < 100),
+      ),
+    [filter, quests],
+  );
   const selected = useMemo(
-    () => quests.find((item) => item.id === selectedId) ?? quests[0],
-    [quests, selectedId],
+    () =>
+      visibleQuests.find((item) => item.id === selectedId) ?? visibleQuests[0],
+    [selectedId, visibleQuests],
   );
 
   useEffect(() => {
     const questId = (location.state as { questId?: string } | null)?.questId;
-    if (questId) setSelectedId(questId);
-  }, [location.state]);
+    const target = quests.find((item) => item.id === questId);
+    if (!target) return;
+    setSelectedId(target.id);
+    setFilter((current) => {
+      if (
+        current === "all" ||
+        (current === "done" && target.progress === 100) ||
+        (current === "active" && target.progress < 100)
+      )
+        return current;
+      return target.progress === 100 ? "done" : "active";
+    });
+  }, [location.key]);
+
+  useEffect(() => {
+    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
+  }, [selected, selectedId]);
 
   const changeFilter = (next: QuestFilter) => {
     setFilter(next);
@@ -28,7 +53,7 @@ export default function QuestsPage() {
         next === "all" ||
         (next === "done" ? item.progress === 100 : item.progress < 100),
     );
-    if (selected && !visible.includes(selected) && visible[0])
+    if (!visible.some((item) => item.id === selectedId) && visible[0])
       setSelectedId(visible[0].id);
   };
 
@@ -42,7 +67,7 @@ export default function QuestsPage() {
     <div className="quests">
       <QuestList
         quests={quests}
-        selectedId={selected.id}
+        selectedId={selected?.id ?? ""}
         filter={filter}
         collapsed={collapsed}
         onFilter={changeFilter}
@@ -55,14 +80,16 @@ export default function QuestsPage() {
           })
         }
       />
-      <QuestDetail
-        quest={selected}
-        quests={quests}
-        onSelect={setSelectedId}
-        onToggleStep={toggleStep}
-        isFocused={selected.id === activeQuestId}
-        onFocus={() => focusQuest(selected.id)}
-      />
+      {selected && (
+        <QuestDetail
+          quest={selected}
+          quests={quests}
+          onSelect={setSelectedId}
+          onToggleStep={toggleStep}
+          isFocused={selected.id === activeQuestId}
+          onFocus={() => focusQuest(selected.id)}
+        />
+      )}
     </div>
   );
 }

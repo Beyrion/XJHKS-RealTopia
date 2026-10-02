@@ -220,6 +220,28 @@ try {
     throw new Error(
       `gameplay reward audit failed: ${JSON.stringify(gameplayAudit)}`,
     );
+  const completedSelectionAudit = await page.evaluate(() => ({
+    filter: document
+      .querySelector("[data-quest-filter].active")
+      ?.getAttribute("data-quest-filter"),
+    visibleIds: [...document.querySelectorAll(".q-item")].map((item) =>
+      item.getAttribute("data-quest"),
+    ),
+    selectedId: document
+      .querySelector(".q-item.active")
+      ?.getAttribute("data-quest"),
+    detailTitle: document.querySelector(".q-title-row h1")?.textContent,
+  }));
+  if (
+    completedSelectionAudit.filter !== "active" ||
+    completedSelectionAudit.visibleIds.includes("book") ||
+    completedSelectionAudit.selectedId === "book" ||
+    completedSelectionAudit.detailTitle === "把书还给周野"
+  )
+    throw new Error(
+      `completed quest remained selected outside its filter: ${JSON.stringify(completedSelectionAudit)}`,
+    );
+  const rememberedQuestId = completedSelectionAudit.selectedId;
   await page.screenshot({
     path: path.join(root, "artifacts/mockups/phone-quests-linked.png"),
   });
@@ -235,6 +257,42 @@ try {
     throw new Error("person memory panel did not activate");
   await page.locator('[data-person-panel="profile"]').click();
   await page.locator(".profile-grid").waitFor();
+  await page.locator('[data-tab="quests"]').click();
+  await page.locator(".quests").waitFor();
+  const questReturnAudit = await page.evaluate(() => ({
+    filter: document
+      .querySelector("[data-quest-filter].active")
+      ?.getAttribute("data-quest-filter"),
+    selectedId: document
+      .querySelector(".q-item.active")
+      ?.getAttribute("data-quest"),
+  }));
+  if (
+    questReturnAudit.filter !== "active" ||
+    questReturnAudit.selectedId !== rememberedQuestId
+  )
+    throw new Error(
+      `quest page state was not restored: ${JSON.stringify(questReturnAudit)}`,
+    );
+  await page.locator('[data-tab="people"]').click();
+  await page.locator(".people").waitFor();
+  const peopleReturnAudit = await page.evaluate(() => ({
+    selectedId: document
+      .querySelector(".p-card.active")
+      ?.getAttribute("data-person"),
+    panel: document
+      .querySelector("[data-person-panel].active")
+      ?.getAttribute("data-person-panel"),
+    profileVisible: Boolean(document.querySelector(".profile-grid")),
+  }));
+  if (
+    peopleReturnAudit.selectedId !== "lin" ||
+    peopleReturnAudit.panel !== "profile" ||
+    !peopleReturnAudit.profileVisible
+  )
+    throw new Error(
+      `people page state was not restored: ${JSON.stringify(peopleReturnAudit)}`,
+    );
   await page.screenshot({
     path: path.join(root, "artifacts/mockups/phone-people-current.png"),
   });
@@ -297,6 +355,35 @@ try {
     (await page.locator(".mem-list button").count()) !== 1
   )
     throw new Error("memory search did not reset pagination");
+  await page.locator('[data-setting="intelligence"]').click();
+  await page.getByRole("heading", { name: "智能", exact: true }).waitFor();
+  await page.locator('[data-setting="memory"]').click();
+  await page.getByRole("heading", { name: "记忆", exact: true }).waitFor();
+  const genericKeepAliveAudit = await page.evaluate(() => ({
+    query: document.querySelector("#memory-search")?.value,
+    resultCount: document.querySelectorAll(".mem-list button").length,
+    cachedTopRoutes: document.querySelectorAll("[data-route-cache]").length,
+    activeTopRoutes: document.querySelectorAll(
+      '.route-cache-page[data-route-active="true"]',
+    ).length,
+    cachedSettingsRoutes: document.querySelectorAll(
+      ".settings-route-cache[data-route-cache]",
+    ).length,
+    activeSettingsRoutes: document.querySelectorAll(
+      '.settings-route-cache[data-route-active="true"]',
+    ).length,
+  }));
+  if (
+    genericKeepAliveAudit.query !== "青苔" ||
+    genericKeepAliveAudit.resultCount !== 1 ||
+    genericKeepAliveAudit.cachedTopRoutes < 3 ||
+    genericKeepAliveAudit.activeTopRoutes !== 1 ||
+    genericKeepAliveAudit.cachedSettingsRoutes < 2 ||
+    genericKeepAliveAudit.activeSettingsRoutes !== 1
+  )
+    throw new Error(
+      `generic route state was not preserved: ${JSON.stringify(genericKeepAliveAudit)}`,
+    );
   await page.screenshot({
     path: path.join(root, "artifacts/mockups/phone-memory-current.png"),
   });
@@ -1028,28 +1115,32 @@ try {
   });
   await page.locator('[data-setting="intelligence"]').click();
   await page.getByRole("heading", { name: "智能", exact: true }).waitFor();
-  const intelligenceAudit = await page.evaluate(() => ({
-    stats: document.querySelectorAll(".setting-view .stats").length,
+  const intelligenceAudit = await page.evaluate(() => {
+    const active = document.querySelector(
+      '.settings-route-cache[data-route-active="true"]',
+    );
+    return {
+    stats: active.querySelectorAll(".setting-view .stats").length,
     decorativeSummary: /<1 MB|规则规划器|响应速度|可用状态/.test(
-      document.body.innerText,
+      active.innerText,
     ),
     forbiddenPrompt:
       /任务拆分|云端失败|端侧任务回退|prompt|提示词|物理按钮即时拍摄|自动提炼/i.test(
-        document.body.innerText,
+        active.innerText,
       ),
-    passiveNotes: document.querySelectorAll(
+    passiveNotes: active.querySelectorAll(
       ".model-download-note,.setting-view .row",
     ).length,
     modelRowsWithoutAction: [
-      ...document.querySelectorAll(".model-download"),
+      ...active.querySelectorAll(".model-download"),
     ].filter((row) => !row.querySelector("button")).length,
-    placeholderCount: document.querySelectorAll("input[placeholder]").length,
+    placeholderCount: active.querySelectorAll("input[placeholder]").length,
     contentBackground: getComputedStyle(document.querySelector(".s-content"))
       .backgroundColor,
     modelIconFilter: getComputedStyle(
-      document.querySelector(".model-icon.cloud-model"),
+      active.querySelector(".model-icon.cloud-model"),
     ).filter,
-  }));
+  }});
   if (
     intelligenceAudit.stats ||
     intelligenceAudit.decorativeSummary ||
@@ -1072,7 +1163,10 @@ try {
   await page.locator('[data-setting="memory"]').click();
   await page.getByRole("heading", { name: "记忆", exact: true }).waitFor();
   const settingsDecorationAudit = await page.evaluate(() => {
-    const gaps = [...document.querySelectorAll(".s-card")].map((card) => {
+    const active = document.querySelector(
+      '.settings-route-cache[data-route-active="true"]',
+    );
+    const gaps = [...active.querySelectorAll(".s-card")].map((card) => {
       const title = card.querySelector("h3"),
         content = title?.nextElementSibling;
       return title && content
@@ -1081,14 +1175,14 @@ try {
         : 999;
     });
     return {
-      stats: document.querySelectorAll(".settings .stats").length,
-      cardSummaries: document.querySelectorAll(".settings .s-card > p").length,
-      headerSummaries: document.querySelectorAll(".settings .setting-head > p")
+      stats: active.querySelectorAll(".stats").length,
+      cardSummaries: active.querySelectorAll(".s-card > p").length,
+      headerSummaries: active.querySelectorAll(".setting-head > p")
         .length,
       navSummaries: document.querySelectorAll(".settings .s-nav nav small")
         .length,
-      passiveNotes: document.querySelectorAll(
-        ".settings .model-download-note,.settings .row",
+      passiveNotes: active.querySelectorAll(
+        ".model-download-note,.row",
       ).length,
       minTitleGap: Math.min(...gaps),
     };

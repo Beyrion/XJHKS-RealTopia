@@ -73,6 +73,8 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
 .system > i { width: 11px; height: 11px; border-radius: 50%; background: #a7a9b7; }
 .system > i.ready { background: var(--mint); box-shadow: 0 0 0 5px rgba(85, 215, 170, .18); }
 .body { height: calc(100vh - 86px); }
+.route-cache-page { height:100%; }
+.route-cache-page[hidden],.settings-route-cache[hidden] { display:none!important; }
 .kicker { display: inline-block; font: 900 13px ui-monospace, monospace; letter-spacing: .18em; color: var(--blue-dark); text-transform: uppercase; }
 .panel, .s-card { background: var(--panel); border: 2px solid var(--ink); box-shadow: var(--shadow); }
 .page-head { padding: 25px 26px 14px; }
@@ -482,7 +484,8 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
 .s-nav nav > button > .ui-icon { width: 19px; height: 19px; }
 .version { position: absolute; left: 28px; bottom: 20px; color: var(--muted); font-size: 13px; }
 .version b { display: block; margin-bottom: 4px; color: var(--ink); font-size: 14px; }
-.s-content { padding: 25px 36px 55px; overflow: auto; }
+.s-content { min-width:0;min-height:0;padding:0;overflow:hidden; }
+.settings-route-cache { box-sizing:border-box;height:100%;padding:25px 36px 55px;overflow:auto; }
 .settings .s-content { background: #f4f6fb; }
 .setting-view { max-width: 960px; margin: auto; }
 .setting-head { margin-bottom: 20px; }
@@ -605,7 +608,7 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
   .people { grid-template-columns: 43% 22% 35%; }
   .p-grid { grid-template-columns: 1fr; }
   .settings { grid-template-columns: 280px 1fr; }
-  .s-content { padding-inline: 25px; }
+  .settings-route-cache { padding-inline: 25px; }
   .tests { grid-template-columns: repeat(2,1fr); }
 }
 
@@ -636,7 +639,7 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
   .p-info { padding-inline: 18px; }
   .settings { grid-template-columns: 235px 1fr; }
   .s-nav nav { padding-inline: 10px; }
-  .s-content { padding-inline: 18px; }
+  .settings-route-cache { padding-inline: 18px; }
 }
 
 @media (max-height: 650px) {
@@ -778,7 +781,7 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
   .nav-icon .ui-icon { width: 18px; height: 18px; }
   .s-nav nav b { font-size: 13px; }
   .s-nav nav > button > .ui-icon { width: 15px; height: 15px; }
-  .s-content { padding: 10px 14px 20px; }
+  .settings-route-cache { padding: 10px 14px 20px; }
   .setting-head { margin-bottom: 6px; }
   .setting-head h1 { font-size: 23px; }
   .s-card { margin: 7px 0; padding: 11px 13px; border-radius: 13px; box-shadow: 3px 3px 0 rgba(44,47,91,.13); }

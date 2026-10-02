@@ -1,6 +1,11 @@
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { KeepAliveRoutes } from "../components/routing/KeepAliveRoutes";
 import type { IconName } from "../components/ui/Icon";
 import { Icon } from "../components/ui/Icon";
+import GlassesSettingsPage from "../pages/settings/GlassesSettingsPage";
+import IntelligenceSettingsPage from "../pages/settings/IntelligenceSettingsPage";
+import MemorySettingsPage from "../pages/settings/MemorySettingsPage";
+import TestingSettingsPage from "../pages/settings/TestingSettingsPage";
 
 const settings: { to: string; icon: IconName; label: string }[] = [
   { to: "/settings/glasses", icon: "Glasses", label: "眼镜" },
@@ -12,6 +17,9 @@ const settings: { to: string; icon: IconName; label: string }[] = [
 export default function SettingsLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const activeSetting = settings.some((item) => item.to === pathname)
+    ? pathname
+    : "/settings/glasses";
   return (
     <div className="settings">
       <aside className="s-nav">
@@ -38,7 +46,19 @@ export default function SettingsLayout() {
         </nav>
       </aside>
       <section className="s-content">
-        <Outlet />
+        <KeepAliveRoutes
+          activeId={activeSetting}
+          className="settings-route-cache"
+          routes={[
+            { id: "/settings/glasses", element: <GlassesSettingsPage /> },
+            {
+              id: "/settings/intelligence",
+              element: <IntelligenceSettingsPage />,
+            },
+            { id: "/settings/memory", element: <MemorySettingsPage /> },
+            { id: "/settings/testing", element: <TestingSettingsPage /> },
+          ]}
+        />
       </section>
     </div>
   );
