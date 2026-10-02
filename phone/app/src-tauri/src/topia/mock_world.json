@@ -448,6 +448,10 @@
             0,
             0
           ],
+          "params": {
+            "shape": "cloud-ring",
+            "spatialType": "single-level"
+          },
           "colors": [
             16774102,
             16312520,

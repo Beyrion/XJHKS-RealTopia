@@ -1,0 +1,572 @@
+[
+  {
+    "id": "preset-aurora-loom",
+    "generatedAt": "2026-08-14T09:00:00+08:00",
+    "promptProfile": {
+      "summary": "想要一个能安放日常、任务和共同记忆的幻想空间",
+      "traits": ["追逐未知的观星者"],
+      "preferences": ["像潮汐慢慢蓄力"],
+      "experiences": ["只在黄昏出现的门"],
+      "imagery": ["像枝条向远处生长", "云层短暂露出缺口"],
+      "sensations": ["被薄雾轻轻包住"],
+      "stylePreferences": ["绘画笔触"]
+    },
+    "concept": {
+      "title": "向晚观复",
+      "archetype": "厚涂暮色里缓慢舒展的观星织坊",
+      "habitatForm": "temple-terrace",
+      "architectureStyle": "ancient-greek",
+      "layout": "terraced",
+      "palette": ["#31507d", "#e67a53", "#f2c96d"],
+      "sky": {
+        "theme": "painted-tidal-dusk",
+        "motifs": ["broad-brush-cloud", "branching-aurora", "luminous-gap"],
+        "celestialShape": "split-halo",
+        "decorationDensity": 0.72,
+        "drift": 0.28,
+        "top": "#17294d",
+        "mid": "#624f83",
+        "low": "#e58a69",
+        "aurora": "#efb85f",
+        "celestial": "#fff0b0",
+        "stars": "#dbe7ff",
+        "fog": "#9caac4",
+        "magic": 0.82
+      }
+    },
+    "renderStyle": {
+      "kind": "painterly-oil",
+      "seed": 104729,
+      "roughness": 0.8,
+      "metalness": 0.02,
+      "saturation": 1.12,
+      "contrast": 1.1,
+      "textureStrength": 0.86
+    },
+    "blueprints": {
+      "exterior": {
+        "density": 0.86,
+        "cameraYaw": -0.48,
+        "cameraPitch": 0.56,
+        "habitatForm": "temple-terrace",
+        "architectureStyle": "ancient-greek",
+        "layout": "terraced",
+        "silhouette": "layered tidal crescent with a tall off-center mast",
+        "features": [
+          {"kind": "sail", "color": "#f2c96d", "animation": "sway", "emphasis": 0.95},
+          {"kind": "tower", "color": "#31507d", "emphasis": 0.82},
+          {"kind": "cloud", "color": "#c8b6cf", "animation": "float", "emphasis": 0.45},
+          {"kind": "wind-chimes", "color": "#e67a53", "animation": "sway", "emphasis": 0.65},
+          {"kind": "lantern", "color": "#fff0b0", "animation": "float", "emphasis": 0.72}
+        ]
+      },
+      "interior": {
+        "density": 0.8,
+        "cameraYaw": 0.34,
+        "cameraPitch": 0.54,
+        "habitatForm": "temple-terrace",
+        "architectureStyle": "ancient-greek",
+        "layout": "terraced",
+        "silhouette": "nested brushstroke alcoves around one warm core",
+        "features": [
+          {"kind": "sky-window", "color": "#708db7", "emphasis": 0.9},
+          {"kind": "hearth", "color": "#e67a53", "animation": "sparkle", "emphasis": 0.82},
+          {"kind": "rug", "color": "#6b4e75", "emphasis": 0.64},
+          {"kind": "plant", "color": "#768c65", "animation": "sway", "emphasis": 0.52},
+          {"kind": "lantern", "color": "#f2c96d", "animation": "float", "emphasis": 0.7}
+        ]
+      },
+      "garden": {
+        "density": 0.9,
+        "cameraYaw": 0.62,
+        "cameraPitch": 0.61,
+        "habitatForm": "temple-terrace",
+        "architectureStyle": "ancient-greek",
+        "layout": "terraced",
+        "silhouette": "three rising terraces opening toward a bright horizon",
+        "features": [
+          {"kind": "path", "color": "#d79a69", "emphasis": 0.78},
+          {"kind": "farm-shed", "color": "#31507d", "emphasis": 0.84},
+          {"kind": "watering-orb", "color": "#78a9bd", "animation": "float", "emphasis": 0.66},
+          {"kind": "plant", "color": "#7d9867", "animation": "sway", "emphasis": 0.58},
+          {"kind": "sail", "color": "#f2c96d", "animation": "sway", "emphasis": 0.7}
+        ]
+      }
+    }
+  },
+  {
+    "id": "preset-cloud-nest",
+    "generatedAt": "2026-08-14T09:07:00+08:00",
+    "promptProfile": {
+      "summary": "想要一个能安放日常、任务和共同记忆的幻想空间",
+      "traits": ["为陌生事物命名的人"],
+      "preferences": ["找到同伴再出发"],
+      "experiences": ["长满藤蔓的旧抽屉"],
+      "imagery": ["在高低之间轻轻跳跃", "陌生道路忽然变熟悉"],
+      "sensations": ["踩过缓慢回弹的云"],
+      "stylePreferences": ["柔软温暖"]
+    },
+    "concept": {
+      "title": "此间如晤",
+      "archetype": "由圆润软垫与伙伴灯火围合成的云上玩具港",
+      "habitatForm": "cloud-house",
+      "architectureStyle": "cloud-organic",
+      "layout": "clustered",
+      "palette": ["#f2a6b3", "#8fcbd1", "#f6d985"],
+      "sky": {
+        "theme": "soft-morning-nursery",
+        "motifs": ["pillow-cloud", "button-star", "stitched-rainbow"],
+        "celestialShape": "felt-moon",
+        "decorationDensity": 0.66,
+        "drift": 0.52,
+        "top": "#8fcbd1",
+        "mid": "#c4b7dc",
+        "low": "#f2c2bd",
+        "aurora": "#b9e2c3",
+        "celestial": "#fff2bd",
+        "stars": "#fffaf2",
+        "fog": "#e7dcea",
+        "magic": 0.68
+      }
+    },
+    "renderStyle": {
+      "kind": "plush-toy",
+      "seed": 130363,
+      "roughness": 0.98,
+      "metalness": 0.0,
+      "saturation": 0.94,
+      "contrast": 0.9,
+      "textureStrength": 0.74
+    },
+    "blueprints": {
+      "exterior": {
+        "density": 0.82,
+        "cameraYaw": 0.26,
+        "cameraPitch": 0.5,
+        "habitatForm": "cloud-house",
+        "architectureStyle": "cloud-organic",
+        "layout": "clustered",
+        "silhouette": "low rounded nest with two oversized cloud ears",
+        "features": [
+          {"kind": "cloud", "color": "#f8e8e9", "animation": "float", "emphasis": 1.0},
+          {"kind": "wind-chimes", "color": "#f6d985", "animation": "sway", "emphasis": 0.55},
+          {"kind": "lantern", "color": "#fff2bd", "animation": "float", "emphasis": 0.7},
+          {"kind": "plant", "color": "#a9d4af", "animation": "sway", "emphasis": 0.5},
+          {"kind": "path", "color": "#d7b7c9", "emphasis": 0.62}
+        ]
+      },
+      "interior": {
+        "density": 0.88,
+        "cameraYaw": -0.2,
+        "cameraPitch": 0.48,
+        "habitatForm": "cloud-house",
+        "architectureStyle": "cloud-organic",
+        "layout": "clustered",
+        "silhouette": "cushioned circular room with a friendly central hollow",
+        "features": [
+          {"kind": "rug", "color": "#f2a6b3", "emphasis": 0.92},
+          {"kind": "plant", "color": "#9dcca6", "animation": "sway", "emphasis": 0.48},
+          {"kind": "hearth", "color": "#f6b97a", "animation": "sparkle", "emphasis": 0.74},
+          {"kind": "lantern", "color": "#f6d985", "animation": "float", "emphasis": 0.68},
+          {"kind": "sky-window", "color": "#8fcbd1", "emphasis": 0.78}
+        ]
+      },
+      "garden": {
+        "density": 0.94,
+        "cameraYaw": -0.7,
+        "cameraPitch": 0.57,
+        "habitatForm": "cloud-house",
+        "architectureStyle": "cloud-organic",
+        "layout": "clustered",
+        "silhouette": "soft stepping-cloud meadow with an open center socket",
+        "features": [
+          {"kind": "cloud", "color": "#f8e8e9", "animation": "float", "emphasis": 0.86},
+          {"kind": "plant", "color": "#a9d4af", "animation": "sway", "emphasis": 0.58},
+          {"kind": "watering-orb", "color": "#8fcbd1", "animation": "float", "emphasis": 0.66},
+          {"kind": "path", "color": "#d7b7c9", "emphasis": 0.72},
+          {"kind": "farm-shed", "color": "#f2a6b3", "emphasis": 0.64}
+        ]
+      }
+    }
+  },
+  {
+    "id": "preset-folded-tide",
+    "generatedAt": "2026-08-14T09:14:00+08:00",
+    "promptProfile": {
+      "summary": "想要一个能安放日常、任务和共同记忆的幻想空间",
+      "traits": ["拆解万物的工匠"],
+      "preferences": ["让火花重新排序"],
+      "experiences": ["风经过时展开的纸船"],
+      "imagery": ["从碎片逐渐拼合完整", "风把影子吹散的时候"],
+      "sensations": ["粗糙表面藏着柔光"],
+      "stylePreferences": ["手工肌理"]
+    },
+    "concept": {
+      "title": "风起青萍",
+      "archetype": "以折痕、纸纤维和机关风路搭成的轻量山城",
+      "habitatForm": "stilt-lodge",
+      "architectureStyle": "chinese-thatch",
+      "layout": "terraced",
+      "palette": ["#d95d4f", "#f1d18a", "#477b78"],
+      "sky": {
+        "theme": "cut-paper-windfield",
+        "motifs": ["fold-line", "paper-shard", "stitched-constellation"],
+        "celestialShape": "creased-disc",
+        "decorationDensity": 0.58,
+        "drift": 0.72,
+        "top": "#37607a",
+        "mid": "#7fa7a1",
+        "low": "#efd7aa",
+        "aurora": "#e88664",
+        "celestial": "#fff0b3",
+        "stars": "#fff8dc",
+        "fog": "#c9d7cc",
+        "magic": 0.62
+      }
+    },
+    "renderStyle": {
+      "kind": "paper-craft",
+      "seed": 155921,
+      "roughness": 0.93,
+      "metalness": 0.0,
+      "saturation": 0.9,
+      "contrast": 1.16,
+      "textureStrength": 0.8
+    },
+    "blueprints": {
+      "exterior": {
+        "density": 0.9,
+        "cameraYaw": 0.78,
+        "cameraPitch": 0.63,
+        "habitatForm": "stilt-lodge",
+        "architectureStyle": "chinese-thatch",
+        "layout": "terraced",
+        "silhouette": "sharp folded ridge crossed by a diagonal wind machine",
+        "features": [
+          {"kind": "sail", "color": "#f1d18a", "animation": "sway", "emphasis": 0.9},
+          {"kind": "propeller", "color": "#d95d4f", "animation": "spin", "emphasis": 0.88},
+          {"kind": "path", "color": "#b88f65", "emphasis": 0.68},
+          {"kind": "tower", "color": "#477b78", "emphasis": 0.76},
+          {"kind": "wind-chimes", "color": "#f1d18a", "animation": "sway", "emphasis": 0.52}
+        ]
+      },
+      "interior": {
+        "density": 0.76,
+        "cameraYaw": -0.58,
+        "cameraPitch": 0.55,
+        "habitatForm": "stilt-lodge",
+        "architectureStyle": "chinese-thatch",
+        "layout": "terraced",
+        "silhouette": "faceted studio with fan-fold walls and one long work axis",
+        "features": [
+          {"kind": "sky-window", "color": "#7fa7a1", "emphasis": 0.84},
+          {"kind": "rug", "color": "#d95d4f", "emphasis": 0.66},
+          {"kind": "lantern", "color": "#f1d18a", "animation": "sway", "emphasis": 0.62},
+          {"kind": "plant", "color": "#477b78", "animation": "sway", "emphasis": 0.46},
+          {"kind": "wind-chimes", "color": "#efe2bc", "animation": "sway", "emphasis": 0.58}
+        ]
+      },
+      "garden": {
+        "density": 0.96,
+        "cameraYaw": 0.18,
+        "cameraPitch": 0.66,
+        "habitatForm": "stilt-lodge",
+        "architectureStyle": "chinese-thatch",
+        "layout": "terraced",
+        "silhouette": "zigzag paper terraces with clean removable planting bays",
+        "features": [
+          {"kind": "path", "color": "#b88f65", "emphasis": 0.88},
+          {"kind": "farm-shed", "color": "#d95d4f", "emphasis": 0.78},
+          {"kind": "sail", "color": "#f1d18a", "animation": "sway", "emphasis": 0.72},
+          {"kind": "wind-chimes", "color": "#477b78", "animation": "sway", "emphasis": 0.56},
+          {"kind": "watering-orb", "color": "#7fa7a1", "animation": "float", "emphasis": 0.64}
+        ]
+      }
+    }
+  },
+  {
+    "id": "preset-ember-kiln",
+    "generatedAt": "2026-08-14T09:21:00+08:00",
+    "promptProfile": {
+      "summary": "想要一个能安放日常、任务和共同记忆的幻想空间",
+      "traits": ["照料日常的园丁"],
+      "preferences": ["扎根但仍会摇曳"],
+      "experiences": ["一颗会唱歌的石头"],
+      "imagery": ["绕着隐形中心缓慢旋转", "一句话落下后的余音"],
+      "sensations": ["手心贴近温热裂纹"],
+      "stylePreferences": ["晶莹光泽"]
+    },
+    "concept": {
+      "title": "嘉木成蹊",
+      "archetype": "青瓷檐廊围住一株嘉木，石径在树荫与暖灯间自然汇拢的云上庭院",
+      "habitatForm": "courtyard-compound",
+      "architectureStyle": "jiangnan-white-wall",
+      "layout": "courtyard",
+      "palette": ["#5f8f72", "#d98b5f", "#f1d59a"],
+      "sky": {
+        "theme": "celadon-garden-dusk",
+        "motifs": ["leaf-shadow", "porcelain-cloud", "path-ripple"],
+        "celestialShape": "jade-moon",
+        "decorationDensity": 0.52,
+        "drift": 0.2,
+        "top": "#31576a",
+        "mid": "#76a7a0",
+        "low": "#e7c89b",
+        "aurora": "#a8cfb1",
+        "celestial": "#fff0bd",
+        "stars": "#edf7df",
+        "fog": "#bfd0bc",
+        "magic": 0.66
+      }
+    },
+    "renderStyle": {
+      "kind": "glazed-ceramic",
+      "seed": 180503,
+      "roughness": 0.28,
+      "metalness": 0.03,
+      "saturation": 0.96,
+      "contrast": 1.04,
+      "textureStrength": 0.22
+    },
+    "blueprints": {
+      "exterior": {
+        "density": 0.72,
+        "cameraYaw": -0.38,
+        "cameraPitch": 0.55,
+        "habitatForm": "courtyard-compound",
+        "architectureStyle": "jiangnan-white-wall",
+        "layout": "courtyard",
+        "silhouette": "open white-walled courtyard gathered around one broad tree canopy and a curved stone path",
+        "features": [
+          {"kind": "plant", "color": "#5f8f72", "animation": "sway", "emphasis": 0.92},
+          {"kind": "path", "color": "#d4b58c", "emphasis": 0.88},
+          {"kind": "lantern", "color": "#f1d59a", "animation": "float", "emphasis": 0.65},
+          {"kind": "wind-chimes", "color": "#7aa8a0", "animation": "sway", "emphasis": 0.54},
+          {"kind": "watering-orb", "color": "#9fc9c2", "animation": "float", "emphasis": 0.46}
+        ]
+      },
+      "interior": {
+        "density": 0.68,
+        "cameraYaw": 0.35,
+        "cameraPitch": 0.5,
+        "habitatForm": "courtyard-compound",
+        "architectureStyle": "jiangnan-white-wall",
+        "layout": "courtyard",
+        "silhouette": "quiet celadon room opening toward a planted inner court with generous white space",
+        "features": [
+          {"kind": "sky-window", "color": "#76a7a0", "emphasis": 0.84},
+          {"kind": "rug", "color": "#c9825d", "emphasis": 0.62},
+          {"kind": "plant", "color": "#5f8f72", "animation": "sway", "emphasis": 0.68},
+          {"kind": "lantern", "color": "#f1d59a", "animation": "float", "emphasis": 0.58},
+          {"kind": "wind-chimes", "color": "#7aa8a0", "animation": "sway", "emphasis": 0.46}
+        ]
+      },
+      "garden": {
+        "density": 0.82,
+        "cameraYaw": 0.18,
+        "cameraPitch": 0.58,
+        "habitatForm": "courtyard-compound",
+        "architectureStyle": "jiangnan-white-wall",
+        "layout": "courtyard",
+        "silhouette": "shaded garden path linking clean planting beds beneath a light porcelain eave",
+        "features": [
+          {"kind": "path", "color": "#d4b58c", "emphasis": 0.86},
+          {"kind": "farm-shed", "color": "#edf0e7", "emphasis": 0.72},
+          {"kind": "plant", "color": "#5f8f72", "animation": "sway", "emphasis": 0.74},
+          {"kind": "watering-orb", "color": "#9fc9c2", "animation": "float", "emphasis": 0.66},
+          {"kind": "lantern", "color": "#f1d59a", "animation": "float", "emphasis": 0.48}
+        ]
+      }
+    }
+  },
+  {
+    "id": "preset-echo-archive",
+    "generatedAt": "2026-08-14T09:28:00+08:00",
+    "promptProfile": {
+      "summary": "想要一个能安放日常、任务和共同记忆的幻想空间",
+      "traits": ["沿着声音寻路的人"],
+      "preferences": ["留出一块安静空白"],
+      "experiences": ["没有寄出的透明信封"],
+      "imagery": ["层层回响后聚拢", "灯刚刚亮起之前"],
+      "sensations": ["听见清脆而遥远的回声"],
+      "stylePreferences": ["完全随机"]
+    },
+    "concept": {
+      "title": "空谷闻弦",
+      "archetype": "以留白、细墨轮廓和遥远回声组织起来的故事档案阁",
+      "habitatForm": "cantilever-villa",
+      "architectureStyle": "american-modern",
+      "layout": "cantilevered",
+      "palette": ["#26354a", "#b05f55", "#d8c89d"],
+      "sky": {
+        "theme": "ink-wash-silence",
+        "motifs": ["echo-line", "blank-page-cloud", "unlit-window"],
+        "celestialShape": "ink-ring",
+        "decorationDensity": 0.42,
+        "drift": 0.18,
+        "top": "#253247",
+        "mid": "#5b6878",
+        "low": "#c6bfae",
+        "aurora": "#9a776f",
+        "celestial": "#e4d7aa",
+        "stars": "#f1ead5",
+        "fog": "#aeb6b5",
+        "magic": 0.56
+      }
+    },
+    "renderStyle": {
+      "kind": "storybook-ink",
+      "seed": 205019,
+      "roughness": 0.87,
+      "metalness": 0.01,
+      "saturation": 0.84,
+      "contrast": 1.22,
+      "textureStrength": 0.54
+    },
+    "blueprints": {
+      "exterior": {
+        "density": 0.7,
+        "cameraYaw": 0.08,
+        "cameraPitch": 0.6,
+        "habitatForm": "cantilever-villa",
+        "architectureStyle": "american-modern",
+        "layout": "cantilevered",
+        "silhouette": "tall narrow archive crossed by a single long blank bridge",
+        "features": [
+          {"kind": "tower", "color": "#26354a", "emphasis": 0.92},
+          {"kind": "wind-chimes", "color": "#d8c89d", "animation": "sway", "emphasis": 0.66},
+          {"kind": "cloud", "color": "#b9bdba", "animation": "float", "emphasis": 0.42},
+          {"kind": "path", "color": "#7a6a5a", "emphasis": 0.72},
+          {"kind": "lantern", "color": "#d8c89d", "animation": "float", "emphasis": 0.56}
+        ]
+      },
+      "interior": {
+        "density": 0.68,
+        "cameraYaw": -0.36,
+        "cameraPitch": 0.49,
+        "habitatForm": "cantilever-villa",
+        "architectureStyle": "american-modern",
+        "layout": "cantilevered",
+        "silhouette": "quiet reading room with one high margin of untouched space",
+        "features": [
+          {"kind": "sky-window", "color": "#5b6878", "emphasis": 0.84},
+          {"kind": "rug", "color": "#b05f55", "emphasis": 0.62},
+          {"kind": "hearth", "color": "#b77958", "animation": "sparkle", "emphasis": 0.54},
+          {"kind": "plant", "color": "#6e7863", "animation": "sway", "emphasis": 0.44},
+          {"kind": "lantern", "color": "#d8c89d", "animation": "float", "emphasis": 0.5}
+        ]
+      },
+      "garden": {
+        "density": 0.9,
+        "cameraYaw": 0.9,
+        "cameraPitch": 0.64,
+        "habitatForm": "cantilever-villa",
+        "architectureStyle": "american-modern",
+        "layout": "cantilevered",
+        "silhouette": "sparse ink terraces divided by long breathing intervals",
+        "features": [
+          {"kind": "path", "color": "#7a6a5a", "emphasis": 0.8},
+          {"kind": "farm-shed", "color": "#26354a", "emphasis": 0.72},
+          {"kind": "plant", "color": "#6e7863", "animation": "sway", "emphasis": 0.5},
+          {"kind": "wind-chimes", "color": "#d8c89d", "animation": "sway", "emphasis": 0.6},
+          {"kind": "cloud", "color": "#b9bdba", "animation": "float", "emphasis": 0.4}
+        ]
+      }
+    }
+  },
+  {
+    "id": "preset-prism-nocturne",
+    "generatedAt": "2026-08-14T09:35:00+08:00",
+    "promptProfile": {
+      "summary": "想要一个能安放日常、任务和共同记忆的幻想空间",
+      "traits": ["收藏故事的旅人"],
+      "preferences": ["先随风走一段"],
+      "experiences": ["雨停后留下的浅水洼"],
+      "imagery": ["留一段很长的空白", "找到遗失很久的名字"],
+      "sensations": ["微凉空气穿过指缝"],
+      "stylePreferences": ["晶莹光泽"]
+    },
+    "concept": {
+      "title": "星河未央",
+      "archetype": "在星雨之后缓慢航行的透明观测站与折光花园",
+      "habitatForm": "reef-grotto",
+      "architectureStyle": "coral-fantasy",
+      "layout": "scattered",
+      "palette": ["#5f5bd6", "#47cdd0", "#e76fb0"],
+      "sky": {
+        "theme": "prismatic-star-rain",
+        "motifs": ["refracted-name", "cool-starfall", "mirror-pool"],
+        "celestialShape": "faceted-comet",
+        "decorationDensity": 0.8,
+        "drift": 0.62,
+        "top": "#111936",
+        "mid": "#302b69",
+        "low": "#735088",
+        "aurora": "#47cdd0",
+        "celestial": "#f2b7e0",
+        "stars": "#d9ffff",
+        "fog": "#8799bd",
+        "magic": 0.94
+      }
+    },
+    "renderStyle": {
+      "kind": "crystal-diorama",
+      "seed": 229631,
+      "roughness": 0.16,
+      "metalness": 0.2,
+      "saturation": 1.16,
+      "contrast": 1.08,
+      "textureStrength": 0.18
+    },
+    "blueprints": {
+      "exterior": {
+        "density": 0.94,
+        "cameraYaw": -1.02,
+        "cameraPitch": 0.67,
+        "habitatForm": "reef-grotto",
+        "architectureStyle": "coral-fantasy",
+        "layout": "scattered",
+        "silhouette": "faceted observatory spear balanced by a drifting prism tail",
+        "features": [
+          {"kind": "observatory", "color": "#5f5bd6", "emphasis": 1.0},
+          {"kind": "crystal", "color": "#47cdd0", "animation": "sparkle", "emphasis": 0.88},
+          {"kind": "tower", "color": "#342f80", "emphasis": 0.82},
+          {"kind": "cloud", "color": "#8799bd", "animation": "float", "emphasis": 0.48},
+          {"kind": "propeller", "color": "#e76fb0", "animation": "spin", "emphasis": 0.7}
+        ]
+      },
+      "interior": {
+        "density": 0.84,
+        "cameraYaw": 0.74,
+        "cameraPitch": 0.62,
+        "habitatForm": "reef-grotto",
+        "architectureStyle": "coral-fantasy",
+        "layout": "scattered",
+        "silhouette": "dark transparent cabin arranged around a hovering light prism",
+        "features": [
+          {"kind": "sky-window", "color": "#47cdd0", "emphasis": 0.94},
+          {"kind": "crystal", "color": "#e76fb0", "animation": "sparkle", "emphasis": 0.84},
+          {"kind": "lantern", "color": "#d9ffff", "animation": "float", "emphasis": 0.7},
+          {"kind": "rug", "color": "#5f5bd6", "emphasis": 0.6},
+          {"kind": "plant", "color": "#4e9f91", "animation": "sway", "emphasis": 0.46}
+        ]
+      },
+      "garden": {
+        "density": 0.98,
+        "cameraYaw": 0.42,
+        "cameraPitch": 0.7,
+        "habitatForm": "reef-grotto",
+        "architectureStyle": "coral-fantasy",
+        "layout": "scattered",
+        "silhouette": "floating crystal shards framing a clear central planting plane",
+        "features": [
+          {"kind": "crystal", "color": "#47cdd0", "animation": "sparkle", "emphasis": 0.96},
+          {"kind": "watering-orb", "color": "#d9ffff", "animation": "float", "emphasis": 0.78},
+          {"kind": "path", "color": "#5f5bd6", "emphasis": 0.74},
+          {"kind": "observatory", "color": "#342f80", "emphasis": 0.68},
+          {"kind": "cloud", "color": "#8799bd", "animation": "float", "emphasis": 0.5}
+        ]
+      }
+    }
+  }
+]

@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 #[cfg(mobile)]
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +17,9 @@ use tauri::{Emitter, Manager};
 const WORLD_FILE: &str = "topia-studio-v2.json";
 const LEGACY_WORLD_FILE: &str = "topia-world-v1.json";
 const MOCK_WORLD: &str = include_str!("mock_world.json");
+const PRESET_CATALOG: &str = include_str!("preset_catalog.json");
+const PRESET_WORLD_PREFIX: &str = "preset-";
+const PRESET_CATALOG_REVISION: u64 = 5;
 const TOPIA_CLOUD_TIMEOUT_MS: u32 = 180_000;
 const TOPIA_STAGE_REPAIR_ATTEMPTS: usize = 1;
 
@@ -493,6 +497,25 @@ struct TopiaGenerationConcept {
     archetype: String,
     palette: [u32; 3],
     sky: TopiaSkyConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TopiaPresetBlueprints {
+    exterior: Value,
+    interior: Value,
+    garden: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TopiaPresetEntry {
+    id: String,
+    generated_at: String,
+    prompt_profile: TopiaUserProfileInput,
+    concept: Value,
+    render_style: TopiaRenderStyleConfig,
+    blueprints: TopiaPresetBlueprints,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1273,6 +1296,9 @@ fn fallback_scene(
             }
         }
     }
+    if location == TopiaLocation::Exterior {
+        harness::diversify_fallback_exterior(&mut scene, concept);
+    }
     validate_scene(&scene, location)?;
     Ok(scene)
 }
@@ -1312,6 +1338,124 @@ fn mock_world() -> Result<TopiaWorldConfig, String> {
     Ok(world)
 }
 
+fn preset_entries() -> Result<Vec<TopiaPresetEntry>, String> {
+    serde_json::from_str(PRESET_CATALOG).map_err(|error| error.to_string())
+}
+
+fn normalize_preset_world(world: &mut TopiaWorldConfig) -> Result<(), String> {
+    for location in [
+        TopiaLocation::Exterior,
+        TopiaLocation::Interior,
+        TopiaLocation::Garden,
+    ] {
+        let scene = scene_mut(world, location);
+        scene.objects.retain(|object| {
+            object.layer == TopiaObjectLayer::Structure || object.id.starts_with("blueprint-")
+        });
+        for object in &mut scene.objects {
+            object.layer = TopiaObjectLayer::Structure;
+            object.task_id = None;
+            object.memory_ids.clear();
+            object.params.insert("structural".into(), Value::Bool(true));
+        }
+        scene.landmarks.clear();
+        validate_scene(scene, location)?;
+    }
+    validate_world(world)
+}
+
+fn compile_preset(entry: TopiaPresetEntry) -> Result<TopiaWorldConfig, String> {
+    let profile = &entry.prompt_profile;
+    if profile.traits.len() != 1
+        || profile.preferences.len() != 1
+        || profile.experiences.len() != 1
+        || profile.imagery.len() != 2
+        || profile.sensations.len() != 1
+        || profile.style_preferences.len() != 1
+    {
+        return Err(format!(
+            "{} must contain the same randomly selected profile fields as onboarding",
+            entry.id
+        ));
+    }
+    if !entry.id.starts_with(PRESET_WORLD_PREFIX) {
+        return Err(format!("{} is not a bundled preset id", entry.id));
+    }
+
+    let input = TopiaGenerationInput {
+        profile: entry.prompt_profile,
+        context: TopiaRuntimeContext::default(),
+    };
+    // Keep catalog authoring coupled to the exact production concept and scene prompts.
+    prompt::build_concept(&input, &entry.render_style)?;
+    let concept_source =
+        serde_json::to_string(&entry.concept).map_err(|error| error.to_string())?;
+    let concept = parse_concept(&concept_source)?;
+    let blueprint = |value: &Value, location| {
+        let location_name = match location {
+            TopiaLocation::Exterior => "exterior",
+            TopiaLocation::Interior => "interior",
+            TopiaLocation::Garden => "garden",
+        };
+        prompt::build_scene_blueprint(&input, &concept_source, &entry.render_style, location_name)?;
+        harness::compile_blueprint(
+            &serde_json::to_string(value).map_err(|error| error.to_string())?,
+            location,
+            &concept,
+        )
+    };
+    let scenes = TopiaScenes {
+        exterior: blueprint(&entry.blueprints.exterior, TopiaLocation::Exterior)?,
+        interior: blueprint(&entry.blueprints.interior, TopiaLocation::Interior)?,
+        garden: blueprint(&entry.blueprints.garden, TopiaLocation::Garden)?,
+    };
+    let mut world = TopiaWorldConfig {
+        schema_version: 2,
+        id: entry.id,
+        owner_id: "preset-catalog".into(),
+        revision: PRESET_CATALOG_REVISION,
+        generated_at: entry.generated_at,
+        source: "mock".into(),
+        profile: TopiaWorldProfile {
+            home_name: concept.title,
+            archetype: concept.archetype,
+            traits: input.profile.traits,
+            experiences: input.profile.experiences,
+            accent_colors: concept.palette,
+        },
+        sky: concept.sky,
+        render_style: entry.render_style,
+        scenes,
+        generation: Some(TopiaGenerationMetadata {
+            provider: "OpenAI".into(),
+            model: "Codex (GPT-5, offline preset authoring)".into(),
+            prompt_version: prompt::PROMPT_VERSION.into(),
+        }),
+    };
+    normalize_preset_world(&mut world)?;
+    Ok(world)
+}
+
+fn preset_worlds() -> Result<Vec<TopiaWorldConfig>, String> {
+    static COMPILED_PRESETS: OnceLock<Result<Vec<TopiaWorldConfig>, String>> = OnceLock::new();
+    COMPILED_PRESETS
+        .get_or_init(|| {
+            let worlds = preset_entries()?
+                .into_iter()
+                .map(compile_preset)
+                .collect::<Result<Vec<_>, _>>()?;
+            if worlds.len() < 2 {
+                return Err("Topia preset catalog must contain multiple worlds".into());
+            }
+            let ids: HashSet<_> = worlds.iter().map(|world| world.id.as_str()).collect();
+            if ids.len() != worlds.len() {
+                return Err("Topia preset catalog contains duplicate ids".into());
+            }
+            Ok(worlds)
+        })
+        .clone()
+}
+
 fn migrate_world(world: &mut TopiaWorldConfig) {
     world.schema_version = 2;
     for location in [
@@ -1345,6 +1489,8 @@ fn migrate_world(world: &mut TopiaWorldConfig) {
                 }
             } else if object.layer == TopiaObjectLayer::Souvenir && object.memory_ids.is_empty() {
                 object.layer = TopiaObjectLayer::Decoration;
+            } else if object.params.get("structural").and_then(Value::as_bool) == Some(true) {
+                object.layer = TopiaObjectLayer::Structure;
             } else if matches!(
                 object.prefab,
                 TopiaPrefab::Plant
@@ -1358,28 +1504,6 @@ fn migrate_world(world: &mut TopiaWorldConfig) {
                 object.layer = TopiaObjectLayer::Decoration;
             }
         }
-    }
-}
-
-fn remove_souvenirs(world: &mut TopiaWorldConfig) {
-    for location in [
-        TopiaLocation::Exterior,
-        TopiaLocation::Interior,
-        TopiaLocation::Garden,
-    ] {
-        let scene = scene_mut(world, location);
-        let anchors: HashSet<String> = scene
-            .objects
-            .iter()
-            .filter(|object| object.layer == TopiaObjectLayer::Souvenir)
-            .filter_map(|object| object.anchor_id.clone())
-            .collect();
-        scene
-            .objects
-            .retain(|object| object.layer != TopiaObjectLayer::Souvenir);
-        scene
-            .landmarks
-            .retain(|landmark| !anchors.contains(&landmark.anchor_id));
     }
 }
 
@@ -1611,14 +1735,16 @@ fn studio_payload(state: &TopiaStudioState) -> TopiaStudioPayload {
 }
 
 fn initial_studio() -> Result<TopiaStudioState, String> {
-    let mut world = mock_world()?;
-    remove_souvenirs(&mut world);
-    let assets = split_assets(&mut world);
+    let worlds = preset_worlds()?;
+    let active_world_id = worlds
+        .first()
+        .map(|world| world.id.clone())
+        .ok_or_else(|| "Topia preset catalog is empty".to_string())?;
     Ok(TopiaStudioState {
         schema_version: 2,
-        active_world_id: world.id.clone(),
-        worlds: vec![world],
-        assets,
+        active_world_id,
+        worlds,
+        assets: TopiaAssetLayer::default(),
         last_profile: None,
         last_maintained_at: None,
         last_context_digest: None,
@@ -1628,32 +1754,66 @@ fn initial_studio() -> Result<TopiaStudioState, String> {
 }
 
 fn ensure_default_world(state: &mut TopiaStudioState) -> Result<(), String> {
-    if state
+    let active_world_id = state.active_world_id.clone();
+    let active_was_mock = state
         .worlds
+        .iter()
+        .find(|world| world.id == active_world_id)
+        .is_some_and(|world| world.source == "mock");
+    let presets = preset_worlds()?;
+    let fallback_id = presets
         .first()
-        .is_some_and(|world| world.source == "mock")
-    {
-        return Ok(());
+        .map(|world| world.id.clone())
+        .ok_or_else(|| "Topia preset catalog is empty".to_string())?;
+    let active_is_current_preset = presets.iter().any(|world| world.id == active_world_id);
+
+    for preset in &presets {
+        if state
+            .worlds
+            .iter()
+            .find(|world| world.id == preset.id && world.source == "mock")
+            .is_some_and(|world| world.revision != preset.revision)
+        {
+            state.thumbnails.remove(&preset.id);
+        }
     }
-    let mut default_world = mock_world()?;
-    remove_souvenirs(&mut default_world);
-    let default_assets = split_assets(&mut default_world);
-    extend_portable_assets(&mut state.assets, &default_assets);
-    if !state
-        .worlds
-        .iter()
-        .any(|world| world.id == default_world.id)
+
+    // Bundled presets are reconstructed from one removable catalog. User worlds and
+    // the portable asset layer are never rewritten as mock data.
+    state.worlds.retain(|world| world.source != "mock");
+    state.worlds.splice(0..0, presets);
+    if (active_was_mock && !active_is_current_preset)
+        || !state.worlds.iter().any(|world| world.id == active_world_id)
     {
-        state.worlds.insert(0, default_world);
-    } else if let Some(index) = state
-        .worlds
-        .iter()
-        .position(|world| world.id == default_world.id)
-    {
-        let default_world = state.worlds.remove(index);
-        state.worlds.insert(0, default_world);
+        state.active_world_id = fallback_id;
     }
     Ok(())
+}
+
+fn preset_world_id_for_entropy(state: &TopiaStudioState, entropy: u64) -> Option<String> {
+    let ids = state
+        .worlds
+        .iter()
+        .filter(|world| world.source == "mock" && world.id.starts_with(PRESET_WORLD_PREFIX))
+        .map(|world| world.id.as_str())
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        return None;
+    }
+    ids.get((entropy as usize) % ids.len())
+        .map(|id| (*id).into())
+}
+
+fn random_preset_world_id(state: &TopiaStudioState) -> Result<String, String> {
+    let mut hasher = DefaultHasher::new();
+    state.active_world_id.hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos()
+        .hash(&mut hasher);
+    preset_world_id_for_entropy(state, hasher.finish())
+        .ok_or_else(|| "Topia preset catalog is empty".to_string())
 }
 
 fn load_studio(app: &tauri::AppHandle) -> Result<TopiaStudioState, String> {
@@ -1661,16 +1821,11 @@ fn load_studio(app: &tauri::AppHandle) -> Result<TopiaStudioState, String> {
     if path.exists() {
         let value = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
         if let Ok(mut state) = serde_json::from_str::<TopiaStudioState>(&value) {
-            let legacy_incomplete_onboarding = state.onboarding_completed == Some(false);
             for world in &mut state.worlds {
                 migrate_world(world);
             }
             migrate_assets(&mut state.assets);
             ensure_default_world(&mut state)?;
-            if legacy_incomplete_onboarding {
-                state.onboarding_completed = Some(true);
-                persist_studio(app, &state)?;
-            }
             if !state.worlds.is_empty()
                 && state
                     .worlds
@@ -2261,6 +2416,9 @@ pub fn complete_topia_onboarding(
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
     let mut state = load_studio(&app)?;
+    if state.onboarding_completed == Some(false) {
+        state.active_world_id = random_preset_world_id(&state)?;
+    }
     state.onboarding_completed = Some(true);
     persist_studio(&app, &state)?;
     payload(&state, &context)
@@ -2659,6 +2817,8 @@ mod tests {
             "garden",
         )
         .expect("garden prompt should serialize");
+        let blueprint = prompt::build_scene_blueprint(&input, &concept, &style, "exterior")
+            .expect("blueprint prompt should serialize");
         assert!(exterior.contains("floating home"));
         assert!(interior.contains("room-shell"));
         assert!(garden.contains("crop-plots"));
@@ -2666,7 +2826,13 @@ mod tests {
         assert!(exterior.contains("Scene JSON only"));
         assert!(exterior.contains("NON-LITERAL IMAGERY RULE"));
         assert!(concept.contains("paper boat must not cause a paper boat object"));
+        assert!(concept.contains("habitatForm"));
+        assert!(concept.contains("cloud-house"));
+        assert!(blueprint.contains("architectureStyle"));
+        assert!(blueprint.contains("do not fall back to a cottage"));
         assert!(prompt::WORLD_SYSTEM_PROMPT.contains("sad adds rain"));
+        assert!(prompt::WORLD_SYSTEM_PROMPT.contains("giant inhabited cloud"));
+        assert!(prompt::BLUEPRINT_SYSTEM_PROMPT.contains("color-only variation is a failure"));
         assert!(prompt::SCENE_SYSTEM_PROMPT.contains("one scene"));
     }
 
@@ -2984,6 +3150,11 @@ mod tests {
     fn fresh_studio_requires_onboarding_and_keeps_default_first() {
         let mut state = initial_studio().expect("initial studio should load");
         assert_eq!(state.onboarding_completed, Some(false));
+        assert_eq!(state.worlds.len(), 6);
+        assert!(state.assets.objects.exterior.is_empty());
+        assert!(state.assets.objects.interior.is_empty());
+        assert!(state.assets.objects.garden.is_empty());
+        assert!(state.assets.memories.is_empty());
         assert_eq!(
             state.worlds.first().map(|world| world.source.as_str()),
             Some("mock")
@@ -2993,7 +3164,7 @@ mod tests {
         custom.source = "cloud".into();
         state.worlds = vec![custom];
         ensure_default_world(&mut state).expect("default world should be restored");
-        assert_eq!(state.worlds.len(), 2);
+        assert_eq!(state.worlds.len(), 7);
         assert_eq!(state.worlds[0].source, "mock");
         assert!(state
             .assets
@@ -3003,6 +3174,212 @@ mod tests {
             .chain(&state.assets.objects.interior)
             .chain(&state.assets.objects.garden)
             .all(|object| object.layer != TopiaObjectLayer::Souvenir));
+    }
+
+    #[test]
+    fn preset_catalog_uses_onboarding_inputs_and_keeps_assets_pluggable() {
+        let entries = preset_entries().expect("preset catalog should parse");
+        assert_eq!(entries.len(), 6);
+        let onboarding_source = include_str!("../../../src/components/topia/TopiaStudioDialog.tsx");
+        assert!(entries.iter().all(|entry| {
+            entry.prompt_profile.traits.len() == 1
+                && entry.prompt_profile.preferences.len() == 1
+                && entry.prompt_profile.experiences.len() == 1
+                && entry.prompt_profile.imagery.len() == 2
+                && entry.prompt_profile.sensations.len() == 1
+                && entry.prompt_profile.style_preferences.len() == 1
+        }));
+        for entry in &entries {
+            assert_eq!(
+                entry.prompt_profile.summary,
+                "想要一个能安放日常、任务和共同记忆的幻想空间"
+            );
+            for choice in entry
+                .prompt_profile
+                .traits
+                .iter()
+                .chain(&entry.prompt_profile.preferences)
+                .chain(&entry.prompt_profile.experiences)
+                .chain(&entry.prompt_profile.imagery)
+                .chain(&entry.prompt_profile.sensations)
+                .chain(&entry.prompt_profile.style_preferences)
+            {
+                assert!(
+                    onboarding_source.contains(&format!("\"{choice}\"")),
+                    "preset choice must exactly match the phone onboarding option: {choice}"
+                );
+            }
+        }
+
+        let worlds = preset_worlds().expect("preset worlds should compile");
+        let timber_courtyard = worlds
+            .iter()
+            .find(|world| world.id == "preset-ember-kiln")
+            .expect("嘉木成蹊 preset should exist");
+        assert_eq!(timber_courtyard.profile.home_name, "嘉木成蹊");
+        assert!(timber_courtyard.profile.archetype.contains("嘉木"));
+        assert!(timber_courtyard
+            .scenes
+            .exterior
+            .objects
+            .iter()
+            .any(|object| {
+                object.id == "courtyard-tree"
+                    && object.params.get("tree").and_then(Value::as_f64) == Some(1.0)
+            }));
+        assert!(timber_courtyard
+            .scenes
+            .exterior
+            .objects
+            .iter()
+            .find(|object| object.id == "home-island")
+            .is_some_and(|object| object.colors.first() == Some(&0x7c9f73)));
+        let styles: HashSet<_> = worlds
+            .iter()
+            .map(|world| format!("{:?}", world.render_style.kind))
+            .collect();
+        assert_eq!(styles.len(), 6);
+        let geometries = worlds
+            .iter()
+            .map(|world| {
+                world
+                    .scenes
+                    .exterior
+                    .objects
+                    .iter()
+                    .filter(|object| object.layer == TopiaObjectLayer::Structure)
+                    .map(|object| format!("{:?}:{:?}", object.prefab, object.position))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(geometries.len(), worlds.len());
+        let interior_shapes = worlds
+            .iter()
+            .map(|world| {
+                world
+                    .scenes
+                    .interior
+                    .objects
+                    .iter()
+                    .find(|object| object.prefab == TopiaPrefab::RoomShell)
+                    .and_then(|object| object.params.get("shape"))
+                    .and_then(Value::as_str)
+                    .expect("preset interior should declare a room shape")
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(interior_shapes.len(), worlds.len());
+        assert_eq!(
+            interior_shapes
+                .iter()
+                .filter(|shape| shape.contains("loft"))
+                .count(),
+            2
+        );
+        assert!(interior_shapes.contains("courtyard-ring"));
+        assert!(!interior_shapes.contains("rectangular"));
+        assert!(worlds.iter().any(|world| world
+            .scenes
+            .exterior
+            .objects
+            .iter()
+            .any(|object| object.id == "cloud-house-core")));
+        assert!(worlds.iter().any(|world| world
+            .scenes
+            .exterior
+            .objects
+            .iter()
+            .any(|object| object.id == "villa-upper-volume")));
+        assert!(worlds.iter().any(|world| world
+            .scenes
+            .exterior
+            .objects
+            .iter()
+            .any(|object| object.id == "temple-column-a")));
+        for world in &worlds {
+            validate_world(&world).expect("preset should satisfy the runtime contract");
+            for scene in [
+                &world.scenes.exterior,
+                &world.scenes.interior,
+                &world.scenes.garden,
+            ] {
+                assert!(scene.landmarks.is_empty());
+                assert!(scene.objects.iter().all(|object| {
+                    object.layer == TopiaObjectLayer::Structure
+                        && object.task_id.is_none()
+                        && object.memory_ids.is_empty()
+                        && object.prefab != TopiaPrefab::CropPlot
+                }));
+            }
+        }
+
+        let mut migrated_cloud = worlds
+            .iter()
+            .find(|world| world.id == "preset-cloud-nest")
+            .expect("cloud preset should exist")
+            .clone();
+        migrate_world(&mut migrated_cloud);
+        assert!(migrated_cloud.scenes.exterior.objects.iter().any(|object| {
+            object.id == "cloud-house-core" && object.layer == TopiaObjectLayer::Structure
+        }));
+
+        let mut fixture = mock_world().expect("portable fixture should parse");
+        let portable_assets = split_assets(&mut fixture);
+        let mut composed = worlds[0].clone();
+        merge_assets(&mut composed, &portable_assets);
+        validate_world(&composed).expect("portable assets should plug into a preset");
+        assert!(composed
+            .scenes
+            .garden
+            .objects
+            .iter()
+            .any(|object| object.layer == TopiaObjectLayer::Crop));
+        assert!([
+            &composed.scenes.exterior,
+            &composed.scenes.interior,
+            &composed.scenes.garden,
+        ]
+        .into_iter()
+        .flat_map(|scene| &scene.objects)
+        .any(|object| object.layer == TopiaObjectLayer::Souvenir));
+    }
+
+    #[test]
+    #[ignore = "developer helper: writes a browser fixture when explicitly requested"]
+    fn export_preset_worlds_for_browser_review() {
+        let output = std::env::var("REALTOPIA_PRESET_EXPORT")
+            .expect("set REALTOPIA_PRESET_EXPORT to an explicit output path");
+        let worlds = preset_worlds().expect("preset worlds should compile");
+        std::fs::write(
+            output,
+            serde_json::to_vec_pretty(&worlds).expect("preset worlds should serialize"),
+        )
+        .expect("preset fixture should be written");
+    }
+
+    #[test]
+    fn default_onboarding_entropy_selects_across_the_preset_catalog() {
+        let mut state = initial_studio().expect("initial studio should load");
+        let selected = (0..state.worlds.len() as u64)
+            .map(|entropy| {
+                preset_world_id_for_entropy(&state, entropy)
+                    .expect("entropy should select a preset")
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(selected.len(), state.worlds.len());
+
+        let stale_id = state.worlds[0].id.clone();
+        state.worlds[0].revision = PRESET_CATALOG_REVISION - 1;
+        state
+            .thumbnails
+            .insert(stale_id.clone(), "data:image/jpeg;base64,ZmFrZQ==".into());
+        ensure_default_world(&mut state).expect("stale preset should be refreshed");
+        assert!(!state.thumbnails.contains_key(&stale_id));
+
+        state.active_world_id = state.worlds[4].id.clone();
+        let selected_id = state.active_world_id.clone();
+        ensure_default_world(&mut state).expect("catalog reconciliation should succeed");
+        assert_eq!(state.active_world_id, selected_id);
     }
 
     #[test]
