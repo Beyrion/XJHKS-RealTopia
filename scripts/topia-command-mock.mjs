@@ -10,7 +10,15 @@ export async function installTopiaCommandMock(page, projectRoot) {
   );
   await page.addInitScript((bundledWorld) => {
     const storageKey = "realtopia.topiaWorld.v1";
+    const studioKey = "realtopia.topiaStudio.v2";
     const copy = (value) => JSON.parse(JSON.stringify(value));
+    const hasUserData = () =>
+      Object.keys(localStorage).some(
+        (key) =>
+          key.startsWith("realtopia.") &&
+          key !== storageKey &&
+          key !== studioKey,
+      );
     const resolvePayload = (inputWorld, context = {}) => {
       const world = copy(inputWorld);
       const quests = new Map(
@@ -58,7 +66,29 @@ export async function installTopiaCommandMock(page, projectRoot) {
             landmark.memoryIds.push(memory.id);
         }
       }
-      return { world, crops };
+      const existingStudio = localStorage.getItem(studioKey);
+      const studio = existingStudio
+        ? JSON.parse(existingStudio)
+        : {
+            activeWorldId: world.id,
+            worlds: [
+              {
+                id: world.id,
+                homeName: world.profile.homeName,
+                archetype: world.profile.archetype,
+                generatedAt: world.generatedAt,
+                active: true,
+                source: world.source,
+              },
+            ],
+            assets: {
+              objects: { exterior: [], interior: [], garden: [] },
+              landmarks: { exterior: [], interior: [], garden: [] },
+              memories: [],
+            },
+            needsOnboarding: !hasUserData(),
+          };
+      return { world, crops, studio };
     };
     const invoke = (command, args = {}) => {
       if (command === "load_topia_world") {
@@ -78,10 +108,49 @@ export async function installTopiaCommandMock(page, projectRoot) {
         localStorage.removeItem(storageKey);
         return Promise.resolve(resolvePayload(bundledWorld, args.context));
       }
+      if (command === "delete_user_data") {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(studioKey);
+        return Promise.resolve();
+      }
       if (command === "generate_topia_world")
         return Promise.reject(
           new Error("cloud generation is unavailable in browser UI tests"),
         );
+      if (command === "iterate_topia_world")
+        return Promise.reject(
+          new Error("cloud iteration is unavailable in browser UI tests"),
+        );
+      if (command === "maintain_topia_world") return Promise.resolve(null);
+      if (command === "complete_topia_onboarding") {
+        const saved = localStorage.getItem(storageKey);
+        const payload = resolvePayload(
+          saved ? JSON.parse(saved) : bundledWorld,
+          args.context,
+        );
+        payload.studio.needsOnboarding = false;
+        localStorage.setItem(studioKey, JSON.stringify(payload.studio));
+        return Promise.resolve(payload);
+      }
+      if (command === "save_topia_thumbnail") {
+        const existingStudio = localStorage.getItem(studioKey);
+        const studio = existingStudio ? JSON.parse(existingStudio) : null;
+        if (studio) {
+          studio.worlds = studio.worlds.map((world) =>
+            world.id === args.worldId
+              ? { ...world, thumbnail: args.thumbnail }
+              : world,
+          );
+          localStorage.setItem(studioKey, JSON.stringify(studio));
+        }
+        return Promise.resolve();
+      }
+      if (command === "switch_topia_world") {
+        const saved = localStorage.getItem(storageKey);
+        return Promise.resolve(
+          resolvePayload(saved ? JSON.parse(saved) : bundledWorld, args.context),
+        );
+      }
       return Promise.reject(new Error(`unmocked command: ${command}`));
     };
     window.__TAURI_INTERNALS__ = {
