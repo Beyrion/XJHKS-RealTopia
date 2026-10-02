@@ -111,6 +111,11 @@ small { font-size: 13px!important; line-height: 1.4; }
 .quick-actions .ui-icon { width: 22px; height: 22px; }
 .quick-actions button:first-child { background: rgba(89,104,255,.09); color: var(--blue-dark); }
 .quick-actions button:last-child { background: rgba(255,114,142,.09); color: #b33f5b; }
+.quick-actions button.is-listening { background: var(--ink); color: #fff; }
+.quick-actions button:disabled { border-color: #c9cbd5; background: #f1f1f4; box-shadow: none; color: #a7a9b2; cursor: not-allowed; opacity: .72; }
+.quick-actions button.is-processing:disabled { opacity: 1; }
+.quick-actions button.is-processing .ui-icon { animation: quick-action-spin .8s linear infinite; }
+@keyframes quick-action-spin { to { transform: rotate(360deg); } }
 .today > p { margin: 0; font-size: 15px; color: var(--muted); line-height: 1.65; }
 .life { margin-top: 22px; padding: 19px 0; border-block: 1.5px solid var(--line); }
 .life > span { display: flex; justify-content: space-between; align-items: end; color: var(--muted); font-size: 15px; font-weight: 800; }

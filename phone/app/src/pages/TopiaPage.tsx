@@ -5,12 +5,17 @@ import { TopiaScene } from "../components/topia/TopiaScene";
 import { Icon } from "../components/ui/Icon";
 import { moodEmoji, moodProfiles } from "../data/appData";
 import { useMoodCheckIn } from "../hooks/useMoodCheckIn";
+import {
+  type QuickVoiceKind,
+  useQuickVoiceRecording,
+} from "../hooks/useQuickVoiceRecording";
 import { useAppStore } from "../store/AppStore";
 
 export default function TopiaPage() {
   const navigate = useNavigate();
-  const { quests, memories, currentMood, notify } = useAppStore();
+  const { quests, memories, currentMood } = useAppStore();
   const moodCheckIn = useMoodCheckIn();
+  const quickVoice = useQuickVoiceRecording();
   const vitality = Math.min(
     99,
     48 +
@@ -24,6 +29,17 @@ export default function TopiaPage() {
   const stage = vitality >= 80 ? 3 : vitality >= 60 ? 2 : 1;
   const focus = quests.find((item) => item.progress < 100) ?? quests[0];
   const profile = moodProfiles[currentMood.mood];
+  const quickAction = (kind: QuickVoiceKind) => {
+    if (quickVoice.kind === kind && quickVoice.phase === "listening") {
+      void quickVoice.stop();
+      return;
+    }
+    void quickVoice.start(kind);
+  };
+  const quickActionIcon = (kind: QuickVoiceKind) => {
+    if (quickVoice.kind !== kind) return kind === "task" ? "ListTodo" : "Heart";
+    return quickVoice.phase === "listening" ? "Square" : "LoaderCircle";
+  };
 
   return (
     <div className="topia">
@@ -61,18 +77,46 @@ export default function TopiaPage() {
         <div className="quick-actions" aria-label="快速记录">
           <button
             id="record-task"
-            aria-label="记录任务"
-            onClick={() => notify("任务会从眼镜对话中自动提炼")}
+            className={
+              quickVoice.kind === "task" ? `is-${quickVoice.phase}` : undefined
+            }
+            aria-label={
+              quickVoice.kind === "task" && quickVoice.phase === "listening"
+                ? "停止记录任务"
+                : "记录任务"
+            }
+            aria-busy={
+              quickVoice.kind === "task" && quickVoice.phase === "processing"
+            }
+            disabled={
+              quickVoice.phase === "processing" ||
+              (quickVoice.phase === "listening" && quickVoice.kind !== "task")
+            }
+            onClick={() => quickAction("task")}
           >
-            <Icon name="ListTodo" />
+            <Icon name={quickActionIcon("task")} />
             记录任务
           </button>
           <button
             id="record-mood"
-            aria-label="记录心情"
-            onClick={moodCheckIn.show}
+            className={
+              quickVoice.kind === "mood" ? `is-${quickVoice.phase}` : undefined
+            }
+            aria-label={
+              quickVoice.kind === "mood" && quickVoice.phase === "listening"
+                ? "停止记录心情"
+                : "记录心情"
+            }
+            aria-busy={
+              quickVoice.kind === "mood" && quickVoice.phase === "processing"
+            }
+            disabled={
+              quickVoice.phase === "processing" ||
+              (quickVoice.phase === "listening" && quickVoice.kind !== "mood")
+            }
+            onClick={() => quickAction("mood")}
           >
-            <Icon name="Heart" />
+            <Icon name={quickActionIcon("mood")} />
             记录心情
           </button>
         </div>

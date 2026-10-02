@@ -81,9 +81,30 @@ try {
   await page.locator(".world.webgl-ready").waitFor({ timeout: 10_000 });
   await capture("topia");
 
+  await page.evaluate(() => {
+    const previous = window.__TAURI_INTERNALS__;
+    window.__TAURI_INTERNALS__ = {
+      ...previous,
+      invoke: (command, args) => {
+        if (command === "listen_mood") return new Promise(() => undefined);
+        if (
+          command === "finish_mood_listen" ||
+          command === "cancel_mood_listen"
+        )
+          return Promise.resolve();
+        return (
+          previous?.invoke?.(command, args) ??
+          Promise.reject(new Error(`unmocked command: ${command}`))
+        );
+      },
+    };
+  });
   await page.locator("#record-mood").click();
-  await page.locator('.mood-dialog[role="dialog"]').waitFor();
-  await capture("topia-mood-dialog");
+  await page.locator("#record-mood.is-listening").waitFor();
+  await capture("topia-mood-listening");
+  await page.locator("#record-mood").click();
+  await page.locator("#record-mood.is-processing").waitFor();
+  await capture("topia-mood-processing");
 
   for (const screen of [
     "quests",
