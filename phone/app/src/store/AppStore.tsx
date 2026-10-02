@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type {
+  ExtractedInteractionEvent,
   GlassSettings,
   GameEvent,
   Memory,
@@ -26,6 +27,7 @@ import { processRecordingPipeline } from "../services/recordingPipeline";
 import { storage } from "../services/storage";
 import {
   completionReward,
+  conversationAffinityReward,
   inferQuestCategory,
   recommendedQuest,
 } from "../utils/gameRules";
@@ -78,6 +80,10 @@ interface AppStoreValue {
   updateSceneObservationEnabled: (enabled: boolean) => void;
   runSceneObservation: (manual?: boolean) => Promise<void>;
   retryLastRecording: () => void;
+  applyConversationInteractions: (
+    interactions: ExtractedInteractionEvent[],
+    sourceKey: string,
+  ) => void;
 }
 
 const emptySession: SessionState = {
@@ -232,6 +238,71 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const settleConversationInteractions = useCallback(
+    (
+      basePeople: Person[],
+      interactions: ExtractedInteractionEvent[],
+      sourceKey: string,
+    ) =>
+      basePeople.map((person) => {
+        const previous = peopleRef.current.find(
+          (item) => item.id === person.id,
+        );
+        if (!previous) return person;
+        const relevant = interactions.filter(
+          (item) => item.personId === person.id,
+        );
+        if (!relevant.length) return { ...person, affinity: previous.affinity };
+        const dedupeKey = `${sourceKey}-${person.id}`;
+        const reward = conversationAffinityReward(
+          previous,
+          gameEventsRef.current,
+          relevant,
+          dedupeKey,
+        );
+        const evidence = relevant.find((item) => item.evidence)?.evidence;
+        if (
+          !gameEventsRef.current.some((event) => event.dedupeKey === dedupeKey)
+        ) {
+          appendGameEvent({
+            type: "conversation_recorded",
+            personId: person.id,
+            interactionType: relevant[0].type,
+            evidence,
+            dedupeKey,
+            source: "asr",
+            summary: `记录对话 · ${person.name} · ${reward.reason}`,
+          });
+        }
+        if (reward.delta > 0) {
+          appendGameEvent({
+            type: "affinity_changed",
+            personId: person.id,
+            affinityDelta: reward.delta,
+            interactionType: relevant[0].type,
+            evidence,
+            dedupeKey: `${dedupeKey}-affinity`,
+            source: "asr",
+            summary: `${reward.reason} · ${person.name} 好感度 +${reward.delta}`,
+          });
+        }
+        return {
+          ...person,
+          affinity: Math.min(100, previous.affinity + reward.delta),
+        };
+      }),
+    [appendGameEvent],
+  );
+
+  const applyConversationInteractions = useCallback(
+    (interactions: ExtractedInteractionEvent[], sourceKey: string) => {
+      updatePeople((items) =>
+        settleConversationInteractions(items, interactions, sourceKey),
+      );
+    },
+    [settleConversationInteractions, updatePeople],
+  );
+
   const focusQuest = useCallback(
     (questId: string) => {
       const quest = questsRef.current.find(
@@ -324,12 +395,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         (event) => event.type === "task_completed" && event.questId === questId,
       );
       if (alreadyRewarded) return;
-      const reward = completionReward(quest, gameEventsRef.current);
+      const currentAffinity = peopleRef.current.find(
+        (person) => person.id === (quest.assignerPersonId ?? quest.personId),
+      )?.affinity;
+      const reward = completionReward(
+        quest,
+        gameEventsRef.current,
+        currentAffinity,
+      );
       appendGameEvent({
         type: "task_completed",
         questId,
         personId: reward.personId,
         vitalityDelta: reward.vitalityDelta,
+        dedupeKey: `task-completed-${questId}`,
         source: "user",
         summary: `完成任务 · ${quest.title}`,
       });
@@ -352,6 +431,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           questId,
           personId: reward.personId,
           affinityDelta: reward.affinityDelta,
+          dedupeKey: `task-completed-${questId}-affinity`,
           source: "system",
           summary: `履行承诺 · 好感度 +${reward.affinityDelta}`,
         });
@@ -371,6 +451,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             kind: "task",
             personIds: reward.personId ? [reward.personId] : [],
             taskIds: [questId],
+            personMemoryKind: reward.personId ? "task_completed" : undefined,
+            evidence: `用户将任务进度更新为 100%：${quest.title}`,
+            confidence: 1,
+            status: "active",
+            dedupeKey: `task-completed-${questId}-memory`,
           },
           ...items,
         ]);
@@ -534,42 +619,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const previousQuestIds = new Set(
           questsRef.current.map((item) => item.id),
         );
-        const previousPeople = new Map(
-          peopleRef.current.map((person) => [person.id, person]),
-        );
         const result = await processRecordingPipeline(recording, {
           quests: questsRef.current,
           people: peopleRef.current,
           memories: memoriesRef.current,
         });
         updateQuests(result.quests);
-        const today = new Date().toLocaleDateString("zh-CN");
-        const rewardedPeople = result.people.map((person) => {
-          const previous = previousPeople.get(person.id);
-          if (!previous || person.affinity <= previous.affinity) return person;
-          const gainedToday = gameEventsRef.current
-            .filter(
-              (event) =>
-                event.personId === person.id &&
-                (event.affinityDelta ?? 0) > 0 &&
-                new Date(event.createdAt).toLocaleDateString("zh-CN") === today,
-            )
-            .reduce((sum, event) => sum + (event.affinityDelta ?? 0), 0);
-          const delta = Math.max(
-            0,
-            Math.min(8 - gainedToday, person.affinity - previous.affinity),
-          );
-          if (delta > 0) {
-            appendGameEvent({
-              type: "affinity_changed",
-              personId: person.id,
-              affinityDelta: delta,
-              source: "asr",
-              summary: `共同对话 · ${person.name} 好感度 +${delta}`,
-            });
-          }
-          return { ...person, affinity: previous.affinity + delta };
-        });
+        const rewardedPeople = settleConversationInteractions(
+          result.people,
+          result.interactions,
+          `conversation-${recording.recording_id}`,
+        );
         updatePeople(rewardedPeople);
         updateMemories(result.memories);
         result.quests
@@ -601,6 +661,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       appendLog,
       appendGameEvent,
       refreshModelDownload,
+      settleConversationInteractions,
       updateMemories,
       updatePeople,
       updateQuests,
@@ -926,12 +987,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       updateSceneObservationEnabled,
       runSceneObservation,
       retryLastRecording,
+      applyConversationInteractions,
     }),
     [
       asrDownload,
       modelDownloads,
       activeQuestId,
       addQuest,
+      applyConversationInteractions,
       appendLog,
       capture,
       connectGlasses,

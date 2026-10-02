@@ -1,4 +1,11 @@
-import type { Memory, Person, PersonPanel as Panel, Quest } from "../../models";
+import type {
+  GameEvent,
+  Memory,
+  Person,
+  PersonPanel as Panel,
+  Quest,
+} from "../../models";
+import { personMemoryLabel } from "../../utils/personMemory";
 import { Icon } from "../ui/Icon";
 
 interface PersonPanelProps {
@@ -6,6 +13,7 @@ interface PersonPanelProps {
   panel: Panel;
   quests: Quest[];
   memories: Memory[];
+  gameEvents: GameEvent[];
   onOpenQuest: (id: string) => void;
   onOpenMemory: (id: string) => void;
 }
@@ -15,6 +23,7 @@ export function PersonPanel({
   panel,
   quests,
   memories,
+  gameEvents,
   onOpenQuest,
   onOpenMemory,
 }: PersonPanelProps) {
@@ -48,7 +57,11 @@ export function PersonPanel({
         item.title.includes(person.name) ||
         item.meta.includes(person.name),
     );
-    if (!related.length)
+    const affinityEvents = gameEvents.filter(
+      (event) =>
+        event.personId === person.id && event.type === "affinity_changed",
+    );
+    if (!related.length && !affinityEvents.length)
       return (
         <p className="empty-panel">
           眼镜识别或对话总结后，共同记忆会出现在这里。
@@ -56,6 +69,20 @@ export function PersonPanel({
       );
     return (
       <>
+        {affinityEvents.slice(0, 5).map((event) => (
+          <div key={event.id} className="linked affinity-memory">
+            <span className="linked-icon gold">
+              <Icon name="Heart" />
+            </span>
+            <span>
+              <b>{event.summary}</b>
+              <small>
+                {new Date(event.createdAt).toLocaleString("zh-CN")} ·
+                可追溯关系事件
+              </small>
+            </span>
+          </div>
+        ))}
         {related.slice(0, 6).map((item) => (
           <button
             key={item.id}
@@ -70,6 +97,9 @@ export function PersonPanel({
               <b>{item.title}</b>
               <small>
                 {item.time} · {item.meta}
+                {item.personMemoryKind
+                  ? ` · ${personMemoryLabel(item.personMemoryKind)}`
+                  : ""}
               </small>
             </span>
             <Icon name="ChevronRight" />

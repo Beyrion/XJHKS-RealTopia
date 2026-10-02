@@ -9,7 +9,8 @@ const PAGE_SIZE = 20;
 
 export default function MemorySettingsPage() {
   const location = useLocation();
-  const { memories, people, quests, updateMemories, notify } = useAppStore();
+  const { memories, people, quests, gameEvents, updateMemories, notify } =
+    useAppStore();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -62,7 +63,16 @@ export default function MemorySettingsPage() {
     const blob = new Blob(
       [
         JSON.stringify(
-          { version: 1, exportedAt: new Date().toISOString(), memories },
+          {
+            version: 2,
+            exportedAt: new Date().toISOString(),
+            memories,
+            affinityLedger: gameEvents.filter(
+              (event) =>
+                event.type === "affinity_changed" ||
+                event.type === "conversation_recorded",
+            ),
+          },
           null,
           2,
         ),

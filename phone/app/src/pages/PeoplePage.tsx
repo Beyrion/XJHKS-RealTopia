@@ -11,8 +11,15 @@ import { affinityLevel } from "../utils/gameRules";
 
 export default function PeoplePage() {
   const navigate = useNavigate();
-  const { people, quests, memories, session, notify, updatePeople } =
-    useAppStore();
+  const {
+    people,
+    quests,
+    memories,
+    gameEvents,
+    session,
+    notify,
+    updatePeople,
+  } = useAppStore();
   const [selectedId, setSelectedId] = useState(people[0]?.id ?? "");
   const [panel, setPanel] = useState<Panel>("quests");
   const [enrolling, setEnrolling] = useState(false);
@@ -298,6 +305,7 @@ export default function PeoplePage() {
             panel={panel}
             quests={quests}
             memories={memories}
+            gameEvents={gameEvents}
             onOpenQuest={(id) =>
               navigate("/quests", { state: { questId: id } })
             }

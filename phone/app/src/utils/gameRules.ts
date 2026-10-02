@@ -1,4 +1,11 @@
-import type { GameEvent, Memory, Quest, QuestCategory } from "../models";
+import type {
+  ExtractedInteractionEvent,
+  GameEvent,
+  Memory,
+  Person,
+  Quest,
+  QuestCategory,
+} from "../models";
 
 export const questCategoryMeta: Record<
   QuestCategory,
@@ -73,27 +80,100 @@ export function recommendedQuest(
   return [...quests].sort((a, b) => questFocusScore(b) - questFocusScore(a))[0];
 }
 
-export function completionReward(quest: Quest, events: GameEvent[]) {
+function affinityResistance(current: number, positive: number) {
+  if (positive <= 0) return positive;
+  const factor = current >= 95 ? 0.5 : current >= 80 ? 0.75 : 1;
+  return Math.round(positive * factor);
+}
+
+function positiveAffinityToday(personId: string, events: GameEvent[]) {
+  const today = new Date().toLocaleDateString("zh-CN");
+  return events
+    .filter(
+      (event) =>
+        event.personId === personId &&
+        (event.affinityDelta ?? 0) > 0 &&
+        new Date(event.createdAt).toLocaleDateString("zh-CN") === today,
+    )
+    .reduce((sum, event) => sum + Math.max(0, event.affinityDelta ?? 0), 0);
+}
+
+export function conversationAffinityReward(
+  person: Person,
+  events: GameEvent[],
+  interactions: ExtractedInteractionEvent[],
+  dedupeKey: string,
+) {
+  if (events.some((event) => event.dedupeKey === dedupeKey))
+    return { delta: 0, reason: "这段对话已经结算" };
+  const relevant = interactions.filter(
+    (item) => item.personId === person.id && item.confidence >= 0.7,
+  );
+  const unique = new Set(relevant.map((item) => item.type));
+  const meaningful = unique.has("meaningful_conversation") ? 1 : 0;
+  const gratitude = unique.has("gratitude") ? 1 : 0;
+  const help = unique.has("help") ? 2 : 0;
+  // Promise and conflict are recorded as memories. Promise is rewarded only
+  // after fulfillment; negative changes require an explicit user action.
+  const raw = Math.min(3, meaningful + gratitude + help);
+  const conversationGained = events
+    .filter(
+      (event) =>
+        event.personId === person.id &&
+        event.type === "affinity_changed" &&
+        event.source === "asr" &&
+        new Date(event.createdAt).toLocaleDateString("zh-CN") ===
+          new Date().toLocaleDateString("zh-CN"),
+    )
+    .reduce((sum, event) => sum + Math.max(0, event.affinityDelta ?? 0), 0);
+  const dailyRemaining = Math.max(
+    0,
+    8 - positiveAffinityToday(person.id, events),
+  );
+  const conversationRemaining = Math.max(0, 2 - conversationGained);
+  const resisted =
+    person.affinity >= 95 && !unique.has("help")
+      ? 0
+      : affinityResistance(person.affinity, raw);
+  const delta = Math.max(
+    0,
+    Math.min(
+      resisted,
+      dailyRemaining,
+      conversationRemaining,
+      100 - person.affinity,
+    ),
+  );
+  const labels = [
+    meaningful ? "有效对话" : "",
+    gratitude ? "收到感谢" : "",
+    help ? "提供帮助" : "",
+  ].filter(Boolean);
+  return { delta, reason: labels.join("、") || "已记录对话" };
+}
+
+export function completionReward(
+  quest: Quest,
+  events: GameEvent[],
+  currentAffinity = 50,
+) {
   const vitalityDelta = quest.priority === "首要" ? 7 : 5;
   const personId = quest.assignerPersonId ?? quest.personId;
   if (!personId)
     return { vitalityDelta, affinityDelta: 0, personId: undefined };
-  const today = new Date().toLocaleDateString("zh-CN");
-  const gainedToday = events
-    .filter(
-      (event) =>
-        event.personId === personId &&
-        event.affinityDelta &&
-        new Date(event.createdAt).toLocaleDateString("zh-CN") === today,
-    )
-    .reduce((sum, event) => sum + Math.max(0, event.affinityDelta ?? 0), 0);
+  const gainedToday = positiveAffinityToday(personId, events);
   const onTime =
     quest.deadline && Number.isFinite(Date.parse(quest.deadline))
       ? Date.now() <= Date.parse(quest.deadline)
       : false;
+  const baseAffinity = 3 + (onTime ? 1 : 0);
   const affinityDelta = Math.max(
     0,
-    Math.min(8 - gainedToday, 3 + (onTime ? 1 : 0)),
+    Math.min(
+      8 - gainedToday,
+      affinityResistance(currentAffinity, baseAffinity),
+      100 - currentAffinity,
+    ),
   );
   return { vitalityDelta, affinityDelta, personId };
 }
