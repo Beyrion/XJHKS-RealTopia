@@ -222,15 +222,17 @@ public final class MainActivity extends Activity {
                     " transport="+(sent?"wifi_direct_tcp":"not_connected"));
         }catch(JSONException error){onError(requestId,error.getMessage());}
     }
-    private void showPerson(String personId,String name,String title,int affinity,String quest,String story){
+    private void showPerson(String personId,String name,String title,int affinity,String quest,String story,String kind,String contextId,String[] choiceIds,String[] choiceLabels){
+        if("dismiss".equals(kind)){runOnUiThread(()->hud.dismissPerson(contextId));return;}
         Log.i("RealiaPerson","SHOW personId="+personId+" affinity="+affinity+" quest="+quest);
-        runOnUiThread(()->hud.showPerson(personId,name,title,affinity,quest,story));
+        runOnUiThread(()->hud.showPerson(personId,name,title,affinity,quest,story,kind,contextId,choiceIds,choiceLabels));
     }
     private void confirmPersonChoice(){
         PersonChoiceState.Selection choice=hud.selectedPersonChoice();if(choice==null)return;
         long eventId=localRequestId.incrementAndGet();boolean accepted=false;
         try{JSONObject metadata=new JSONObject().put("eventId",eventId).put("personId",choice.personId)
                 .put("choiceIndex",choice.index).put("choiceId",choice.choiceId).put("label",choice.label)
+                .put("kind",choice.kind).put("contextId",choice.contextId)
                 .put("selectedAtElapsedMs",SystemClock.elapsedRealtime()).put("input","rokid_touchpad");
             accepted=photoServer.sendPersonChoice(eventId,metadata);
             Log.i("RealiaPerson","CHOICE eventId="+eventId+" personId="+choice.personId+" choiceId="+choice.choiceId+" accepted="+accepted);
