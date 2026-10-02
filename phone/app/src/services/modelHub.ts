@@ -29,9 +29,7 @@ function goalFrom(prompt: string) {
 }
 
 function localPlan(goal: string) {
-  const people = ["林澄", "周野", "沈弦", "妈妈"].filter((name) =>
-    goal.includes(name),
-  );
+  const people = ["老孙", "妈妈", "老陈"].filter((name) => goal.includes(name));
   const deadline =
     goal.match(
       /(今天|明天|后天|周[一二三四五六日天](?:上午|下午|晚上)?|下(?:周|个月)[^，。；]*)/,
