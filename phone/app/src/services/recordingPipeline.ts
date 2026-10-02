@@ -1,5 +1,6 @@
 import type { Memory, Person, Quest, Recording } from "../models";
 import { analyzeConversation } from "../utils/memoryPlanner";
+import { inferQuestCategory } from "../utils/gameRules";
 import { sanitizeText } from "../utils/text";
 import { nativeService } from "./native";
 
@@ -67,7 +68,12 @@ export async function processRecordingPipeline(
           person: people.find((value) => value.id === insight.personIds[0])
             ?.name,
           reward: "记忆经验 +5",
+          status: "inbox",
+          source: "glasses",
+          assignerPersonId: insight.personIds[0],
+          createdAt: new Date().toISOString(),
         };
+        generated.category = inferQuestCategory(generated);
         quests.unshift(generated);
         taskIds = [generated.id];
       }
