@@ -216,7 +216,7 @@ public final class MainActivity extends Activity {
                     .put("cameraOpenMs",0).put("warmupMs",0).put("captureMs",frame.jpegReadyAtMs-frame.capturedAtMs)
                     .put("width",frame.width).put("height",frame.height).put("rotationDegrees",frame.rotationDegrees)
                     .put("cold",false).put("stream",true).put("framesPerSecond",frame.framesPerSecond).put("bytes",frame.jpeg.length);
-            boolean sent=photoServer.send(requestId,metadata,frame.jpeg);
+            boolean sent=photoServer.sendStream(requestId,metadata,frame.jpeg);
             Log.i("RealiaE2E","STREAM_RESULT requestId="+requestId+" fps="+frame.framesPerSecond+
                     " encodeMs="+(frame.jpegReadyAtMs-frame.capturedAtMs)+" bytes="+frame.jpeg.length+
                     " transport="+(sent?"wifi_direct_tcp":"not_connected"));
