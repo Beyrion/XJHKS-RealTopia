@@ -171,6 +171,35 @@ export async function installTopiaCommandMock(
           ),
         );
       }
+      if (command === "delete_topia_world") {
+        const saved = localStorage.getItem(storageKey);
+        const payload = resolvePayload(
+          saved ? JSON.parse(saved) : bundledWorld,
+          args.context,
+        );
+        if (!payload.studio.worlds.some((world) => world.id === args.worldId))
+          return Promise.reject(new Error("Topia 不存在"));
+        if (payload.studio.worlds.length === 1)
+          return Promise.reject(new Error("至少需要保留一个 Topia"));
+        payload.studio.worlds = payload.studio.worlds.filter(
+          (world) => world.id !== args.worldId,
+        );
+        if (payload.studio.activeWorldId === args.worldId) {
+          const next = [...payload.studio.worlds].sort(
+            (a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt),
+          )[0];
+          payload.studio.activeWorldId = next.id;
+          payload.world.id = next.id;
+          payload.world.profile.homeName = next.homeName;
+          localStorage.setItem(storageKey, JSON.stringify(payload.world));
+        }
+        payload.studio.worlds = payload.studio.worlds.map((world) => ({
+          ...world,
+          active: world.id === payload.studio.activeWorldId,
+        }));
+        localStorage.setItem(studioKey, JSON.stringify(payload.studio));
+        return Promise.resolve(payload);
+      }
       return Promise.reject(new Error(`unmocked command: ${command}`));
     };
     const callbacks = new Map();

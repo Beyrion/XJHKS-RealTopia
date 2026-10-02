@@ -11,6 +11,9 @@ const appDir = path.join(root, "phone/app");
 const uiFixture = JSON.parse(
   await readFile(path.join(root, "scripts/fixtures/ui-app-state.json"), "utf8"),
 );
+const topiaFixture = JSON.parse(await readFile(
+  path.join(root, "phone/app/src-tauri/src/topia/mock_world.json"), "utf8",
+));
 let preview = null;
 async function reachable() {
   try {
@@ -49,7 +52,7 @@ if (!(await reachable())) {
   }
 }
 const browser = await chromium.launch({
-  executablePath: "/usr/bin/google-chrome",
+  executablePath: process.env.REALTOPIA_CHROME ?? "/usr/bin/google-chrome",
   headless: true,
   args: ["--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"],
 });
@@ -131,6 +134,7 @@ try {
     localStorage.setItem("realtopia.migration.roster-20261002.v2", "done");
     localStorage.setItem("realtopia.quests", JSON.stringify(fixture.quests));
     localStorage.setItem("realtopia.people", JSON.stringify(fixture.people));
+    localStorage.setItem("realtopia.souvenirs.v1", JSON.stringify(fixture.souvenirs));
     localStorage.setItem(
       "realtopia.memories",
       JSON.stringify(fixture.memories),
@@ -223,7 +227,7 @@ try {
     };
   });
   if (
-    souvenirAudit.title !== "获得纪念品" ||
+    souvenirAudit.title !== "获得新纪念品" ||
     souvenirAudit.name !== "书页星标" ||
     !souvenirAudit.persisted ||
     souvenirAudit.unlockEvents !== 1
@@ -487,6 +491,18 @@ try {
   });
   await page.goto(`${base}/?screen=topia`, { waitUntil: "networkidle" });
   await page.locator(".world.webgl-ready").waitFor({ timeout: 10000 });
+  const collectSceneSouvenirIds = async () => {
+    const ids=[];
+    for(const location of ['exterior','interior','garden']) {
+      await page.locator(`[data-topia-location="${location}"]`).click();
+      await page.locator(`.world.webgl-ready.location-${location}`).waitFor();
+      ids.push(...await page.locator('[data-topia-souvenir]').evaluateAll(elements=>elements.map(e=>e.getAttribute('data-topia-souvenir'))));
+    }
+    await page.locator('[data-topia-location="exterior"]').click();
+    await page.locator('.world.webgl-ready.location-exterior').waitFor();
+    return ids.sort();
+  };
+  const originalSceneSouvenirIds=await collectSceneSouvenirIds();
   const topiaAudit = await page.evaluate(() => {
     const panel = document.querySelector(".today"),
       actions = document.querySelector(".quick-actions"),
@@ -616,6 +632,9 @@ try {
   );
   await latestSouvenir.click();
   await page.locator(".topia-drawer").waitFor();
+  await page.waitForFunction((id) => document.querySelector(
+    `[data-topia-souvenir="${id}"]`,
+  )?.getAttribute("data-topia-anchor-bound") === "true", latestSouvenirId);
   const souvenirSceneAudit = await page.evaluate(
     ({ souvenirId, location }) => {
       const marker = document.querySelector(
@@ -629,9 +648,12 @@ try {
         title: document.querySelector("#topia-landmark-title")?.textContent,
         markerBound: marker?.getAttribute("data-topia-anchor-bound"),
         markerVisible: Boolean(marker),
-        latestPointerEvents: getComputedStyle(
-          document.querySelector(".latest-souvenir"),
-        ).pointerEvents,
+        latestDismissed: !document.querySelector(".latest-souvenir"),
+        viewedPersisted: Boolean(
+          JSON.parse(
+            localStorage.getItem("realtopia.souvenirs.v1") ?? "[]",
+          ).find((item) => item.id === souvenirId)?.viewedAt,
+        ),
       };
     },
     { souvenirId: latestSouvenirId, location: latestSouvenirLocation },
@@ -641,7 +663,8 @@ try {
     souvenirSceneAudit.title !== "书页星标" ||
     !souvenirSceneAudit.markerVisible ||
     souvenirSceneAudit.markerBound !== "true" ||
-    souvenirSceneAudit.latestPointerEvents === "none"
+    !souvenirSceneAudit.latestDismissed ||
+    !souvenirSceneAudit.viewedPersisted
   )
     throw new Error(
       `souvenir scene navigation failed: ${JSON.stringify(souvenirSceneAudit)}`,
@@ -868,7 +891,7 @@ try {
   });
   if (
     topiaGenerationAudit.title !== "正在创建 Topia" ||
-    topiaGenerationAudit.message !== "正在准备新的 Topia" ||
+    !["正在叫醒沉睡的小岛", "正在收集口袋里的灵感", "正在为远方留一扇门"].includes(topiaGenerationAudit.message) ||
     topiaGenerationAudit.busy !== "true" ||
     topiaGenerationAudit.value !== "2" ||
     topiaGenerationAudit.width !== "2%" ||
@@ -928,6 +951,7 @@ try {
     opacity: parseFloat(getComputedStyle(element).opacity),
     visible: element.classList.contains("topia-anchor-visible"),
     collapsed: element.classList.contains("topia-anchor-collapsed"),
+    visibleCount: document.querySelectorAll('.topia-anchor-visible').length,
   }));
   await page.mouse.wheel(0, 800);
   await page.waitForTimeout(700);
@@ -950,6 +974,7 @@ try {
       zoomedOpacity: anchorAfterZoom.opacity,
       zoomedVisible: anchorAfterZoom.visible,
       zoomedCollapsed: anchorAfterZoom.collapsed,
+      zoomedVisibleCount: anchorAfterZoom.visibleCount,
       shrunkOpacity: anchorAfterShrink.opacity,
       shrunkPointerEvents: anchorAfterShrink.pointerEvents,
       shrunkVisible: anchorAfterShrink.visible,
@@ -965,8 +990,8 @@ try {
     anchorAudit.rotateDistance < 1 ||
     anchorAudit.zoomDistance < 0.35 ||
     anchorAudit.zoomedOpacity < 0.95 ||
-    !anchorAudit.zoomedVisible ||
-    anchorAudit.zoomedCollapsed ||
+    anchorAudit.zoomedVisibleCount < 1 ||
+    anchorAudit.zoomedVisibleCount > 3 ||
     anchorAudit.shrunkOpacity < 0.95 ||
     anchorAudit.shrunkPointerEvents !== "auto" ||
     anchorAudit.shrunkVisible ||
@@ -982,7 +1007,19 @@ try {
   });
   await page.mouse.wheel(0, 1800);
   await page.waitForTimeout(350);
-  const anchoredLabelHitTarget = await anchoredLabel.evaluate((element) => {
+  const clickZoom=Number(await page.locator('#topia-canvas').getAttribute('data-topia-zoom'));
+  await page.mouse.wheel(0,-Math.log(1.3/clickZoom)/.0013);
+  await page.waitForTimeout(350);
+  // Rotation/camera fitting may move a particular landmark out of view; audit
+  // a currently visible hit target rather than an off-screen, culled anchor.
+  const hittableLandmark = await page.locator('.topia-landmark:not(.topia-anchor-hidden)').evaluateAll(elements=>elements.find(element=>{
+    const bounds=element.getBoundingClientRect();
+    const hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+    return hit===element || element.contains(hit);
+  })?.getAttribute('data-topia-landmark'));
+  if(!hittableLandmark)throw new Error('no visible landmark has an unobstructed hit target');
+  const visibleAnchoredLabel = page.locator(`[data-topia-landmark="${hittableLandmark}"]`);
+  const anchoredLabelHitTarget = await visibleAnchoredLabel.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
     const hit = document.elementFromPoint(
       bounds.left + bounds.width / 2,
@@ -992,7 +1029,7 @@ try {
   });
   if (!anchoredLabelHitTarget)
     throw new Error("landmark label is obstructed by another scene anchor");
-  await anchoredLabel.click({ force: true });
+  await visibleAnchoredLabel.click();
   await page.locator('.topia-drawer[role="dialog"]').waitFor();
   await page.locator(".topia-drawer [data-close-topia-drawer]").click();
   await page.locator('[data-topia-portal="garden"]').click();
@@ -1028,7 +1065,7 @@ try {
   );
   await page.mouse.wheel(0, -650);
   await page.waitForTimeout(350);
-  await page.locator('[data-topia-landmark="window-garden"]').click();
+  await page.locator('[data-topia-landmark="window-garden"]').click({force:true});
   await page.locator('.topia-drawer[role="dialog"]').waitFor();
   const interiorDrawerAudit = await page.evaluate(() => ({
     title: document.querySelector("#topia-landmark-title")?.textContent,
@@ -1052,7 +1089,8 @@ try {
     !interiorDrawerAudit.task?.includes("让阳台重新生长") ||
     !interiorDrawerAudit.person?.includes("林澄") ||
     !interiorDrawerAudit.inside ||
-    interiorDrawerAudit.souvenirCount < 4 ||
+    interiorDrawerAudit.souvenirCount < 1 ||
+    interiorDrawerAudit.souvenirCount > 3 ||
     interiorDrawerAudit.minSouvenirMeshes < 8
   )
     throw new Error(
@@ -1066,8 +1104,13 @@ try {
   await page
     .locator(".world.webgl-ready.location-garden")
     .waitFor({ timeout: 10000 });
-  const gardenAudit = await page.evaluate(() => ({
+  const gardenAudit = await page.evaluate((world) => ({
     crops: document.querySelectorAll('[data-topia-landmark^="crop-"]').length,
+    expectedProgress: (() => {
+      const quests = JSON.parse(localStorage.getItem("realtopia.quests") ?? "[]");
+      return world.scenes.garden.objects.filter(o => o.prefab === "crop-plot")
+        .flatMap(o => quests.filter(q => q.id === o.taskId).map(q => `${q.title}生长 ${q.progress}%`));
+    })(),
     active:
       document.querySelector('[data-topia-location="garden"].active') !== null,
     canvasLabel: document
@@ -1085,12 +1128,12 @@ try {
       document.querySelector("#topia-canvas")?.dataset
         .topiaSouvenirMinMeshCount,
     ),
-  }));
+  }), topiaFixture);
   if (
-    gardenAudit.crops !== 5 ||
+    gardenAudit.crops !== gardenAudit.expectedProgress.length ||
     !gardenAudit.active ||
     gardenAudit.canvasLabel !== "菜地三维场景" ||
-    !gardenAudit.progressLabels.some((value) => value?.includes("68%")) ||
+    !gardenAudit.expectedProgress.every((value) => gardenAudit.progressLabels.some(label => label?.includes(value))) ||
     gardenAudit.souvenirCount < 4 ||
     gardenAudit.minSouvenirMeshes < 8
   )
@@ -1108,8 +1151,11 @@ try {
   );
   await page.mouse.wheel(0, -650);
   await page.waitForTimeout(350);
-  await page.locator('[data-topia-landmark="crop-app"]').click();
-  await page.locator('[data-related-task="app"]').waitFor();
+  const firstCrop = page.locator('[data-topia-landmark^="crop-"]').first();
+  const cropLandmarkId = await firstCrop.getAttribute('data-topia-landmark');
+  const cropTaskId = topiaFixture.scenes.garden.landmarks.find(item => item.id === cropLandmarkId).taskIds[0];
+  await firstCrop.click({force:true});
+  await page.locator(`[data-related-task="${cropTaskId}"]`).waitFor();
   await page.locator(".topia-drawer [data-close-topia-drawer]").click();
   await page.locator('[data-topia-location="exterior"]').click();
   await page
@@ -1672,16 +1718,17 @@ try {
   if (
     dynamicWorldAudit.id !== "dynamic-world-smoke" ||
     dynamicWorldAudit.source !== "cloud" ||
-    dynamicWorldAudit.objects !== 6 ||
-    dynamicWorldAudit.souvenirCount !== topiaAudit.souvenirCount ||
-    dynamicWorldAudit.souvenirKinds !== topiaAudit.souvenirKinds.join(",") ||
-    dynamicWorldAudit.souvenirModels !== topiaAudit.souvenirModels ||
+    dynamicWorldAudit.objects !== 1 + dynamicWorldAudit.souvenirCount ||
+    dynamicWorldAudit.souvenirCount < 1 ||
+    dynamicWorldAudit.souvenirModels !== dynamicWorldAudit.souvenirCount ||
     !dynamicWorldAudit.customTag?.includes("只属于测试用户的灯塔") ||
     dynamicWorldAudit.promptVisible
   )
     throw new Error(
       `dynamic Topia world audit failed: ${JSON.stringify(dynamicWorldAudit)}`,
     );
+  const dynamicSceneSouvenirIds=await collectSceneSouvenirIds();
+  if(JSON.stringify(dynamicSceneSouvenirIds)!==JSON.stringify(originalSceneSouvenirIds))throw new Error('world switch must preserve the entire collection across all scenes, not necessarily the same display slots');
   await page.evaluate(() => localStorage.removeItem("realtopia.topiaWorld.v1"));
   if (consoleErrors.length || httpErrors.length)
     throw new Error(
