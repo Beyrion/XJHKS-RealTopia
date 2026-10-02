@@ -5,7 +5,8 @@ export type QuestFilter = "active" | "done" | "all";
 export type QuestCategory =
   "creative" | "relationship" | "health" | "home" | "outdoor" | "general";
 export type QuestStatus = "inbox" | "active" | "blocked" | "done" | "cancelled";
-export type QuestSource = "seed" | "voice" | "glasses" | "manual" | "memory";
+export type QuestSource =
+  "seed" | "voice" | "glasses" | "manual" | "memory" | "world-event";
 
 export const moodKinds = [
   "joyful",
@@ -69,6 +70,10 @@ export type GameEventType =
   | "task_completed"
   | "conversation_recorded"
   | "scene_observed"
+  | "world_event_created"
+  | "world_event_accepted"
+  | "world_event_ignored"
+  | "souvenir_unlocked"
   | "affinity_changed";
 
 export type InteractionEventType =
@@ -152,6 +157,61 @@ export interface SceneObservationStatus {
   lastError: string | null;
   lastLatencyMs: number | null;
 }
+
+export type WorldEventStatus = "pending" | "accepted" | "ignored" | "expired";
+
+export interface WorldEvent {
+  id: string;
+  title: string;
+  description: string;
+  reason: string;
+  createdAt: string;
+  expiresAt: string;
+  status: WorldEventStatus;
+  sourceObservationId: string;
+  locationLabel: string;
+  personIds: string[];
+  confidence: number;
+  dedupeKey: string;
+  quest: {
+    title: string;
+    body: string;
+    steps: string[];
+    deadline?: string;
+    personId?: string;
+    reward: string;
+  };
+}
+
+export interface Souvenir {
+  id: string;
+  questId: string;
+  personId?: string;
+  name: string;
+  description: string;
+  emoji: string;
+  acquiredAt: string;
+  presentation?: {
+    modelKind: SouvenirModelKind;
+    preferredLocation?: "exterior" | "interior" | "garden";
+    scale?: number;
+  };
+}
+
+export type SouvenirModelKind =
+  | "moon-rabbit-doll"
+  | "constellation-badge"
+  | "firefly-bottle"
+  | "winged-book"
+  | "star-compass"
+  | "sprout-lantern"
+  | "cloud-whale"
+  | "planet-teacup"
+  | "echo-shell"
+  | "clockwork-bird"
+  | "aurora-key"
+  | "dream-camera"
+  | "mnn-engine-core";
 
 export interface MoodProfile {
   label: string;

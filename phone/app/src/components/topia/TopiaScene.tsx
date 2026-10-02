@@ -29,6 +29,9 @@ export function TopiaScene({
   onThumbnail,
 }: TopiaSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sceneSouvenirs = world.scenes[location].objects.filter(
+    (object) => object.layer === "souvenir",
+  );
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -61,6 +64,10 @@ export function TopiaScene({
       data-topia-world-source={world.source}
       data-topia-render-style={world.renderStyle?.kind ?? "storybook-ink"}
       data-topia-object-count={world.scenes[location].objects.length}
+      data-topia-souvenir-count={sceneSouvenirs.length}
+      data-topia-souvenir-kinds={sceneSouvenirs
+        .map((object) => String(object.params?.souvenirKind ?? "generated"))
+        .join(",")}
       data-focus-category={focusCategory ?? "general"}
       style={{ "--mood-intensity": mood.intensity / 100 } as CSSProperties}
     >

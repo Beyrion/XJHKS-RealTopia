@@ -1,17 +1,26 @@
-import type { Memory, Person, Quest, TopiaLandmark } from "../../models";
+import type {
+  Memory,
+  Person,
+  Quest,
+  TopiaLandmark,
+  TopiaObjectConfig,
+} from "../../models";
 import { Icon } from "../ui/Icon";
+import { SouvenirModelPreview } from "./SouvenirModelPreview";
 
 export function TopiaLandmarkDrawer({
   landmark,
   memories,
   quests,
   people,
+  souvenirObject,
   onClose,
 }: {
   landmark: TopiaLandmark;
   memories: Memory[];
   quests: Quest[];
   people: Person[];
+  souvenirObject?: TopiaObjectConfig;
   onClose: () => void;
 }) {
   const relatedMemories = landmark.memoryIds
@@ -50,6 +59,9 @@ export function TopiaLandmarkDrawer({
             <Icon name="X" />
           </button>
         </header>
+        {souvenirObject && (
+          <SouvenirModelPreview name={landmark.label} object={souvenirObject} />
+        )}
         <p className="topia-drawer-story">{landmark.description}</p>
 
         <section className="topia-relations" aria-label="关联内容">
