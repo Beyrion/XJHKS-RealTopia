@@ -20,7 +20,7 @@ export default function GlassesSettingsPage() {
   const syncPerception = async (enabled: boolean, settings = glassSettings) => {
     await nativeService.setPerception(
       enabled,
-      settings.intervalSeconds,
+      settings.framesPerSecond,
       settings.width,
       settings.quality,
     );
@@ -99,20 +99,21 @@ export default function GlassesSettingsPage() {
           onChange={(enabled) => void changePerception(enabled)}
         />
         <label className="range">
-          <span>自动拍摄间隔</span>
+          <span>持续感知帧率</span>
           <input
-            id="capture-interval"
+            id="capture-fps"
             type="range"
-            min="5"
-            max="60"
-            value={glassSettings.intervalSeconds}
+            min="2"
+            max="5"
+            step="1"
+            value={glassSettings.framesPerSecond}
             onChange={(event) =>
-              patchSettings({ intervalSeconds: Number(event.target.value) })
+              patchSettings({ framesPerSecond: Number(event.target.value) })
             }
             onPointerUp={() => void syncCaptureParameters(glassSettings)}
             onBlur={() => void syncCaptureParameters(glassSettings)}
           />
-          <b id="capture-interval-label">{glassSettings.intervalSeconds} 秒</b>
+          <b id="capture-fps-label">{glassSettings.framesPerSecond} FPS</b>
         </label>
       </SettingCard>
       <SettingCard title="图像参数">

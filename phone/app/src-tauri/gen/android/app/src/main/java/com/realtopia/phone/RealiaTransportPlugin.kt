@@ -14,6 +14,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONArray
 import org.json.JSONObject
@@ -34,9 +35,9 @@ class CaptureTransportArgs {
 @InvokeArg
 class PerceptionArgs {
   var enabled: Boolean = false
-  var intervalSeconds: Int = 15
-  var width: Int = 4032
-  var quality: Int = 90
+  var framesPerSecond: Int = 2
+  var width: Int = 1280
+  var quality: Int = 75
 }
 
 @InvokeArg
@@ -64,6 +65,11 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   private var lastCapture: JSObject? = null
   private var lastRecording: JSObject? = null
   private var samples = JSONArray()
+  private val streamFiles = ArrayDeque<File>()
+  private var desiredPerceptionEnabled = false
+  private var desiredPerceptionFramesPerSecond = 2
+  private var desiredPerceptionWidth = 1280
+  private var desiredPerceptionQuality = 75
 
   @Command
   fun paired(invoke: Invoke) {
@@ -96,6 +102,9 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       lastCapture = null
       lastRecording = null
       samples = JSONArray()
+      synchronized(streamFiles) {
+        while (streamFiles.isNotEmpty()) streamFiles.removeFirst().delete()
+      }
       lastError = null
       val existing = transport
       if (existing != null && currentGlassAddress.equals(args.glassAddress, ignoreCase = true)) {
@@ -139,10 +148,17 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   @Command
   fun perception(invoke: Invoke) {
     val args = invoke.parseArgs(PerceptionArgs::class.java)
-    val accepted = synchronized(lock) { transport }?.setPerception(
-      args.enabled, args.intervalSeconds.coerceIn(5, 300),
-      args.width.coerceIn(1280, 4032), args.quality.coerceIn(50, 100)
-    ) == true
+    val framesPerSecond = args.framesPerSecond.coerceIn(2, 5)
+    val width = args.width.coerceIn(1280, 4032)
+    val quality = args.quality.coerceIn(50, 100)
+    val active = synchronized(lock) {
+      desiredPerceptionEnabled = args.enabled
+      desiredPerceptionFramesPerSecond = framesPerSecond
+      desiredPerceptionWidth = width
+      desiredPerceptionQuality = quality
+      transport
+    }
+    val accepted = active?.setPerception(args.enabled, framesPerSecond, width, quality) == true
     if (accepted) {
       synchronized(lock) { detail = if (args.enabled) "continuous perception enabled" else "continuous perception paused" }
       invoke.resolve(JSObject().apply { put("accepted", true) })
@@ -153,7 +169,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   fun showPerson(invoke: Invoke) {
     val args = invoke.parseArgs(ShowPersonArgs::class.java)
     val accepted = synchronized(lock) { transport }?.showPerson(
-      args.personId, args.name, args.title, args.affinity.coerceIn(0, 100), args.quest, args.story
+      args.personId, args.name, args.title, args.affinity.coerceIn(-1, 100), args.quest, args.story
     ) == true
     if (accepted) invoke.resolve(JSObject().apply { put("accepted", true) })
     else invoke.reject("Bluetooth transport is not ready")
@@ -176,26 +192,48 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   }
 
   override fun onPhase(nextPhase: String, nextTransport: String, nextDetail: String?) {
+    var activeToResume: RokidPhotoTransport? = null
+    var resumeFramesPerSecond = 2
+    var resumeWidth = 1280
+    var resumeQuality = 75
     synchronized(lock) {
       phase = nextPhase
       transportName = nextTransport
       detail = nextDetail ?: ""
       if (nextPhase != "error") lastError = null
+      if (nextPhase == "ready" && desiredPerceptionEnabled) {
+        activeToResume = transport
+        resumeFramesPerSecond = desiredPerceptionFramesPerSecond
+        resumeWidth = desiredPerceptionWidth
+        resumeQuality = desiredPerceptionQuality
+      }
     }
     Log.i("RealiaTransportPlugin", "STATE phase=$nextPhase transport=$nextTransport detail=$nextDetail")
+    if (activeToResume != null) {
+      val accepted = activeToResume?.setPerception(
+        true, resumeFramesPerSecond, resumeWidth, resumeQuality,
+      )
+      Log.i("RealiaTransportPlugin", "PERCEPTION_RESUME accepted=$accepted")
+    }
   }
 
   override fun onPhoto(frame: RealiaFrameReader.Frame) {
     val finishedAt = SystemClock.elapsedRealtime()
     val startedAt = requestedAt.remove(frame.requestId())
     val metadata = frame.metadata()
+    val stream = metadata.optBoolean("stream", false)
     val outputDir = File(activity.getExternalFilesDir(null), "captures").apply { mkdirs() }
-    val output = File(outputDir, "realia-${frame.requestId()}.jpg")
+    val output = File(outputDir, if (stream) "realia-stream-${frame.requestId()}.jpg" else "realia-${frame.requestId()}.jpg")
     try {
       output.writeBytes(frame.jpeg())
+      if (stream) synchronized(streamFiles) {
+        streamFiles.addLast(output)
+        while (streamFiles.size > MAX_STREAM_FILES) streamFiles.removeFirst().delete()
+      }
       val sample = JSObject()
       sample.put("request_id", frame.requestId())
-      sample.put("mode", if (metadata.optBoolean("cold")) "cold" else "hot")
+      sample.put("mode", if (stream) "stream" else if (metadata.optBoolean("cold")) "cold" else "hot")
+      sample.put("stream", stream)
       sample.put("bytes", frame.jpeg().size)
       sample.put("width", metadata.optInt("width"))
       sample.put("height", metadata.optInt("height"))
@@ -213,9 +251,10 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
         detail = "received #${frame.requestId()} · ${frame.jpeg().size} bytes"
         lastCapture = sample
         samples.put(sample)
+        while (samples.length() > MAX_REPORT_SAMPLES) samples.remove(0)
         lastError = null
       }
-      writeReports()
+      if (!stream || completedCaptures % STREAM_REPORT_INTERVAL == 0) writeReports()
       Log.i("RealiaE2E", "RECEIVED requestId=${frame.requestId()} e2eMs=${sample.optLong("e2e_ms")}" +
         " transferMs=${sample.optLong("transfer_ms")} bytes=${frame.jpeg().size} path=${output.absolutePath}")
     } catch (error: Exception) {
@@ -296,5 +335,11 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       transport?.close()
       transport = null
     }
+  }
+
+  private companion object {
+    const val MAX_STREAM_FILES = 24
+    const val MAX_REPORT_SAMPLES = 200
+    const val STREAM_REPORT_INTERVAL = 10
   }
 }

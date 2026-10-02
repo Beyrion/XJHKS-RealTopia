@@ -81,11 +81,11 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
         return result == ValueUtil.CxrStatus.REQUEST_SUCCEED;
     }
 
-    boolean setPerception(boolean enabled,int intervalSeconds,int width,int quality) {
+    boolean setPerception(boolean enabled,int framesPerSecond,int width,int quality) {
         if (!cxr.isBluetoothConnected()) return false;
-        Caps caps=new Caps();caps.writeInt32(enabled?1:0);caps.writeInt32(intervalSeconds);caps.writeInt32(width);caps.writeInt32(quality);
+        Caps caps=new Caps();caps.writeInt32(enabled?1:0);caps.writeInt32(framesPerSecond);caps.writeInt32(width);caps.writeInt32(quality);
         ValueUtil.CxrStatus result=cxr.request(4,CONTROL_COMMAND,caps,null);
-        Log.i(TAG,"PERCEPTION enabled="+enabled+" interval="+intervalSeconds+" width="+width+" quality="+quality+" result="+result);
+        Log.i(TAG,"PERCEPTION enabled="+enabled+" fps="+framesPerSecond+" width="+width+" quality="+quality+" result="+result);
         return result==ValueUtil.CxrStatus.REQUEST_SUCCEED;
     }
 
