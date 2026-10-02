@@ -20,6 +20,8 @@ export default function GlassesSettingsPage() {
     runSceneObservation,
   } = useAppStore();
   const ready = session.phase === "ready";
+  const active = ready || session.phase === "capturing";
+  const recovering = session.phase === "p2p_negotiating";
 
   const syncPerception = async (enabled: boolean, settings = glassSettings) => {
     await nativeService.setPerception(
@@ -69,13 +71,15 @@ export default function GlassesSettingsPage() {
           </span>
           <span>
             <b>
-              {ready
+              {active
                 ? "已连接 · RealTopia Glass"
-                : "等待连接 · RealTopia Glass"}
+                : recovering
+                  ? "正在自动恢复 · RealTopia Glass"
+                  : "等待连接 · RealTopia Glass"}
             </b>
-            <small>{ready ? session.transport : "蓝牙控制与直连传输"}</small>
+            <small>{active || recovering ? session.transport : "蓝牙控制与直连传输"}</small>
           </span>
-          <em>{ready ? "在线" : "离线"}</em>
+          <em>{active ? "在线" : recovering ? "恢复中" : "离线"}</em>
         </div>
         <div className="buttons">
           <button id="choose" onClick={() => void connectGlasses()}>

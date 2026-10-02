@@ -46,6 +46,12 @@ class PerceptionArgs {
 }
 
 @InvokeArg
+class RecoverTransportArgs {
+  var requestId: Long = 0
+  var reason: String = "capture timeout"
+}
+
+@InvokeArg
 class ShowPersonArgs {
   lateinit var personId: String
   lateinit var name: String
@@ -53,6 +59,7 @@ class ShowPersonArgs {
   var affinity: Int = 0
   lateinit var quest: String
   lateinit var story: String
+  var choicesJson: String = ""
 }
 
 @TauriPlugin
@@ -69,6 +76,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   private var completedCaptures = 0
   private var lastCapture: JSObject? = null
   private var lastRecording: JSObject? = null
+  private val pendingRecordings = ArrayDeque<JSObject>()
   private var lastPersonChoice: JSObject? = null
   private var samples = JSONArray()
   private val streamFiles = ArrayDeque<File>()
@@ -76,7 +84,6 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   private var desiredPerceptionFramesPerSecond = 2
   private var desiredPerceptionWidth = 1280
   private var desiredPerceptionQuality = 75
-
   @Command
   fun paired(invoke: Invoke) {
     try {
@@ -126,23 +133,27 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   fun start(invoke: Invoke) {
     val args = invoke.parseArgs(StartTransportArgs::class.java)
     synchronized(lock) {
-      requestedAt.clear()
-      completedCaptures = 0
-      lastCapture = null
-      lastRecording = null
-      lastPersonChoice = null
-      samples = JSONArray()
-      synchronized(streamFiles) {
-        while (streamFiles.isNotEmpty()) streamFiles.removeFirst().delete()
-      }
-      lastError = null
       val existing = transport
       if (existing != null && currentGlassAddress.equals(args.glassAddress, ignoreCase = true)) {
+        // Re-entering the same glasses session is a transport recovery, not a
+        // new task. Preserve captures, recordings, choices and pending work.
+        existing.ensureConnected()
         phase = if (existing.isReady) "ready" else "p2p_negotiating"
         transportName = if (existing.isReady) "Wi-Fi Direct / TCP" else "CXR Bluetooth"
         detail = if (existing.isReady) "photo socket connected" else "transport still connecting"
       } else {
         existing?.close()
+        requestedAt.clear()
+        completedCaptures = 0
+        lastCapture = null
+        lastRecording = null
+        pendingRecordings.clear()
+        lastPersonChoice = null
+        samples = JSONArray()
+        synchronized(streamFiles) {
+          while (streamFiles.isNotEmpty()) streamFiles.removeFirst().delete()
+        }
+        lastError = null
         currentGlassAddress = args.glassAddress
         phase = "bt_connecting"
         transportName = "CXR Bluetooth"
@@ -189,24 +200,61 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       transport
     }
     val accepted = active?.setPerception(args.enabled, framesPerSecond, width, quality) == true
+    if (!accepted) active?.ensureConnected()
     if (accepted) {
       synchronized(lock) { detail = if (args.enabled) "continuous perception enabled" else "continuous perception paused" }
       invoke.resolve(JSObject().apply { put("accepted", true) })
-    } else invoke.reject("transport is not ready")
+    } else if (active != null) {
+      synchronized(lock) {
+        detail = if (args.enabled) "continuous perception queued for reconnect" else "perception pause queued for reconnect"
+      }
+      // The desired setting is durable and onPhase("ready") reapplies it. A
+      // transient link loss must not make the UI revert the user's toggle.
+      invoke.resolve(JSObject().apply { put("accepted", true); put("queued", true) })
+    } else invoke.reject("transport has not started")
+  }
+
+  @Command
+  fun recover(invoke: Invoke) {
+    val args = invoke.parseArgs(RecoverTransportArgs::class.java)
+    val active = synchronized(lock) {
+      requestedAt.remove(args.requestId)
+      val current = transport
+      if (phase == "capturing") {
+        phase = if (current?.isReady == true) "ready" else "p2p_negotiating"
+        transportName = if (current?.isReady == true) "Wi-Fi Direct / TCP" else "automatic recovery"
+        detail = "capture #${args.requestId} released · ${args.reason}"
+      }
+      current
+    }
+    active?.ensureConnected()
+    invoke.resolve(snapshot())
   }
 
   @Command
   fun showPerson(invoke: Invoke) {
     val args = invoke.parseArgs(ShowPersonArgs::class.java)
     val accepted = synchronized(lock) { transport }?.showPerson(
-      args.personId, args.name, args.title, args.affinity.coerceIn(-1, 100), args.quest, args.story
+      args.personId, args.name, args.title, args.affinity.coerceIn(-2, 100), args.quest, args.story,
+      args.choicesJson,
     ) == true
     if (accepted) invoke.resolve(JSObject().apply { put("accepted", true) })
     else invoke.reject("Bluetooth transport is not ready")
   }
 
   @Command
-  fun state(invoke: Invoke) = invoke.resolve(snapshot())
+  fun state(invoke: Invoke) {
+    synchronized(lock) { transport }?.ensureConnected()
+    invoke.resolve(snapshot())
+  }
+
+  @Command
+  fun takeRecording(invoke: Invoke) {
+    val recording = synchronized(lock) {
+      if (pendingRecordings.isEmpty()) null else pendingRecordings.removeFirst()
+    }
+    invoke.resolve(JSObject().apply { put("recording", recording ?: JSONObject.NULL) })
+  }
 
   @Command
   fun close(invoke: Invoke) {
@@ -303,8 +351,20 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
         put("sample_rate",metadata.optInt("sampleRate",16000));put("channels",metadata.optInt("channels",1))
         put("encoding",metadata.optString("encoding","pcm_s16le"));put("duration_ms",metadata.optLong("durationMs",0))
         put("transfer_ms",frame.readFinishedAtMs()-frame.readStartedAtMs());put("path",output.absolutePath)
+        put("partial",metadata.optBoolean("partial",false));put("conversation_id",metadata.optLong("conversationId",frame.requestId()))
+        put("sequence",metadata.optInt("sequence",0))
+        put("chunk",metadata.optBoolean("chunk",false));put("final_chunk",metadata.optBoolean("finalChunk",false))
       }
-      synchronized(lock){lastRecording=item;detail="received recording #${frame.requestId()} · ${frame.jpeg().size} bytes";lastError=null}
+      synchronized(lock){
+        lastRecording=item
+        pendingRecordings.addLast(item)
+        if(pendingRecordings.size>MAX_PENDING_RECORDINGS){
+          val dropped=pendingRecordings.removeFirst()
+          Log.w("RealiaAudio","QUEUE_OVERFLOW dropped recordingId=${dropped.optLong("recording_id")}")
+        }
+        detail="received recording #${frame.requestId()} · ${frame.jpeg().size} bytes"
+        lastError=null
+      }
       Log.i("RealiaAudio","RECEIVED recordingId=${frame.requestId()} durationMs=${item.optLong("duration_ms")} bytes=${frame.jpeg().size} path=${output.absolutePath}")
     }catch(error:Exception){onError("recording persistence failed: ${error.message}")}
   }
@@ -315,8 +375,10 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
     val choiceId = metadata.optString("choiceId").trim()
     val label = metadata.optString("label").trim()
     val choiceIndex = metadata.optInt("choiceIndex", -1)
-    if (personId.isEmpty() || personId.length > 96 ||
-      choiceId !in setOf("greet", "catch_up", "later") ||
+    val kind = metadata.optString("kind", "person").trim()
+    val contextId = metadata.optString("contextId", "").trim()
+    if (personId.isEmpty() || personId.length > 128 ||
+      !choiceId.matches(Regex("[a-zA-Z0-9_-]{1,64}")) ||
       choiceIndex !in 0..2 || label.isEmpty() || label.length > 32) {
       onError("invalid person choice event #${frame.requestId()}")
       return
@@ -327,6 +389,8 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       put("choice_index", choiceIndex)
       put("choice_id", choiceId)
       put("label", label)
+      put("kind", kind)
+      put("context_id", contextId)
       put("input", metadata.optString("input", "rokid_touchpad"))
       put("selected_at_elapsed_ms", metadata.optLong("selectedAtElapsedMs", -1))
       put("received_at_ms", System.currentTimeMillis())
@@ -356,7 +420,9 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       it.put("completed_captures", completedCaptures)
       it.put("last_error", lastError)
       it.put("last_capture", lastCapture)
-      it.put("last_recording",lastRecording)
+      // Audio is delivered through takeRecording(), so a burst cannot be
+      // collapsed into the latest item by session-state polling.
+      it.put("last_recording",JSONObject.NULL)
       it.put("last_person_choice",lastPersonChoice)
     }
   }
@@ -400,6 +466,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
 
   private companion object {
     const val MAX_STREAM_FILES = 24
+    const val MAX_PENDING_RECORDINGS = 64
     const val MAX_REPORT_SAMPLES = 200
     const val STREAM_REPORT_INTERVAL = 10
   }
