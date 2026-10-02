@@ -6,6 +6,8 @@ import type {
   TopiaObjectConfig,
   TopiaSceneConfig,
   TopiaSceneCrop,
+  TopiaSkyConfig,
+  TopiaRenderStyleConfig,
 } from "../models";
 
 type MoodLook = {
@@ -179,6 +181,85 @@ const fallback = {
   cloud: 0xf7fbff,
 };
 
+let activeRenderStyle: TopiaRenderStyleConfig | undefined;
+let activeStyleTexture: THREE.CanvasTexture | undefined;
+
+function styleTexture(style?: TopiaRenderStyleConfig) {
+  if (
+    !style ||
+    style.textureStrength <= 0.05 ||
+    style.kind === "glazed-ceramic" ||
+    style.kind === "crystal-diorama"
+  )
+    return undefined;
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (!context) return undefined;
+  let state = style.seed || 1;
+  const random = () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, 64, 64);
+  const strength = style.textureStrength;
+  if (style.kind === "painterly-oil") {
+    context.lineCap = "round";
+    for (let index = 0; index < 95; index++) {
+      const shade = Math.round(224 + random() * 31);
+      context.strokeStyle = `rgba(${shade},${shade},${shade},${0.14 + strength * 0.23})`;
+      context.lineWidth = 1 + random() * 3;
+      context.beginPath();
+      const x = random() * 64;
+      const y = random() * 64;
+      context.moveTo(x, y);
+      context.quadraticCurveTo(
+        x + 3 + random() * 8,
+        y - 2 + random() * 4,
+        x + 8 + random() * 13,
+        y + random() * 3,
+      );
+      context.stroke();
+    }
+  } else if (style.kind === "plush-toy") {
+    for (let index = 0; index < 360; index++) {
+      const alpha = 0.05 + random() * strength * 0.18;
+      context.strokeStyle = `rgba(105,98,110,${alpha})`;
+      context.lineWidth = 0.45;
+      const x = random() * 64;
+      const y = random() * 64;
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(x - 0.7 + random() * 1.4, y + 1 + random() * 2.2);
+      context.stroke();
+    }
+  } else if (style.kind === "paper-craft") {
+    for (let index = 0; index < 240; index++) {
+      const shade = Math.round(174 + random() * 60);
+      context.fillStyle = `rgba(${shade},${shade - 4},${shade - 9},${0.04 + strength * 0.12})`;
+      const size = 0.3 + random() * 1.2;
+      context.fillRect(random() * 64, random() * 64, size, size * 0.45);
+    }
+  } else {
+    context.strokeStyle = `rgba(65,62,83,${0.025 + strength * 0.06})`;
+    context.lineWidth = 0.5;
+    for (let offset = -64; offset < 128; offset += 7) {
+      context.beginPath();
+      context.moveTo(offset, 0);
+      context.lineTo(offset + 64, 64);
+      context.stroke();
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(2.5, 2.5);
+  return texture;
+}
+
 function color(object: TopiaObjectConfig, index: number, value: number) {
   return object.colors?.[index] ?? value;
 }
@@ -189,12 +270,24 @@ function parameter(object: TopiaObjectConfig, key: string, value: number) {
 }
 
 function material(value: number, roughness = 0.82) {
-  return new THREE.MeshStandardMaterial({
+  const style = activeRenderStyle;
+  const properties = {
     color: value,
-    roughness,
-    metalness: 0.03,
-    flatShading: true,
-  });
+    roughness: style?.roughness ?? roughness,
+    metalness: style?.metalness ?? 0.03,
+    map: activeStyleTexture,
+    flatShading:
+      style?.kind !== "plush-toy" && style?.kind !== "glazed-ceramic",
+  };
+  if (style?.kind === "glazed-ceramic" || style?.kind === "crystal-diorama")
+    return new THREE.MeshPhysicalMaterial({
+      ...properties,
+      clearcoat: style.kind === "glazed-ceramic" ? 0.82 : 0.45,
+      clearcoatRoughness: style.kind === "glazed-ceramic" ? 0.16 : 0.08,
+      sheen: style.kind === "glazed-ceramic" ? 0.18 : 0,
+      iridescence: style.kind === "crystal-diorama" ? 0.32 : 0,
+    });
+  return new THREE.MeshStandardMaterial(properties);
 }
 
 function mesh(geometry: THREE.BufferGeometry, value: number) {
@@ -205,14 +298,16 @@ function mesh(geometry: THREE.BufferGeometry, value: number) {
 }
 
 function glowing(geometry: THREE.BufferGeometry, value: number) {
+  const style = activeRenderStyle;
   return new THREE.Mesh(
     geometry,
     new THREE.MeshStandardMaterial({
       color: value,
       emissive: value,
       emissiveIntensity: 1.6,
-      roughness: 0.35,
-      flatShading: true,
+      roughness: Math.min(style?.roughness ?? 0.35, 0.55),
+      metalness: style?.metalness ?? 0,
+      flatShading: style?.kind !== "plush-toy",
     }),
   );
 }
@@ -272,17 +367,41 @@ function plant(object: TopiaObjectConfig) {
   return group;
 }
 
-function fantasySky(look: MoodLook, paletteMix: number) {
+function fantasySky(
+  look: MoodLook,
+  paletteMix: number,
+  generated?: TopiaSkyConfig,
+) {
   const neutral = moodLooks.neutral;
+  const identity = generated ?? {
+    theme: "cloud-dream",
+    motifs: ["aurora-ribbon", "star-dust"],
+    celestialShape: "ringed-orb",
+    decorationDensity: 0.55,
+    drift: 0.4,
+    top: neutral.skyTop,
+    mid: neutral.skyMid,
+    low: neutral.skyLow,
+    aurora: neutral.aurora,
+    celestial: neutral.celestial,
+    stars: neutral.stars,
+    fog: neutral.fog,
+    magic: 0.72,
+  };
+  const identityBlend = (base: number, generatedColor: number) =>
+    new THREE.Color(base).lerp(new THREE.Color(generatedColor), 0.48);
   const blend = (base: number, target: number) =>
-    new THREE.Color(base).lerp(new THREE.Color(target), paletteMix);
+    identityBlend(base, generated ? generatedColor(base, identity) : base).lerp(
+      new THREE.Color(target),
+      paletteMix * 0.72,
+    );
   const skyMaterial = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     fog: false,
     uniforms: {
       uTime: { value: 0 },
-      uMagic: { value: 0.42 + paletteMix * 0.58 },
+      uMagic: { value: identity.magic * (0.72 + paletteMix * 0.28) },
       uTop: { value: blend(neutral.skyTop, look.skyTop) },
       uMid: { value: blend(neutral.skyMid, look.skyMid) },
       uLow: { value: blend(neutral.skyLow, look.skyLow) },
@@ -316,7 +435,7 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   dome.renderOrder = -10;
   group.add(dome);
 
-  const count = 150;
+  const count = Math.round(90 + identity.decorationDensity * 150);
   const positions = new Float32Array(count * 3);
   for (let index = 0; index < count; index++) {
     const y = -0.08 + (index / (count - 1)) * 1.04;
@@ -358,8 +477,14 @@ function fantasySky(look: MoodLook, paletteMix: number) {
       }),
     ),
   );
+  const orbGeometry =
+    identity.celestialShape === "prism"
+      ? new THREE.CircleGeometry(0.82, 6)
+      : identity.celestialShape === "lantern-sun"
+        ? new THREE.CircleGeometry(0.78, 12)
+        : new THREE.CircleGeometry(0.76, 32);
   const orb = new THREE.Mesh(
-    new THREE.CircleGeometry(0.76, 32),
+    orbGeometry,
     new THREE.MeshBasicMaterial({
       color: orbColor,
       transparent: true,
@@ -381,7 +506,95 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   ring.position.z = 0.08;
   ring.rotation.z = -0.28;
   celestial.add(ring);
-  return { group, skyMaterial, stars, celestial, ring };
+  if (identity.celestialShape === "twin-moons") {
+    const twin = orb.clone();
+    twin.scale.setScalar(0.56);
+    twin.position.set(1.08, -0.45, 0.06);
+    celestial.add(twin);
+  }
+  if (identity.celestialShape === "crescent") {
+    const mask = new THREE.Mesh(
+      new THREE.CircleGeometry(0.62, 32),
+      new THREE.MeshBasicMaterial({
+        color: identityBlend(identity.mid, look.skyMid),
+      }),
+    );
+    mask.position.set(0.27, 0.18, 0.09);
+    celestial.add(mask);
+  }
+  const motifGroup = new THREE.Group();
+  identity.motifs.slice(0, 5).forEach((motif, motifIndex) => {
+    const motifColor = blend(identity.aurora, look.aurora);
+    for (let index = 0; index < 5; index++) {
+      const angle = motifIndex * 1.7 + index * 1.19;
+      const radius = 18 + motifIndex * 2.2 + index;
+      const shape =
+        motif.includes("petal") || motif.includes("bird")
+          ? new THREE.ConeGeometry(0.18, 0.55, 3)
+          : motif.includes("crystal")
+            ? new THREE.OctahedronGeometry(0.28, 0)
+            : new THREE.IcosahedronGeometry(0.22, 0);
+      const item = new THREE.Mesh(
+        shape,
+        new THREE.MeshBasicMaterial({
+          color: motifColor,
+          transparent: true,
+          opacity: 0.34 + identity.decorationDensity * 0.4,
+        }),
+      );
+      item.position.set(
+        Math.cos(angle) * radius,
+        4 + ((index * 5 + motifIndex) % 12),
+        Math.sin(angle) * radius,
+      );
+      item.rotation.z = angle;
+      motifGroup.add(item);
+    }
+  });
+  group.add(motifGroup);
+  return {
+    group,
+    skyMaterial,
+    stars,
+    celestial,
+    ring,
+    motifGroup,
+    drift: identity.drift,
+  };
+}
+
+function generatedColor(base: number, sky: TopiaSkyConfig) {
+  if (base === moodLooks.neutral.skyTop) return sky.top;
+  if (base === moodLooks.neutral.skyMid) return sky.mid;
+  if (base === moodLooks.neutral.skyLow) return sky.low;
+  if (base === moodLooks.neutral.aurora) return sky.aurora;
+  if (base === moodLooks.neutral.celestial) return sky.celestial;
+  if (base === moodLooks.neutral.stars) return sky.stars;
+  return base;
+}
+
+function createMoodRain(count: number, color: number) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  for (let index = 0; index < count; index++) {
+    positions[index * 3] = ((index * 37) % 100) / 8 - 6.25;
+    positions[index * 3 + 1] = ((index * 53) % 100) / 9 - 2;
+    positions[index * 3 + 2] = ((index * 71) % 100) / 8 - 6.25;
+  }
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  return {
+    geometry,
+    points: new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        color,
+        size: 0.045,
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+      }),
+    ),
+  };
 }
 
 function cropPlant(kind: TopiaCropKind, progress: number) {
@@ -942,6 +1155,27 @@ function buildConfiguredScene(
       built.group.userData.baseRotationY = built.group.rotation.y;
       built.group.userData.baseRotationZ = built.group.rotation.z;
     }
+    if (object.layer === "souvenir") {
+      const glow = new THREE.PointLight(
+        color(object, 0, fallback.yellow),
+        1.15,
+        2.8,
+      );
+      glow.position.set(0, 0.55, 0);
+      glow.userData.topiaSouvenirGlow = true;
+      built.group.add(glow);
+      const point = new THREE.Mesh(
+        new THREE.SphereGeometry(0.055, 8, 6),
+        new THREE.MeshBasicMaterial({
+          color: color(object, 0, fallback.yellow),
+          transparent: true,
+          opacity: 0.9,
+        }),
+      );
+      point.position.set(0, 0.72, 0);
+      point.userData.topiaSouvenirSpark = true;
+      built.group.add(point);
+    }
     world.add(built.group);
   }
   return world;
@@ -951,6 +1185,9 @@ export interface TopiaSceneOptions {
   location: TopiaLocation;
   crops: TopiaSceneCrop[];
   scene: TopiaSceneConfig;
+  sky?: TopiaSkyConfig;
+  renderStyle?: TopiaRenderStyleConfig;
+  onThumbnail?: (thumbnail: string) => void;
 }
 
 export function mountTopiaScene(
@@ -962,6 +1199,8 @@ export function mountTopiaScene(
   const container = canvas.parentElement;
   if (!container) return () => undefined;
   const look = moodLooks[mood] ?? moodLooks.neutral;
+  activeRenderStyle = options.renderStyle;
+  activeStyleTexture = styleTexture(options.renderStyle);
   const mix = THREE.MathUtils.clamp(intensity / 100, 0, 1);
   const paletteMix = mood === "neutral" ? 1 : 0.45 + mix * 0.55;
   let renderer: THREE.WebGLRenderer;
@@ -970,6 +1209,7 @@ export function mountTopiaScene(
       canvas,
       antialias: true,
       alpha: true,
+      preserveDrawingBuffer: Boolean(options.onThumbnail),
       powerPreference: "high-performance",
     });
   } catch {
@@ -981,14 +1221,21 @@ export function mountTopiaScene(
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = THREE.MathUtils.lerp(1.12, look.exposure, mix);
+  if (options.renderStyle) {
+    canvas.dataset.topiaRenderStyle = options.renderStyle.kind;
+    canvas.style.filter = `saturate(${options.renderStyle.saturation}) contrast(${options.renderStyle.contrast})`;
+  }
 
   const scene = new THREE.Scene();
+  const generatedFog = options.sky
+    ? new THREE.Color(look.fog).lerp(new THREE.Color(options.sky.fog), 0.32)
+    : new THREE.Color(look.fog);
   scene.fog = new THREE.FogExp2(
-    look.fog,
+    generatedFog,
     THREE.MathUtils.lerp(0.018, look.fogDensity, mix),
   );
   const camera = new THREE.OrthographicCamera(-5, 5, 3, -3, 0.1, 100);
-  const backdrop = fantasySky(look, paletteMix);
+  const backdrop = fantasySky(look, paletteMix, options.sky);
   scene.add(backdrop.group);
   backdrop.celestial.position.set(3.5, 1.55, -32);
   camera.add(backdrop.celestial);
@@ -1014,8 +1261,9 @@ export function mountTopiaScene(
 
   const sparkleGeometry = new THREE.BufferGeometry();
   const sparklePositions = new Float32Array(42 * 3);
+  const styleSeed = options.renderStyle?.seed ?? 1;
   for (let index = 0; index < 42; index++) {
-    const angle = index * 2.39996;
+    const angle = index * 2.39996 + (styleSeed % 997) * 0.001;
     const radius = 3.7 + (index % 7) * 0.38;
     sparklePositions[index * 3] = Math.cos(angle) * radius;
     sparklePositions[index * 3 + 1] = -0.4 + (index % 9) * 0.56;
@@ -1037,6 +1285,11 @@ export function mountTopiaScene(
     }),
   );
   scene.add(sparkles);
+  const rain =
+    mood === "sad" || mood === "anxious"
+      ? createMoodRain(mood === "sad" ? 110 : 55, look.sparkle)
+      : null;
+  if (rain) scene.add(rain.points);
   const ambientGlow = new THREE.PointLight(look.glow, 1.1, 11);
   ambientGlow.position.set(0, 2.2, 1.5);
   scene.add(ambientGlow);
@@ -1088,6 +1341,8 @@ export function mountTopiaScene(
   };
 
   let frame = 0;
+  let renderedFrames = 0;
+  let thumbnailCaptured = false;
   let disposed = false;
   let targetYaw = options.scene.camera.yaw;
   let currentYaw = targetYaw;
@@ -1188,7 +1443,14 @@ export function mountTopiaScene(
     );
     camera.lookAt(0, 1, 0);
     backdrop.skyMaterial.uniforms.uTime.value = now * 0.001;
-    backdrop.stars.rotation.y = now * 0.000012;
+    backdrop.stars.rotation.y =
+      now *
+      (0.000006 + backdrop.drift * 0.000025) *
+      (mood === "anxious" ? 2.2 : 1);
+    backdrop.motifGroup.rotation.y =
+      now *
+      (0.000004 + backdrop.drift * 0.000018) *
+      (mood === "anxious" ? 2.4 : 1);
     backdrop.ring.rotation.z = -0.28 + now * 0.000035;
     backdrop.celestial.scale.setScalar(1 + Math.sin(now * 0.0007) * 0.035);
     world.position.y = Math.sin(now * 0.00055) * 0.05;
@@ -1201,13 +1463,53 @@ export function mountTopiaScene(
       if (object.userData.animation === "float")
         object.position.y =
           object.userData.baseY + Math.sin(now * 0.001 + object.id) * 0.12;
+      if (object.userData.animation === "sparkle") {
+        object.traverse((child) => {
+          if (
+            child.userData.topiaSouvenirGlow &&
+            child instanceof THREE.PointLight
+          ) {
+            child.intensity =
+              0.8 + (Math.sin(now * 0.004 + child.id) + 1) * 0.55;
+          }
+          if (
+            child.userData.topiaSouvenirSpark &&
+            child instanceof THREE.Mesh
+          ) {
+            const pulse = 0.72 + (Math.sin(now * 0.0048 + child.id) + 1) * 0.42;
+            child.scale.setScalar(pulse);
+          }
+        });
+      }
     });
     sparkles.rotation.y = now * 0.000045;
     sparkles.position.y = Math.sin(now * 0.0007) * 0.08;
     ambientGlow.intensity =
       1.05 + Math.sin(now * (mood === "angry" ? 0.004 : 0.0011)) * 0.24;
+    if (rain) {
+      const positions = rain.geometry.getAttribute(
+        "position",
+      ) as THREE.BufferAttribute;
+      for (let index = 0; index < positions.count; index++) {
+        const y = positions.getY(index) - (mood === "sad" ? 0.055 : 0.09);
+        positions.setY(index, y < -2 ? 8 + (index % 5) : y);
+      }
+      positions.needsUpdate = true;
+    }
     syncAnchors();
     renderer.render(scene, camera);
+    renderedFrames += 1;
+    if (!thumbnailCaptured && renderedFrames >= 3 && options.onThumbnail) {
+      thumbnailCaptured = true;
+      const thumbnail = document.createElement("canvas");
+      thumbnail.width = 320;
+      thumbnail.height = 180;
+      const context = thumbnail.getContext("2d");
+      if (context) {
+        context.drawImage(canvas, 0, 0, thumbnail.width, thumbnail.height);
+        options.onThumbnail(thumbnail.toDataURL("image/jpeg", 0.76));
+      }
+    }
     frame = requestAnimationFrame(animate);
   };
   animate();
@@ -1239,6 +1541,11 @@ export function mountTopiaScene(
       }
     });
     renderer.dispose();
+    activeStyleTexture?.dispose();
+    activeStyleTexture = undefined;
+    activeRenderStyle = undefined;
+    canvas.style.filter = "";
+    delete canvas.dataset.topiaRenderStyle;
     container.classList.remove("webgl-ready");
   };
 }

@@ -49,11 +49,51 @@ export interface TopiaUserProfileInput {
   traits: string[];
   experiences: string[];
   preferences: string[];
+  imagery: string[];
+  sensations: string[];
+  stylePreferences: string[];
+}
+
+export type TopiaRenderStyleKind =
+  | "painterly-oil"
+  | "plush-toy"
+  | "paper-craft"
+  | "glazed-ceramic"
+  | "storybook-ink"
+  | "crystal-diorama";
+
+export interface TopiaRenderStyleConfig {
+  kind: TopiaRenderStyleKind;
+  seed: number;
+  roughness: number;
+  metalness: number;
+  saturation: number;
+  contrast: number;
+  textureStrength: number;
+}
+
+export type TopiaObjectLayer = "structure" | "decoration" | "crop" | "souvenir";
+
+export interface TopiaSkyConfig {
+  theme: string;
+  motifs: string[];
+  celestialShape: string;
+  decorationDensity: number;
+  drift: number;
+  top: number;
+  mid: number;
+  low: number;
+  aurora: number;
+  celestial: number;
+  stars: number;
+  fog: number;
+  magic: number;
 }
 
 export interface TopiaObjectConfig {
   id: string;
   prefab: TopiaPrefab;
+  layer?: TopiaObjectLayer;
   position: TopiaVector3;
   rotation?: TopiaVector3;
   scale?: TopiaVector3;
@@ -61,7 +101,8 @@ export interface TopiaObjectConfig {
   params?: Record<string, string | number | boolean>;
   anchorId?: string;
   taskId?: string;
-  animation?: "float" | "spin" | "sway";
+  memoryIds?: string[];
+  animation?: "float" | "spin" | "sway" | "sparkle";
 }
 
 export interface TopiaLandmark {
@@ -85,15 +126,59 @@ export interface TopiaSceneConfig {
 }
 
 export interface TopiaWorldConfig {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   id: string;
   ownerId: string;
   revision: number;
   generatedAt: string;
   source: "mock" | "cloud";
   profile: TopiaWorldProfile;
+  sky?: TopiaSkyConfig;
+  renderStyle?: TopiaRenderStyleConfig;
   scenes: Record<TopiaLocation, TopiaSceneConfig>;
   generation?: { provider: string; model: string; promptVersion: string };
+}
+
+export interface TopiaAssetLayer {
+  objects: Record<TopiaLocation, TopiaObjectConfig[]>;
+  landmarks: Record<TopiaLocation, TopiaLandmark[]>;
+  memories: TopiaAssetMemory[];
+}
+
+export interface TopiaAssetMemory {
+  id: string;
+  objectId: string;
+  location: TopiaLocation;
+  kind: "decoration" | "crop" | "souvenir" | "structure";
+  label: string;
+  createdAt: string;
+  sourceMemoryIds: string[];
+  sourceTaskIds: string[];
+}
+
+export interface TopiaWorldSummary {
+  id: string;
+  homeName: string;
+  archetype: string;
+  generatedAt: string;
+  active: boolean;
+  source: "mock" | "cloud";
+  thumbnail?: string;
+}
+
+export interface TopiaStudioPayload {
+  activeWorldId: string;
+  worlds: TopiaWorldSummary[];
+  assets: TopiaAssetLayer;
+  lastProfile?: TopiaUserProfileInput;
+  needsOnboarding: boolean;
+}
+
+export interface TopiaGenerationProgress {
+  mode: "create" | "iterate";
+  stage: string;
+  progress: number;
+  message: string;
 }
 
 export interface TopiaSceneCrop {
@@ -107,4 +192,5 @@ export interface TopiaSceneCrop {
 export interface TopiaWorldPayload {
   world: TopiaWorldConfig;
   crops: TopiaSceneCrop[];
+  studio: TopiaStudioPayload;
 }

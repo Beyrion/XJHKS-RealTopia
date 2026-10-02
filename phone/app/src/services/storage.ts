@@ -27,6 +27,14 @@ function loadJson<T>(key: string, fallback: T): T {
 }
 
 export const storage = {
+  hasPersistedUserData() {
+    return Object.keys(localStorage).some(
+      (key) =>
+        key.startsWith("realtopia.") &&
+        !key.startsWith("realtopia.topiaWorld") &&
+        !key.startsWith("realtopia.topiaStudio"),
+    );
+  },
   loadQuests(): Quest[] {
     const value = loadJson<Quest[]>("realtopia.quests", []);
     return (value.length ? value : structuredClone(starterQuests)).map(

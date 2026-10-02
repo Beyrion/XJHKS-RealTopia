@@ -25,6 +25,15 @@
       6935715
     ]
   },
+  "renderStyle": {
+    "kind": "storybook-ink",
+    "seed": 7319,
+    "roughness": 0.84,
+    "metalness": 0.02,
+    "saturation": 0.96,
+    "contrast": 1.05,
+    "textureStrength": 0.42
+  },
   "scenes": {
     "exterior": {
       "camera": {

@@ -2289,7 +2289,12 @@ pub fn run() {
             topia::load_topia_world,
             topia::save_topia_world,
             topia::reset_topia_world,
-            topia::generate_topia_world
+            topia::generate_topia_world,
+            topia::switch_topia_world,
+            topia::complete_topia_onboarding,
+            topia::save_topia_thumbnail,
+            topia::iterate_topia_world,
+            topia::maintain_topia_world
         ]);
     #[cfg(mobile)]
     let builder = builder

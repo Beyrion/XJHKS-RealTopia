@@ -130,6 +130,70 @@ small { font-size: 13px!important; line-height: 1.4; }
 @media (prefers-reduced-motion:reduce) { .scene-portal::before,.topia-landmark.topia-anchor-collapsed::before { animation:none!important; } }
 .topia-drawer-backdrop { position:fixed; inset:86px 0 0; z-index:60; background:rgba(37,37,59,.22); backdrop-filter:blur(2px); }
 .topia-drawer { position:fixed; top:86px; right:0; bottom:0; z-index:61; width:min(480px,62vw); padding:22px 24px 28px; overflow:auto; border-left:2px solid var(--ink); background:linear-gradient(155deg,#fffdf8 0 72%,#eef0ff 100%); box-shadow:-8px 0 24px rgba(37,37,59,.2); }
+.topia-studio-trigger { position:absolute; bottom:14px; left:14px; z-index:9; width:42px; height:42px; display:grid; place-items:center; border:1.5px solid rgba(255,255,255,.75); border-radius:50%; background:rgba(37,37,59,.5); color:#fff; box-shadow:0 6px 18px rgba(37,37,59,.22); backdrop-filter:blur(10px);font-size:22px; }
+.topia-studio-overlay { position:fixed; inset:0; z-index:90; display:grid; place-items:center; padding:20px; background:rgba(28,28,50,.42); backdrop-filter:blur(14px) saturate(.8); }
+.topia-studio-dialog { box-sizing:border-box;width:min(920px,80vw);max-width:80vw;max-height:80vh;overflow:auto;border:2px solid var(--ink);border-radius:24px;background:linear-gradient(145deg,#fffdf8,#f1f1ff);box-shadow:9px 10px 0 var(--ink); }
+.topia-studio-dialog.view-entry { height:min(430px,80vh);overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr); }
+.topia-studio-dialog > header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:flex-start; gap:18px; padding:20px 22px 16px; border-bottom:1.5px solid var(--line); background:rgba(255,253,248,.92); backdrop-filter:blur(12px); }
+.topia-studio-dialog > header h2 { margin:0;font-size:25px; }
+.topia-studio-dialog > header p { margin:5px 0 0;color:var(--muted);font-size:13px; }
+.topia-studio-dialog > header button { width:40px;height:40px;display:grid;place-items:center;border:1.5px solid var(--ink);border-radius:12px;background:#fff; }
+.topia-studio-layout { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(230px,.75fr); gap:18px; padding:20px 22px; }
+.topia-studio-layout.customize { grid-template-columns:minmax(0,1fr); }
+.topia-imagery { display:grid; gap:18px; }
+.topia-guide-progress { display:grid;grid-template-columns:repeat(4,1fr);gap:7px; }
+.topia-guide-progress i { height:5px;border-radius:9px;background:var(--line);transition:background .25s ease,transform .25s ease; }
+.topia-guide-progress i.active { background:var(--blue);transform:scaleY(1.25); }
+.topia-guide-heading h3 { margin:4px 0 5px;font-size:20px; }
+.topia-guide-heading p { margin:0;color:var(--muted);font-size:11px;line-height:1.55; }
+.topia-imagery fieldset { margin:0;padding:0;border:0; }
+.topia-imagery legend,.topia-imagery label > span { display:block;margin-bottom:9px;font-size:14px;font-weight:900; }
+.topia-imagery fieldset > div { display:grid;grid-template-columns:1fr 1fr;gap:8px; }
+.topia-imagery fieldset button { min-height:45px;padding:8px 10px;border:1.5px solid var(--line);border-radius:12px;background:#fff;color:var(--ink);font-weight:800;text-align:left; }
+.topia-imagery fieldset button > span { display:inline-grid;width:25px;height:25px;margin-right:6px;place-items:center;border-radius:8px;background:#f3f1ff;font-size:16px;vertical-align:middle; }
+.topia-imagery fieldset button.selected { border-color:var(--blue);background:rgba(89,104,255,.1);box-shadow:2px 2px 0 var(--blue);color:var(--blue-dark); }
+.topia-imagery textarea { width:100%;min-height:72px;padding:10px 12px;resize:vertical;border:1.5px solid var(--line);border-radius:12px;background:#fff;font:inherit; }
+.topia-world-library { padding:16px;border:1.5px solid var(--ink);border-radius:16px;background:rgba(255,255,255,.7);box-shadow:3px 3px 0 var(--ink); }
+.topia-world-library h3 { margin:0 0 5px; }
+.topia-world-library > p { margin:0 0 14px;color:var(--muted);font-size:11px;line-height:1.5; }
+.topia-world-library > button { width:100%;min-height:55px;margin-top:8px;padding:9px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:12px;background:#fff;text-align:left; }
+.topia-world-library > button.active { border-color:var(--blue);background:#eef0ff; }
+.topia-world-library b,.topia-world-library small { display:block; }
+.topia-world-library small { margin-top:3px;color:var(--muted); }
+.topia-world-library em { padding:4px 7px;border-radius:8px;background:var(--yellow);font-size:10px;font-style:normal;font-weight:900; }
+.topia-world-library > .topia-iterate { margin-top:16px;justify-content:center;border-style:dashed;color:var(--blue-dark);font-weight:900;text-align:center; }
+.topia-studio-dialog > footer { padding:14px 22px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;border-top:1px solid var(--line); }
+.topia-studio-dialog > footer span { color:var(--muted);font-size:11px; }
+.topia-studio-dialog > footer button { min-height:46px;padding:0 18px;display:flex;align-items:center;gap:8px;border:1.5px solid var(--ink);border-radius:13px;background:var(--blue);color:#fff;box-shadow:3px 3px 0 var(--ink);font-weight:900; }
+.topia-guide-actions { display:flex;align-items:center;justify-content:flex-end;gap:9px; }
+.topia-studio-dialog > footer .topia-guide-actions .secondary { background:#fff;color:var(--ink);box-shadow:none; }
+.topia-entry-choice { min-height:0;padding:20px 28px;display:grid; }
+.topia-entry-cards { min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:18px; }
+.topia-entry-cards button { min-height:0;padding:16px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:1.5px solid var(--ink);border-radius:20px;background:#fff;color:var(--ink);box-shadow:4px 4px 0 var(--ink); }
+.topia-entry-cards button:first-child { background:linear-gradient(145deg,#fff8d8,#fff); }
+.topia-entry-cards button:last-child { background:linear-gradient(145deg,#edf0ff,#fff); }
+.topia-entry-cards button > span { font-size:48px;filter:drop-shadow(0 5px 5px rgba(37,37,59,.14)); }
+.topia-entry-cards button b { font-size:18px; }
+.topia-entry-cards button small { color:var(--muted); }
+.topia-history-view { padding:22px; }
+.topia-history-grid { margin-top:18px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px; }
+.topia-history-grid > button { position:relative;min-width:0;padding:0 0 12px;overflow:hidden;display:grid;gap:10px;border:1.5px solid var(--line);border-radius:16px;background:#fff;text-align:left; }
+.topia-history-grid > button.active { border-color:var(--blue);box-shadow:3px 3px 0 var(--blue); }
+.topia-history-thumbnail { aspect-ratio:16/9;display:grid;place-items:center;overflow:hidden;background:linear-gradient(145deg,#8ddce9,#c3a9e7 62%,#ffc490);font-size:45px; }
+.topia-history-thumbnail img { width:100%;height:100%;display:block;object-fit:cover; }
+.topia-history-grid > button > span:not(.topia-history-thumbnail) { min-width:0;padding:0 12px; }
+.topia-history-grid b,.topia-history-grid small { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.topia-history-grid small { margin-top:4px;color:var(--muted); }
+.topia-history-grid em { position:absolute;top:9px;right:9px;padding:4px 7px;border-radius:8px;background:rgba(255,255,255,.88);color:var(--ink);font-size:10px;font-style:normal;font-weight:900;backdrop-filter:blur(8px); }
+.topia-generation-wait { min-height:470px;padding:54px 30px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center; }
+.topia-generation-orbit { position:relative;width:116px;height:116px;margin-bottom:28px;border:1px solid rgba(89,104,255,.25);border-radius:50%;animation:topia-studio-spin 7s linear infinite; }
+.topia-generation-orbit i { position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 16px var(--blue);transform-origin:0 0; }
+.topia-generation-orbit i:nth-child(1){transform:rotate(10deg) translateX(53px)}.topia-generation-orbit i:nth-child(2){transform:rotate(135deg) translateX(53px);background:var(--mint)}.topia-generation-orbit i:nth-child(3){transform:rotate(250deg) translateX(53px);background:var(--yellow)}
+.topia-generation-orbit span { position:absolute;inset:0;display:grid;place-items:center;font-size:38px;animation:topia-studio-spin 7s linear reverse infinite; }
+.topia-generation-wait h3 { margin:0;font-size:22px; }.topia-generation-wait p { max-width:480px;color:var(--muted);line-height:1.7; }
+.topia-generation-progress { width:min(480px,80%);height:9px;margin:18px 0 8px;overflow:hidden;border:1px solid var(--ink);border-radius:20px;background:#fff; }
+.topia-generation-progress i { display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--blue),var(--mint),var(--yellow));transition:width .55s ease; }
+@keyframes topia-studio-spin { to { transform:rotate(360deg); } }
 .topia-drawer-head { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; padding-bottom:16px; border-bottom:1.5px solid var(--line); }
 .topia-drawer-symbol { width:48px; height:48px; display:grid; place-items:center; border:1.5px solid var(--ink); border-radius:15px; background:var(--yellow); box-shadow:2px 2px 0 var(--ink); font-size:27px; }
 .topia-drawer-head small { color:var(--blue-dark); font-size:11px!important; font-weight:900; letter-spacing:.08em; }
@@ -803,6 +867,24 @@ small { font-size: 13px!important; line-height: 1.4; }
 
   .topia-drawer-backdrop { top:54px; }
   .topia-drawer { top:54px; }
+  .topia-studio-overlay { padding:8px; }
+  .topia-studio-dialog { width:min(920px,80vw);max-width:80vw;max-height:80vh;border-radius:18px;box-shadow:4px 4px 0 var(--ink); }
+  .topia-studio-dialog > header { padding:12px 14px 10px; }
+  .topia-studio-dialog > header h2 { font-size:19px; }
+  .topia-studio-dialog > header p { margin-top:3px;font-size:11px; }
+  .topia-studio-dialog > header button { width:34px;height:34px; }
+  .topia-entry-choice { min-height:0;padding:10px 14px 13px; }
+  .topia-entry-cards { gap:12px; }
+  .topia-entry-cards button { min-height:0;padding:8px;border-radius:15px; }
+  .topia-entry-cards button > span { font-size:34px; }
+  .topia-entry-cards button b { font-size:15px; }
+  .topia-history-view { padding:14px; }
+  .topia-history-grid { margin-top:12px;gap:9px; }
+  .topia-history-thumbnail { font-size:34px; }
+  .topia-studio-layout { padding:12px 14px; }
+  .topia-imagery { gap:10px; }
+  .topia-imagery fieldset button { min-height:39px;padding:5px 7px;font-size:11px; }
+  .topia-studio-dialog > footer { padding:9px 14px 12px; }
   .today-head b { font-size: 13px; }
   .today { padding-block: 10px; }
   .today h2 { margin-top: 5px; font-size: 18px; }

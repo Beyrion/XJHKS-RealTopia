@@ -15,6 +15,7 @@ interface TopiaSceneProps {
   world: TopiaWorldConfig;
   focusCategory?: QuestCategory;
   children: React.ReactNode;
+  onThumbnail?: (thumbnail: string) => void;
 }
 
 export function TopiaScene({
@@ -25,6 +26,7 @@ export function TopiaScene({
   world,
   focusCategory,
   children,
+  onThumbnail,
 }: TopiaSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -39,6 +41,9 @@ export function TopiaScene({
           location,
           crops,
           scene: world.scenes[location],
+          sky: world.sky,
+          renderStyle: world.renderStyle,
+          onThumbnail: location === "exterior" ? onThumbnail : undefined,
         });
       }
     });
@@ -46,7 +51,7 @@ export function TopiaScene({
       cancelled = true;
       dispose?.();
     };
-  }, [crops, location, mood.intensity, mood.mood, stage, world]);
+  }, [crops, location, mood.intensity, mood.mood, onThumbnail, stage, world]);
 
   return (
     <section
@@ -54,6 +59,7 @@ export function TopiaScene({
       data-topia-scene={location}
       data-topia-world={world.id}
       data-topia-world-source={world.source}
+      data-topia-render-style={world.renderStyle?.kind ?? "storybook-ink"}
       data-topia-object-count={world.scenes[location].objects.length}
       data-focus-category={focusCategory ?? "general"}
       style={{ "--mood-intensity": mood.intensity / 100 } as CSSProperties}

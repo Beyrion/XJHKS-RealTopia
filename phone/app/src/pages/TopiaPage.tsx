@@ -1,9 +1,10 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MoodDialog } from "../components/topia/MoodDialog";
 import { MoodWeather } from "../components/topia/MoodWeather";
 import { TopiaLandmarkDrawer } from "../components/topia/TopiaLandmarkDrawer";
 import { TopiaScene } from "../components/topia/TopiaScene";
+import { TopiaStudioDialog } from "../components/topia/TopiaStudioDialog";
 import { Icon } from "../components/ui/Icon";
 import { moodEmoji, moodProfiles } from "../data/appData";
 import { useMoodCheckIn } from "../hooks/useMoodCheckIn";
@@ -13,10 +14,13 @@ import {
 } from "../hooks/useQuickVoiceRecording";
 import type {
   TopiaLandmark,
+  TopiaGenerationProgress,
   TopiaLocation,
+  TopiaUserProfileInput,
   TopiaWorldPayload,
 } from "../models";
 import { topiaWorldService } from "../services/topiaWorld";
+import { storage } from "../services/storage";
 import { useAppStore } from "../store/AppStore";
 import {
   calculateVitality,
@@ -54,6 +58,11 @@ export default function TopiaPage() {
     null,
   );
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
+  const [topiaStudioOpen, setTopiaStudioOpen] = useState(false);
+  const [hadPersistedUserData] = useState(storage.hasPersistedUserData);
+  const [topiaGenerating, setTopiaGenerating] = useState(false);
+  const [topiaProgress, setTopiaProgress] =
+    useState<TopiaGenerationProgress | null>(null);
   const moodCheckIn = useMoodCheckIn();
   const quickVoice = useQuickVoiceRecording();
   useEffect(() => {
@@ -80,6 +89,42 @@ export default function TopiaPage() {
     };
     window.addEventListener("realtopia:topia-world", update);
     return () => window.removeEventListener("realtopia:topia-world", update);
+  }, []);
+  useEffect(() => {
+    if (!topiaPayload?.studio.needsOnboarding) return;
+    if (!hadPersistedUserData) {
+      setTopiaStudioOpen(true);
+      return;
+    }
+    void topiaWorldService
+      .completeOnboarding({ quests, people, memories })
+      .then(setTopiaPayload)
+      .catch((error) =>
+        notify(
+          `Topia 状态迁移失败：${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+  }, [hadPersistedUserData, memories, notify, people, quests, topiaPayload?.studio.needsOnboarding]);
+  useEffect(() => {
+    if (!topiaPayload || topiaGenerating || topiaPayload.studio.needsOnboarding)
+      return;
+    void topiaWorldService
+      .maintain({ quests, people, memories })
+      .then((next) => next && setTopiaPayload(next))
+      .catch(() => undefined);
+  }, [
+    memories,
+    people,
+    quests,
+    topiaGenerating,
+    topiaPayload?.studio.activeWorldId,
+  ]);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void topiaWorldService.onProgress(setTopiaProgress).then((dispose) => {
+      unlisten = dispose;
+    });
+    return () => unlisten?.();
   }, []);
   const vitality = calculateVitality(quests, memories, gameEvents);
   const stage = vitality >= 80 ? 3 : vitality >= 60 ? 2 : 1;
@@ -130,12 +175,85 @@ export default function TopiaPage() {
     setConversationPickerOpen(false);
     void quickVoice.start("conversation", personId);
   };
+  const worldContext = { quests, people, memories };
+  const runTopiaAction = async (action: () => Promise<TopiaWorldPayload>) => {
+    setTopiaGenerating(true);
+    setTopiaProgress(null);
+    try {
+      const next = await action();
+      setTopiaPayload(next);
+      setLocation("exterior");
+      setSelectedLandmark(null);
+      notify("Topia 已更新");
+    } catch (error) {
+      notify(
+        `Topia 更新失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setTopiaGenerating(false);
+    }
+  };
+  const generateTopia = (nextProfile: TopiaUserProfileInput) =>
+    void runTopiaAction(() =>
+      topiaWorldService.generate(nextProfile, worldContext),
+    );
+  const iterateTopia = () => {
+    void runTopiaAction(() => topiaWorldService.iterate(worldContext));
+  };
+  const switchTopia = (worldId: string) =>
+    void runTopiaAction(() =>
+      topiaWorldService.switchWorld(worldId, worldContext),
+    );
+  const useDefaultTopia = async () => {
+    try {
+      const next = await topiaWorldService.completeOnboarding(worldContext);
+      setTopiaPayload(next);
+      setTopiaStudioOpen(false);
+    } catch (error) {
+      notify(
+        `默认 Topia 启用失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+  const saveThumbnail = useCallback(
+    (thumbnail: string) => {
+      const worldId = topiaPayload?.world.id;
+      const existing = topiaPayload?.studio.worlds.find(
+        (world) => world.id === worldId,
+      )?.thumbnail;
+      if (!worldId || existing) return;
+      void topiaWorldService
+        .saveThumbnail(worldId, thumbnail)
+        .then(() =>
+          setTopiaPayload((current) =>
+            current
+              ? {
+                  ...current,
+                  studio: {
+                    ...current.studio,
+                    worlds: current.studio.worlds.map((world) =>
+                      world.id === worldId ? { ...world, thumbnail } : world,
+                    ),
+                  },
+                }
+              : current,
+          ),
+        )
+        .catch(() => undefined);
+    },
+    [topiaPayload?.studio.worlds, topiaPayload?.world.id],
+  );
 
   if (!topiaPayload) {
     return <div className="topia topia-loading" aria-busy="true" />;
   }
 
   const { world: topiaWorld, crops } = topiaPayload;
+  const needsFirstRun =
+    topiaPayload.studio.needsOnboarding;
+  const activeWorldThumbnail = topiaPayload.studio.worlds.find(
+    (world) => world.id === topiaWorld.id,
+  )?.thumbnail;
 
   return (
     <div className="topia">
@@ -146,6 +264,7 @@ export default function TopiaPage() {
         crops={crops}
         world={topiaWorld}
         focusCategory={focusCategory}
+        onThumbnail={activeWorldThumbnail ? undefined : saveThumbnail}
       >
         <MoodWeather mood={currentMood.mood} />
         {focus && (
@@ -176,6 +295,14 @@ export default function TopiaPage() {
             </button>
           ))}
         </div>
+        <button
+          className="topia-studio-trigger"
+          aria-label="打开 Topia 工坊"
+          title="切换或生成 Topia"
+          onClick={() => setTopiaStudioOpen(true)}
+        >
+          <span aria-hidden="true">🎨</span>
+        </button>
         {location === "exterior" && (
           <>
             <button
@@ -419,6 +546,18 @@ export default function TopiaPage() {
           </section>
         </div>
       )}
+      <TopiaStudioDialog
+        open={topiaStudioOpen}
+        mode={needsFirstRun ? "onboarding" : "manage"}
+        studio={topiaPayload.studio}
+        progress={topiaProgress}
+        generating={topiaGenerating}
+        onClose={() => setTopiaStudioOpen(false)}
+        onUseDefault={() => void useDefaultTopia()}
+        onGenerate={generateTopia}
+        onIterate={iterateTopia}
+        onSwitch={switchTopia}
+      />
       <MoodDialog
         open={moodCheckIn.open}
         phase={moodCheckIn.phase}

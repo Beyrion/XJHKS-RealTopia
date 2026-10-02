@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   Memory,
   Person,
   Quest,
   TopiaUserProfileInput,
+  TopiaGenerationProgress,
   TopiaWorldConfig,
   TopiaWorldPayload,
 } from "../models";
@@ -34,4 +36,25 @@ export const topiaWorldService = {
     invoke<TopiaWorldPayload>("generate_topia_world", {
       input: { profile, context },
     }).then(publish),
+  iterate: (context: TopiaWorldContext) =>
+    invoke<TopiaWorldPayload>("iterate_topia_world", { context }).then(publish),
+  maintain: (context: TopiaWorldContext) =>
+    invoke<TopiaWorldPayload | null>("maintain_topia_world", { context }).then(
+      (payload) => (payload ? publish(payload) : null),
+    ),
+  switchWorld: (worldId: string, context: TopiaWorldContext) =>
+    invoke<TopiaWorldPayload>("switch_topia_world", {
+      worldId,
+      context,
+    }).then(publish),
+  completeOnboarding: (context: TopiaWorldContext) =>
+    invoke<TopiaWorldPayload>("complete_topia_onboarding", { context }).then(
+      publish,
+    ),
+  saveThumbnail: (worldId: string, thumbnail: string) =>
+    invoke<void>("save_topia_thumbnail", { worldId, thumbnail }),
+  onProgress: (callback: (progress: TopiaGenerationProgress) => void) =>
+    listen<TopiaGenerationProgress>("topia-generation-progress", (event) =>
+      callback(event.payload),
+    ),
 };
