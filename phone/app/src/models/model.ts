@@ -9,6 +9,7 @@ export interface ModelRequest {
   images?: Uint8Array[];
   private?: boolean;
   json?: boolean;
+  timeoutMs?: number;
 }
 
 export interface ModelResponse {

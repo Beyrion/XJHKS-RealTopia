@@ -1,24 +1,31 @@
-import { type CSSProperties, useCallback, useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
-import { MoodDialog } from "../components/topia/MoodDialog";
 import { MoodWeather } from "../components/topia/MoodWeather";
 import { TopiaLandmarkDrawer } from "../components/topia/TopiaLandmarkDrawer";
 import { TopiaScene } from "../components/topia/TopiaScene";
 import { TopiaStudioDialog } from "../components/topia/TopiaStudioDialog";
 import { Icon } from "../components/ui/Icon";
 import { moodEmoji, moodProfiles } from "../data/appData";
-import { useMoodCheckIn } from "../hooks/useMoodCheckIn";
 import {
   type QuickVoiceKind,
   useQuickVoiceRecording,
 } from "../hooks/useQuickVoiceRecording";
 import type {
+  MoodKind,
   TopiaLandmark,
   TopiaGenerationProgress,
   TopiaLocation,
   TopiaUserProfileInput,
   TopiaWorldPayload,
 } from "../models";
+import { moodKinds } from "../models";
 import { topiaWorldService } from "../services/topiaWorld";
 import { storage } from "../services/storage";
 import { useAppStore } from "../store/AppStore";
@@ -28,6 +35,7 @@ import {
   questCategoryMeta,
   recommendedQuest,
 } from "../utils/gameRules";
+import { attachSouvenirsToTopia } from "../utils/souvenir";
 
 const locations: Array<{
   id: TopiaLocation;
@@ -39,6 +47,19 @@ const locations: Array<{
   { id: "garden", emoji: "🌱", label: "菜地" },
 ];
 
+const manualMoodIntensity: Record<MoodKind, number> = {
+  joyful: 72,
+  calm: 52,
+  sad: 64,
+  anxious: 68,
+  angry: 70,
+  tired: 66,
+  neutral: 35,
+};
+
+// Capture this before the app store seeds its starter roster into localStorage.
+const hadPersistedUserDataAtBoot = storage.hasPersistedUserData();
+
 export default function TopiaPage() {
   const navigate = useNavigate();
   const {
@@ -49,7 +70,12 @@ export default function TopiaPage() {
     activeQuestId,
     gameEvents,
     session,
+    souvenirs,
     notify,
+    worldEvents,
+    acceptWorldEvent,
+    ignoreWorldEvent,
+    updateMood,
   } = useAppStore();
   const [location, setLocation] = useState<TopiaLocation>("exterior");
   const [selectedLandmark, setSelectedLandmark] =
@@ -59,11 +85,12 @@ export default function TopiaPage() {
   );
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
   const [topiaStudioOpen, setTopiaStudioOpen] = useState(false);
-  const [hadPersistedUserData] = useState(storage.hasPersistedUserData);
+  const [hadPersistedUserData] = useState(hadPersistedUserDataAtBoot);
   const [topiaGenerating, setTopiaGenerating] = useState(false);
   const [topiaProgress, setTopiaProgress] =
     useState<TopiaGenerationProgress | null>(null);
-  const moodCheckIn = useMoodCheckIn();
+  const [moodMenuOpen, setMoodMenuOpen] = useState(false);
+  const moodControlRef = useRef<HTMLDivElement>(null);
   const quickVoice = useQuickVoiceRecording();
   useEffect(() => {
     let active = true;
@@ -104,7 +131,14 @@ export default function TopiaPage() {
           `Topia 状态迁移失败：${error instanceof Error ? error.message : String(error)}`,
         ),
       );
-  }, [hadPersistedUserData, memories, notify, people, quests, topiaPayload?.studio.needsOnboarding]);
+  }, [
+    hadPersistedUserData,
+    memories,
+    notify,
+    people,
+    quests,
+    topiaPayload?.studio.needsOnboarding,
+  ]);
   useEffect(() => {
     if (!topiaPayload || topiaGenerating || topiaPayload.studio.needsOnboarding)
       return;
@@ -126,6 +160,22 @@ export default function TopiaPage() {
     });
     return () => unlisten?.();
   }, []);
+  useEffect(() => {
+    if (!moodMenuOpen) return;
+    const closeFromOutside = (event: PointerEvent) => {
+      if (!moodControlRef.current?.contains(event.target as Node))
+        setMoodMenuOpen(false);
+    };
+    const closeFromKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoodMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeFromOutside);
+    document.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", closeFromOutside);
+      document.removeEventListener("keydown", closeFromKeyboard);
+    };
+  }, [moodMenuOpen]);
   const vitality = calculateVitality(quests, memories, gameEvents);
   const stage = vitality >= 80 ? 3 : vitality >= 60 ? 2 : 1;
   const focus = recommendedQuest(quests, activeQuestId);
@@ -137,10 +187,38 @@ export default function TopiaPage() {
     day: "numeric",
   }).format(new Date());
   const profile = moodProfiles[currentMood.mood];
-  const sceneLandmarks = topiaPayload?.world.scenes[location].landmarks ?? [];
+  const pendingWorldEvent = worldEvents.find(
+    (item) =>
+      item.status === "pending" && Date.parse(item.expiresAt) > Date.now(),
+  );
+  const composedTopia = useMemo(
+    () =>
+      topiaPayload
+        ? attachSouvenirsToTopia(topiaPayload.world, [
+            ...souvenirs,
+          ])
+        : null,
+    [souvenirs, topiaPayload],
+  );
+  const sceneLandmarks = composedTopia?.world.scenes[location].landmarks ?? [];
   const openLocation = (nextLocation: TopiaLocation) => {
     setSelectedLandmark(null);
+    setMoodMenuOpen(false);
     setLocation(nextLocation);
+  };
+  const selectMood = (mood: MoodKind) => {
+    const nextProfile = moodProfiles[mood];
+    updateMood({
+      mood,
+      intensity: manualMoodIntensity[mood],
+      summary: `此刻感到${nextProfile.label}`,
+      support: `Topia 会用${nextProfile.effect}回应你。`,
+      transcript: "",
+      model: "manual-picker",
+      analyzedAt: new Date().toISOString(),
+    });
+    setMoodMenuOpen(false);
+    notify(`心情已切换为「${nextProfile.label}」`);
   };
   const quickAction = (kind: QuickVoiceKind) => {
     if (quickVoice.kind === kind && quickVoice.phase === "listening") {
@@ -213,10 +291,20 @@ export default function TopiaPage() {
       topiaWorldService.iterate(worldContext),
     );
   };
-  const switchTopia = (worldId: string) =>
-    void runTopiaAction("iterate", () =>
-      topiaWorldService.switchWorld(worldId, worldContext),
-    );
+  const switchTopia = async (worldId: string) => {
+    try {
+      const next = await topiaWorldService.switchWorld(worldId, worldContext);
+      setTopiaPayload(next);
+      setLocation("exterior");
+      setSelectedLandmark(null);
+      setTopiaStudioOpen(false);
+      notify(`已切换至「${next.world.profile.homeName}」`);
+    } catch (error) {
+      notify(
+        `Topia 切换失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
   const useDefaultTopia = async () => {
     try {
       const next = await topiaWorldService.completeOnboarding(worldContext);
@@ -261,12 +349,38 @@ export default function TopiaPage() {
     return <div className="topia topia-loading" aria-busy="true" />;
   }
 
-  const { world: topiaWorld, crops } = topiaPayload;
-  const needsFirstRun =
-    topiaPayload.studio.needsOnboarding;
+  const { crops } = topiaPayload;
+  const { world: topiaWorld, placements: souvenirPlacements } = composedTopia!;
+  const needsFirstRun = topiaPayload.studio.needsOnboarding;
   const activeWorldThumbnail = topiaPayload.studio.worlds.find(
     (world) => world.id === topiaWorld.id,
   )?.thumbnail;
+  const latestSouvenirPlacement = souvenirs[0]
+    ? souvenirPlacements.find(
+        (placement) => placement.souvenir.id === souvenirs[0].id,
+      )
+    : undefined;
+  const souvenirByAnchor = new Map(
+    souvenirPlacements.map((placement) => [
+      placement.landmark.anchorId,
+      placement.souvenir.id,
+    ]),
+  );
+  const selectedSouvenirObject = selectedLandmark
+    ? Object.values(topiaWorld.scenes)
+        .flatMap((scene) => scene.objects)
+        .find(
+          (object) =>
+            object.layer === "souvenir" &&
+            object.anchorId === selectedLandmark.anchorId,
+        )
+    : undefined;
+  const openLatestSouvenir = () => {
+    if (!latestSouvenirPlacement) return;
+    setMoodMenuOpen(false);
+    setLocation(latestSouvenirPlacement.location);
+    setSelectedLandmark(latestSouvenirPlacement.landmark);
+  };
 
   return (
     <div className="topia">
@@ -341,6 +455,7 @@ export default function TopiaPage() {
             className={`topia-landmark topia-landmark-${landmark.id}`}
             data-topia-landmark={landmark.id}
             data-topia-anchor={landmark.anchorId}
+            data-topia-souvenir={souvenirByAnchor.get(landmark.anchorId)}
             key={landmark.id}
             aria-label={landmark.label}
             style={landmark.fallbackPlacement}
@@ -353,15 +468,63 @@ export default function TopiaPage() {
             )}
           </button>
         ))}
-        <button
-          className="mood-indicator"
-          id="world-mood"
-          aria-label={`当前心情：${profile.label}，${profile.weather}`}
-          title={`${profile.label} · ${profile.weather}`}
-          onClick={moodCheckIn.show}
-        >
-          {moodEmoji[currentMood.mood]}
-        </button>
+        {souvenirs[0] && latestSouvenirPlacement && (
+          <button
+            type="button"
+            className="latest-souvenir"
+            data-souvenir={souvenirs[0].id}
+            data-souvenir-location={latestSouvenirPlacement.location}
+            aria-label={`查看最新纪念品：${souvenirs[0].name}`}
+            onClick={openLatestSouvenir}
+          >
+            <span aria-hidden="true">{souvenirs[0].emoji}</span>
+            <span>
+              <small>最新纪念品</small>
+              <b>{souvenirs[0].name}</b>
+            </span>
+            <Icon name="ChevronRight" />
+          </button>
+        )}
+        <div className="mood-picker-control" ref={moodControlRef}>
+          <button
+            className="mood-indicator"
+            id="world-mood"
+            aria-label={`当前心情：${profile.label}，点击直接修改`}
+            aria-haspopup="menu"
+            aria-expanded={moodMenuOpen}
+            aria-controls="world-mood-menu"
+            title={`${profile.label} · 点击修改心情`}
+            onClick={() => setMoodMenuOpen((open) => !open)}
+          >
+            {moodEmoji[currentMood.mood]}
+          </button>
+          {moodMenuOpen && (
+            <div
+              className="mood-picker-menu"
+              id="world-mood-menu"
+              role="menu"
+              aria-label="直接选择心情"
+            >
+              <small>此刻的心情</small>
+              <div>
+                {moodKinds.map((mood) => (
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={currentMood.mood === mood}
+                    className={currentMood.mood === mood ? "active" : ""}
+                    data-mood-choice={mood}
+                    key={mood}
+                    onClick={() => selectMood(mood)}
+                  >
+                    <span aria-hidden="true">{moodEmoji[mood]}</span>
+                    <b>{moodProfiles[mood].label}</b>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </TopiaScene>
       <div className="today-column">
         <div className="quick-actions" aria-label="快速记录">
@@ -480,7 +643,8 @@ export default function TopiaPage() {
           <button
             className="today-item"
             id="today-mood"
-            onClick={moodCheckIn.show}
+            aria-label="直接修改当前心情"
+            onClick={() => setMoodMenuOpen(true)}
           >
             <span className="item-icon avatar">
               <Icon name="Heart" />
@@ -495,6 +659,34 @@ export default function TopiaPage() {
           </button>
         </aside>
       </div>
+      {pendingWorldEvent && (
+        <section className="world-event-card" aria-live="polite">
+          <header>
+            <span>✦</span>
+            <div>
+              <small>动态世界事件 · {pendingWorldEvent.locationLabel}</small>
+              <b>{pendingWorldEvent.title}</b>
+            </div>
+          </header>
+          <p>{pendingWorldEvent.description}</p>
+          <small>{pendingWorldEvent.reason}</small>
+          <div>
+            <button
+              id="world-event-ignore"
+              onClick={() => ignoreWorldEvent(pendingWorldEvent.id)}
+            >
+              暂时忽略
+            </button>
+            <button
+              className="primary"
+              id="world-event-accept"
+              onClick={() => acceptWorldEvent(pendingWorldEvent.id)}
+            >
+              接受事件
+            </button>
+          </div>
+        </section>
+      )}
       {conversationPickerOpen && (
         <div
           className="person-enroll-backdrop"
@@ -571,22 +763,13 @@ export default function TopiaPage() {
         onIterate={iterateTopia}
         onSwitch={switchTopia}
       />
-      <MoodDialog
-        open={moodCheckIn.open}
-        phase={moodCheckIn.phase}
-        mood={moodCheckIn.currentMood}
-        error={moodCheckIn.error}
-        onStart={() => void moodCheckIn.start()}
-        onCancel={() => void moodCheckIn.cancel()}
-        onFinishListening={() => void moodCheckIn.finishListening()}
-        onClose={moodCheckIn.close}
-      />
       {selectedLandmark && (
         <TopiaLandmarkDrawer
           landmark={selectedLandmark}
           memories={memories}
           quests={quests}
           people={people}
+          souvenirObject={selectedSouvenirObject}
           onClose={() => setSelectedLandmark(null)}
         />
       )}

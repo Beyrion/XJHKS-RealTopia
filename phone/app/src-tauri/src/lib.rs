@@ -19,6 +19,22 @@ use strangers::photo_path;
 use strangers::{StrangerStore, StrangerSummary};
 use tauri::Manager;
 
+/// Tauri's Android plugin bridge is synchronous from Rust's point of view,
+/// even when the Kotlin plugin does its work on an ExecutorService.  Never
+/// wait for a model, network request, picker, or capture pipeline on the
+/// command dispatcher: doing so prevents unrelated commands (notably
+/// recording finish/cancel and session polling) from being handled.
+#[cfg(mobile)]
+async fn run_blocking_command<T, F>(name: &'static str, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("{name} 后台任务异常: {error}"))?
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
@@ -113,6 +129,44 @@ struct RecordingMetric {
     duration_ms: i64,
     transfer_ms: i64,
     path: String,
+    #[serde(default)]
+    partial: bool,
+    #[serde(default)]
+    conversation_id: Option<u64>,
+    #[serde(default)]
+    sequence: u32,
+    #[serde(default)]
+    chunk: bool,
+    #[serde(default)]
+    final_chunk: bool,
+    #[serde(default)]
+    vad_latency_ms: Option<f64>,
+    #[serde(default)]
+    vad_reason: Option<String>,
+    #[serde(default)]
+    turn_label: Option<String>,
+    #[serde(default)]
+    turn_latency_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct VadChunkResult {
+    ready: bool,
+    speech_detected: bool,
+    probability: f64,
+    latency_ms: f64,
+    reason: String,
+    #[serde(default)]
+    turn_label: Option<String>,
+    #[serde(default)]
+    turn_probabilities: Vec<f64>,
+    #[serde(default)]
+    turn_latency_ms: f64,
+    #[serde(default)]
+    turn_frontend_ms: f64,
+    #[serde(default)]
+    turn_inference_ms: f64,
+    segment: Option<RecordingMetric>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -122,6 +176,10 @@ struct PersonChoiceMetric {
     choice_index: u8,
     choice_id: String,
     label: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    context_id: String,
     input: String,
     selected_at_elapsed_ms: i64,
     received_at_ms: i64,
@@ -200,10 +258,22 @@ struct CloudModelResult {
     latency_ms: i64,
 }
 
+#[tauri::command]
+fn backend_diagnostic_log(app: tauri::AppHandle) -> Result<String, String> {
+    diagnostics::tail(&app, 300)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct MoodSpeechResult {
     transcript: String,
     confidence: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RealWorldContext {
+    captured_at_ms: i64,
+    location: serde_json::Value,
+    calendar: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -237,6 +307,17 @@ struct PersonHud<'a> {
     affinity: i32,
     quest: &'a str,
     story: &'a str,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ChoiceCardRequest {
+    person_id: String,
+    name: String,
+    title: String,
+    affinity: i32,
+    quest: String,
+    story: String,
+    choices_json: String,
 }
 
 #[cfg(mobile)]
@@ -298,7 +379,7 @@ fn person_hud(person_id: &str) -> PersonHud<'_> {
 
 #[cfg(mobile)]
 mod mobile_transport {
-    use super::{GlassDevice, NativeTransportState, PersonHud};
+    use super::{GlassDevice, NativeTransportState, PersonHud, RecordingMetric};
     use serde::Serialize;
     use tauri::{
         plugin::{Builder, PluginHandle, TauriPlugin},
@@ -338,6 +419,13 @@ mod mobile_transport {
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
+    struct RecoverRequest<'a> {
+        request_id: u64,
+        reason: &'a str,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct ShowPersonRequest<'a> {
         person_id: &'a str,
         name: &'a str,
@@ -345,6 +433,7 @@ mod mobile_transport {
         affinity: i32,
         quest: &'a str,
         story: &'a str,
+        choices_json: &'a str,
     }
 
     #[derive(serde::Deserialize)]
@@ -362,6 +451,11 @@ mod mobile_transport {
     #[derive(serde::Deserialize)]
     struct AcceptedResponse {
         accepted: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct PendingRecordingResponse {
+        recording: Option<RecordingMetric>,
     }
 
     impl<R: Runtime> RealiaTransport<R> {
@@ -399,6 +493,24 @@ mod mobile_transport {
             self.0
                 .run_mobile_plugin("state", ())
                 .map_err(|error| error.to_string())
+        }
+
+        pub fn recover(
+            &self,
+            request_id: u64,
+            reason: &str,
+        ) -> Result<NativeTransportState, String> {
+            self.0
+                .run_mobile_plugin("recover", RecoverRequest { request_id, reason })
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn take_recording(&self) -> Result<Option<RecordingMetric>, String> {
+            let response: PendingRecordingResponse = self
+                .0
+                .run_mobile_plugin("takeRecording", ())
+                .map_err(|error| error.to_string())?;
+            Ok(response.recording)
         }
 
         pub fn capture(
@@ -453,7 +565,11 @@ mod mobile_transport {
             }
         }
 
-        pub fn show_person(&self, person: &PersonHud<'_>) -> Result<(), String> {
+        pub fn show_person(
+            &self,
+            person: &PersonHud<'_>,
+            choices_json: &str,
+        ) -> Result<(), String> {
             let response: AcceptedResponse = self
                 .0
                 .run_mobile_plugin(
@@ -465,6 +581,7 @@ mod mobile_transport {
                         affinity: person.affinity,
                         quest: person.quest,
                         story: person.story,
+                        choices_json,
                     },
                 )
                 .map_err(|error| error.to_string())?;
@@ -474,6 +591,8 @@ mod mobile_transport {
                 Err("transport rejected person HUD event".into())
             }
         }
+
+
     }
 
     pub fn init<R: Runtime>() -> TauriPlugin<R> {
@@ -485,6 +604,35 @@ mod mobile_transport {
                 Ok(())
             })
             .build()
+    }
+}
+
+#[tauri::command]
+fn show_choice_card(request: ChoiceCardRequest, app: tauri::AppHandle) -> Result<(), String> {
+    if request.person_id.trim().is_empty()
+        || request.person_id.len() > 128
+        || request.name.trim().is_empty()
+        || request.choices_json.len() > 4096
+    {
+        return Err("invalid choice card".into());
+    }
+    #[cfg(mobile)]
+    {
+        let person = PersonHud {
+            id: &request.person_id,
+            name: &request.name,
+            title: &request.title,
+            affinity: request.affinity.clamp(-2, 100),
+            quest: &request.quest,
+            story: &request.story,
+        };
+        app.state::<mobile_transport::RealiaTransport<tauri::Wry>>()
+            .show_person(&person, &request.choices_json)
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (request, app);
+        Err("眼镜选择卡片仅支持 Android 应用".into())
     }
 }
 
@@ -769,6 +917,64 @@ mod mobile_asr {
 }
 
 #[cfg(mobile)]
+mod mobile_vad {
+    use super::{RecordingMetric, VadChunkResult};
+    use serde::Serialize;
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        Manager, Runtime,
+    };
+
+    pub struct RealiaVad<R: Runtime>(PluginHandle<R>);
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct VadChunkRequest<'a> {
+        pcm_path: &'a str,
+        recording_id: u64,
+        conversation_id: u64,
+        sequence: u32,
+        sample_rate: u32,
+        channels: u32,
+        encoding: &'a str,
+        transfer_ms: i64,
+    }
+
+    impl<R: Runtime> RealiaVad<R> {
+        pub fn accept(&self, recording: &RecordingMetric) -> Result<VadChunkResult, String> {
+            self.0
+                .run_mobile_plugin(
+                    "acceptChunk",
+                    VadChunkRequest {
+                        pcm_path: &recording.path,
+                        recording_id: recording.recording_id,
+                        conversation_id: recording
+                            .conversation_id
+                            .unwrap_or(recording.recording_id),
+                        sequence: recording.sequence,
+                        sample_rate: recording.sample_rate,
+                        channels: recording.channels,
+                        encoding: &recording.encoding,
+                        transfer_ms: recording.transfer_ms,
+                    },
+                )
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+        Builder::new("realia-vad")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("com.realtopia.phone.vad", "RealiaVadPlugin")?;
+                app.manage(RealiaVad(handle));
+                Ok(())
+            })
+            .build()
+    }
+}
+
+#[cfg(mobile)]
 mod mobile_vl {
     use super::LocalVisionResult;
     use serde::Serialize;
@@ -940,6 +1146,12 @@ mod mobile_mood {
                 .map_err(|error| error.to_string())
         }
 
+        pub fn listen_automatic(&self) -> Result<MoodAudioResult, String> {
+            self.0
+                .run_mobile_plugin("listenAutomatic", ())
+                .map_err(|error| error.to_string())
+        }
+
         pub fn finish(&self) -> Result<(), String> {
             self.0
                 .run_mobile_plugin("finish", ())
@@ -962,6 +1174,59 @@ mod mobile_mood {
                 Ok(())
             })
             .build()
+    }
+}
+
+#[cfg(mobile)]
+mod mobile_context {
+    use super::RealWorldContext;
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        Manager, Runtime,
+    };
+
+    pub struct RealiaContext<R: Runtime>(PluginHandle<R>);
+
+    impl<R: Runtime> RealiaContext<R> {
+        pub fn snapshot(&self) -> Result<RealWorldContext, String> {
+            self.0
+                .run_mobile_plugin("snapshot", ())
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+        Builder::new("realia-context")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin(
+                    "com.realtopia.phone.context",
+                    "RealiaContextPlugin",
+                )?;
+                app.manage(RealiaContext(handle));
+                Ok(())
+            })
+            .build()
+    }
+}
+
+#[tauri::command]
+async fn real_world_context(app: tauri::AppHandle) -> Result<RealWorldContext, String> {
+    #[cfg(mobile)]
+    {
+        run_blocking_command("读取现实世界上下文", move || {
+            app.state::<mobile_context::RealiaContext<tauri::Wry>>()
+                .snapshot()
+        })
+        .await
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(RealWorldContext {
+            captured_at_ms: 0,
+            location: serde_json::json!({"available": false}),
+            calendar: vec![],
+        })
     }
 }
 
@@ -1054,7 +1319,7 @@ fn open_model_repository(app: tauri::AppHandle, model_id: String) -> Result<(), 
 }
 
 #[tauri::command]
-fn pick_and_analyze_with_vl(
+async fn pick_and_analyze_with_vl(
     model_id: String,
     prompt: String,
     max_new_tokens: Option<u32>,
@@ -1062,13 +1327,15 @@ fn pick_and_analyze_with_vl(
 ) -> Result<LocalVisionResult, String> {
     #[cfg(mobile)]
     {
-        return app
-            .state::<mobile_vl::RealiaVl<tauri::Wry>>()
-            .pick_and_analyze(
-                &model_id,
-                &prompt,
-                max_new_tokens.unwrap_or(128).clamp(8, 512),
-            );
+        return run_blocking_command("选择图片并进行视觉分析", move || {
+            app.state::<mobile_vl::RealiaVl<tauri::Wry>>()
+                .pick_and_analyze(
+                    &model_id,
+                    &prompt,
+                    max_new_tokens.unwrap_or(128).clamp(8, 512),
+                )
+        })
+        .await;
     }
     #[cfg(not(mobile))]
     {
@@ -1078,7 +1345,7 @@ fn pick_and_analyze_with_vl(
 }
 
 #[tauri::command]
-fn analyze_last_capture_with_vl(
+async fn analyze_last_capture_with_vl(
     model_id: String,
     prompt: String,
     max_new_tokens: Option<u32>,
@@ -1097,13 +1364,16 @@ fn analyze_last_capture_with_vl(
     }
     #[cfg(mobile)]
     {
-        return app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
-            &model_id,
-            &capture.path,
-            capture.rotation_degrees,
-            &prompt,
-            max_new_tokens.unwrap_or(128).clamp(8, 512),
-        );
+        return run_blocking_command("视觉分析", move || {
+            app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
+                &model_id,
+                &capture.path,
+                capture.rotation_degrees,
+                &prompt,
+                max_new_tokens.unwrap_or(128).clamp(8, 512),
+            )
+        })
+        .await;
     }
     #[cfg(not(mobile))]
     {
@@ -1113,7 +1383,7 @@ fn analyze_last_capture_with_vl(
 }
 
 #[tauri::command]
-fn observe_scene_with_vl(
+async fn observe_scene_with_vl(
     model_id: String,
     prompt: String,
     max_new_tokens: Option<u32>,
@@ -1124,53 +1394,58 @@ fn observe_scene_with_vl(
 ) -> Result<SceneObservationResult, String> {
     #[cfg(mobile)]
     {
-        if let Some((mut capture, snapshot_path)) = snapshot_latest_stream_capture(&app)? {
-            let snapshot_value = snapshot_path.to_string_lossy().into_owned();
-            let mut analysis_capture = capture.clone();
-            analysis_capture.mode = "scene_snapshot".into();
-            analysis_capture.stream = false;
-            analysis_capture.path = snapshot_value.clone();
-            let face = analyze_scene_face(&app, &state, &analysis_capture).ok();
-            let vision_result = app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
+        let _ = state;
+        return run_blocking_command("场景观察", move || {
+            let state = app.state::<AppState>();
+            if let Some((mut capture, snapshot_path)) = snapshot_latest_stream_capture(&app)? {
+                let snapshot_value = snapshot_path.to_string_lossy().into_owned();
+                let mut analysis_capture = capture.clone();
+                analysis_capture.mode = "scene_snapshot".into();
+                analysis_capture.stream = false;
+                analysis_capture.path = snapshot_value.clone();
+                let face = analyze_scene_face(&app, &state, &analysis_capture).ok();
+                let vision_result = app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
+                    &model_id,
+                    &snapshot_value,
+                    capture.rotation_degrees,
+                    &prompt,
+                    max_new_tokens.unwrap_or(96).clamp(8, 512),
+                );
+                let _ = std::fs::remove_file(&snapshot_path);
+                let vision = vision_result?;
+                capture.mode = "scene_snapshot".into();
+                capture.stream = false;
+                return Ok(SceneObservationResult {
+                    capture,
+                    face,
+                    vision,
+                });
+            }
+
+            let ticket = queue_capture(&app, "hot", width, quality, &state)?;
+            let capture = wait_for_capture_metric(&app, ticket.request_id)?;
+            wait_for_face_processing(&app, ticket.request_id)?;
+            let face = state
+                .session
+                .lock()
+                .map_err(|_| "state lock poisoned")?
+                .last_face
+                .clone()
+                .filter(|result| result.request_id == ticket.request_id);
+            let vision = app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
                 &model_id,
-                &snapshot_value,
+                &capture.path,
                 capture.rotation_degrees,
                 &prompt,
                 max_new_tokens.unwrap_or(96).clamp(8, 512),
-            );
-            let _ = std::fs::remove_file(&snapshot_path);
-            let vision = vision_result?;
-            capture.mode = "scene_snapshot".into();
-            capture.stream = false;
-            return Ok(SceneObservationResult {
+            )?;
+            Ok(SceneObservationResult {
                 capture,
                 face,
                 vision,
-            });
-        }
-
-        let ticket = queue_capture(&app, "hot", width, quality, &state)?;
-        let capture = wait_for_capture_metric(&app, ticket.request_id)?;
-        wait_for_face_processing(&app, ticket.request_id)?;
-        let face = state
-            .session
-            .lock()
-            .map_err(|_| "state lock poisoned")?
-            .last_face
-            .clone()
-            .filter(|result| result.request_id == ticket.request_id);
-        let vision = app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
-            &model_id,
-            &capture.path,
-            capture.rotation_degrees,
-            &prompt,
-            max_new_tokens.unwrap_or(96).clamp(8, 512),
-        )?;
-        return Ok(SceneObservationResult {
-            capture,
-            face,
-            vision,
-        });
+            })
+        })
+        .await;
     }
     #[cfg(not(mobile))]
     {
@@ -1195,10 +1470,8 @@ fn snapshot_latest_stream_capture(
                     .duration_since(UNIX_EPOCH)
                     .map_err(|error| error.to_string())?
                     .as_millis();
-                let snapshot = parent.join(format!(
-                    "realia-scene-{}-{suffix}.jpg",
-                    capture.request_id
-                ));
+                let snapshot =
+                    parent.join(format!("realia-scene-{}-{suffix}.jpg", capture.request_id));
                 if std::fs::copy(&source, &snapshot).is_ok() {
                     return Ok(Some((capture, snapshot)));
                 }
@@ -1434,13 +1707,14 @@ fn merge_native(value: &mut SessionState, native: NativeTransportState) {
     value.completed_captures = native.completed_captures;
     value.last_error = native.last_error;
     value.last_capture = native.last_capture;
-    if native.last_recording.as_ref().map(|item| item.recording_id)
-        != value.last_recording.as_ref().map(|item| item.recording_id)
-        && native.last_recording.is_some()
-    {
-        value.recording_processing = "received".into();
+    if let Some(recording) = native.last_recording {
+        if value.last_recording.as_ref().map(|item| item.recording_id)
+            != Some(recording.recording_id)
+        {
+            value.recording_processing = "received".into();
+        }
+        value.last_recording = Some(recording);
     }
-    value.last_recording = native.last_recording;
     value.last_person_choice = native.last_person_choice;
 }
 
@@ -1502,7 +1776,7 @@ fn recording_audio(
 }
 
 #[tauri::command]
-fn transcribe_recording(
+async fn transcribe_recording(
     recording_id: u64,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1528,16 +1802,76 @@ fn transcribe_recording(
     }
     #[cfg(mobile)]
     {
-        return app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
-            &recording.path,
-            recording.sample_rate,
-            recording.channels,
-        );
+        return run_blocking_command("本地语音识别", move || {
+            app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
+                &recording.path,
+                recording.sample_rate,
+                recording.channels,
+            )
+        })
+        .await;
     }
     #[cfg(not(mobile))]
     {
         let _ = app;
         Err("本地 ASR 仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn transcribe_audio_path(
+    path: String,
+    sample_rate: u32,
+    channels: u32,
+    app: tauri::AppHandle,
+) -> Result<LocalAsrResult, String> {
+    if path.trim().is_empty() || sample_rate == 0 || channels != 1 {
+        return Err("invalid ASR audio request".into());
+    }
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("本地语音识别", move || {
+            app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
+                &path,
+                sample_rate,
+                channels,
+            )
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("本地 ASR 仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn accept_vad_chunk(
+    recording_id: u64,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<VadChunkResult, String> {
+    let recording = state
+        .session
+        .lock()
+        .map_err(|_| "state lock poisoned")?
+        .last_recording
+        .clone()
+        .filter(|item| item.recording_id == recording_id && item.chunk)
+        .ok_or_else(|| "VAD chunk is no longer current".to_string())?;
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("语音端点检测", move || {
+            app.state::<mobile_vad::RealiaVad<tauri::Wry>>()
+                .accept(&recording)
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("本地 VAD 仅支持 Android 应用".into())
     }
 }
 
@@ -1565,7 +1899,7 @@ fn cloud_config(app: tauri::AppHandle) -> Result<CloudConfig, String> {
 }
 
 #[tauri::command]
-fn save_cloud_config(
+async fn save_cloud_config(
     provider: String,
     base_url: String,
     model: String,
@@ -1575,15 +1909,17 @@ fn save_cloud_config(
 ) -> Result<CloudConfig, String> {
     #[cfg(mobile)]
     {
-        return app
-            .state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
-            .save_config(mobile_cloud::SaveConfigRequest {
-                provider: &provider,
-                base_url: &base_url,
-                model: &model,
-                stt_model: &stt_model,
-                api_key: api_key.as_deref().filter(|value| !value.trim().is_empty()),
-            });
+        return run_blocking_command("保存云端配置", move || {
+            app.state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
+                .save_config(mobile_cloud::SaveConfigRequest {
+                    provider: &provider,
+                    base_url: &base_url,
+                    model: &model,
+                    stt_model: &stt_model,
+                    api_key: api_key.as_deref().filter(|value| !value.trim().is_empty()),
+                })
+        })
+        .await;
     }
     #[cfg(not(mobile))]
     {
@@ -1608,28 +1944,31 @@ fn clear_cloud_api_key(app: tauri::AppHandle) -> Result<CloudConfig, String> {
 }
 
 #[tauri::command]
-fn cloud_complete(
+async fn cloud_complete(
     prompt: String,
     system: Option<String>,
     json: bool,
+    timeout_ms: Option<u32>,
     app: tauri::AppHandle,
 ) -> Result<CloudModelResult, String> {
     #[cfg(mobile)]
     {
-        return app
-            .state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
-            .complete(mobile_cloud::CompleteRequest {
-                prompt: &prompt,
-                system: system.as_deref(),
-                json,
-                timeout_ms: 120_000,
-                max_completion_tokens: None,
-                fast: false,
-            });
+        return run_blocking_command("云端模型调用", move || {
+            app.state::<mobile_cloud::RealiaCloud<tauri::Wry>>()
+                .complete(mobile_cloud::CompleteRequest {
+                    prompt: &prompt,
+                    system: system.as_deref(),
+                    json,
+                    timeout_ms: timeout_ms.unwrap_or(12_000).clamp(3_000, 300_000),
+                    max_completion_tokens: None,
+                    fast: false,
+                })
+        })
+        .await;
     }
     #[cfg(not(mobile))]
     {
-        let _ = (prompt, system, json, app);
+        let _ = (prompt, system, json, timeout_ms, app);
         Err("安全云端调用仅支持 Android 应用".into())
     }
 }
@@ -1641,7 +1980,7 @@ async fn listen_mood(app: tauri::AppHandle) -> Result<MoodSpeechResult, String> 
         // The Android listen command intentionally remains pending for the entire
         // recording. Run that blocking plugin call away from Tauri's command
         // dispatcher so finish/cancel invocations and WebView input remain live.
-        return tauri::async_runtime::spawn_blocking(move || {
+        return run_blocking_command("心情语音", move || {
             let audio = app
                 .state::<mobile_mood::RealiaMood<tauri::Wry>>()
                 .listen()?;
@@ -1651,7 +1990,7 @@ async fn listen_mood(app: tauri::AppHandle) -> Result<MoodSpeechResult, String> 
                 || audio.bytes > 2 * 1024 * 1024
             {
                 let _ = std::fs::remove_file(&audio.path);
-                return Err("心情录音格式无效或超过 30 秒".into());
+                return Err("心情录音格式无效或超过 45 秒".into());
             }
             let transcription = app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
                 &audio.path,
@@ -1664,13 +2003,100 @@ async fn listen_mood(app: tauri::AppHandle) -> Result<MoodSpeechResult, String> 
                 confidence: -1.0,
             })
         })
-        .await
-        .map_err(|error| format!("心情语音后台任务失败: {error}"))?;
+        .await;
     }
     #[cfg(not(mobile))]
     {
         let _ = app;
         Err("心情语音仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn listen_automatic_response(app: tauri::AppHandle) -> Result<MoodSpeechResult, String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("自动回应感知", move || {
+            let audio = app
+                .state::<mobile_mood::RealiaMood<tauri::Wry>>()
+                .listen_automatic()?;
+            if audio.sample_rate != 16_000
+                || audio.channels != 1
+                || audio.bytes == 0
+                || audio.bytes > 2 * 1024 * 1024
+            {
+                let _ = std::fs::remove_file(&audio.path);
+                return Err("自动回应录音格式无效或过长".into());
+            }
+            let transcription = app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().transcribe(
+                &audio.path,
+                audio.sample_rate,
+                audio.channels,
+            );
+            let _ = std::fs::remove_file(&audio.path);
+            transcription.map(|result| MoodSpeechResult {
+                transcript: result.text,
+                confidence: -1.0,
+            })
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("自动回应感知仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn record_phone_conversation(
+    conversation_id: u64,
+    recording_id: u64,
+    app: tauri::AppHandle,
+) -> Result<RecordingMetric, String> {
+    if conversation_id == 0 || recording_id == 0 {
+        return Err("invalid phone conversation identity".into());
+    }
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("手机对话录音", move || {
+            let audio = app
+                .state::<mobile_mood::RealiaMood<tauri::Wry>>()
+                .listen()?;
+            if audio.sample_rate != 16_000
+                || audio.channels != 1
+                || audio.bytes == 0
+                || audio.bytes > 8 * 1024 * 1024
+            {
+                let _ = std::fs::remove_file(&audio.path);
+                return Err("手机对话录音格式无效或过长".into());
+            }
+            Ok(RecordingMetric {
+                recording_id,
+                bytes: audio.bytes,
+                sample_rate: audio.sample_rate,
+                channels: audio.channels,
+                encoding: "pcm_s16le".into(),
+                duration_ms: audio.duration_ms,
+                transfer_ms: 0,
+                path: audio.path,
+                partial: false,
+                conversation_id: Some(conversation_id),
+                sequence: u32::MAX,
+                chunk: false,
+                final_chunk: true,
+                vad_latency_ms: None,
+                vad_reason: Some("phone_microphone".into()),
+                turn_label: Some("complete".into()),
+                turn_latency_ms: None,
+            })
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("手机对话录音仅支持 Android 应用".into())
     }
 }
 
@@ -1702,7 +2128,7 @@ fn cancel_mood_listen(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn mark_recording_processed(
-    recording_id: u64,
+    _recording_id: u64,
     status: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1711,14 +2137,9 @@ fn mark_recording_processed(
         return Err("invalid recording processing status".into());
     }
     let mut session = state.session.lock().map_err(|_| "state lock poisoned")?;
-    if session
-        .last_recording
-        .as_ref()
-        .map(|item| item.recording_id)
-        != Some(recording_id)
-    {
-        return Err("recording is no longer current".into());
-    }
+    // Audio arrives every 500 ms. A newer transport chunk may become current
+    // while the previous VAD-completed utterance is entering ASR, so status
+    // updates must not depend on last_recording still pointing at that chunk.
     session.recording_processing = clean.into();
     Ok(())
 }
@@ -1814,10 +2235,9 @@ fn session_state(
     let mut value = state.session.lock().map_err(|_| "state lock poisoned")?;
     #[cfg(mobile)]
     if value.session_id.is_some() {
-        if let Ok(native) = app
-            .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
-            .state()
-        {
+        let transport = app.state::<mobile_transport::RealiaTransport<tauri::Wry>>();
+        if let Ok(mut native) = transport.state() {
+            native.last_recording = transport.take_recording().unwrap_or_default();
             let capture_id = native
                 .last_capture
                 .as_ref()
@@ -1856,7 +2276,10 @@ fn begin_session(
     let mut value = state.session.lock().map_err(|_| "state lock poisoned")?;
     if value.glass_address.as_deref() == Some(normalized_address.as_str())
         && value.session_id.is_some()
-        && matches!(value.phase, Phase::P2pNegotiating | Phase::Ready)
+        && matches!(
+            value.phase,
+            Phase::P2pNegotiating | Phase::Ready | Phase::Capturing
+        )
     {
         return Ok(value.clone());
     }
@@ -1951,8 +2374,14 @@ fn start_face_processing(app: tauri::AppHandle, request_id: u64) {
     std::thread::spawn(move || {
         if let Err(error) = wait_for_capture_and_process(&app, request_id) {
             if let Ok(mut session) = app.state::<AppState>().session.lock() {
-                session.face_processing = "error".into();
-                session.face_error = Some(error);
+                // A previous capture timeout must never poison a newer request.
+                if session.face_request_id == Some(request_id) {
+                    session.face_processing = "error".into();
+                    session.face_error = Some(error);
+                    if matches!(session.phase, Phase::Capturing) {
+                        session.phase = Phase::P2pNegotiating;
+                    }
+                }
             }
         }
     });
@@ -2034,7 +2463,7 @@ fn wait_for_capture_and_process(app: &tauri::AppHandle, request_id: u64) -> Resu
             let person = person_hud(&person_id);
             if let Err(error) = app
                 .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
-                .show_person(&person)
+                .show_person(&person, "")
             {
                 if let Ok(mut session) = state.session.lock() {
                     session.face_error = Some(format!("person HUD delivery failed: {error}"));
@@ -2050,7 +2479,7 @@ fn wait_for_capture_metric(
     app: &tauri::AppHandle,
     request_id: u64,
 ) -> Result<CaptureMetric, String> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(6);
     loop {
         let native = app
             .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
@@ -2061,7 +2490,14 @@ fn wait_for_capture_metric(
             }
         }
         if Instant::now() >= deadline {
-            return Err(format!("timed out waiting for capture #{request_id}"));
+            let error = format!("timed out waiting for capture #{request_id}");
+            // Release the Android-side `capturing` phase immediately and kick
+            // its idempotent fast reconnect loop. The next observation can then
+            // proceed without requiring a settings toggle or app restart.
+            let _ = app
+                .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
+                .recover(request_id, &error);
+            return Err(error);
         }
         std::thread::sleep(Duration::from_millis(40));
     }
@@ -2109,6 +2545,23 @@ fn recent_strangers(state: tauri::State<'_, AppState>) -> Result<Vec<StrangerSum
         .lock()
         .map_err(|_| "stranger store lock poisoned")?;
     Ok(store.summaries())
+}
+
+#[tauri::command]
+fn clear_recent_strangers(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut store = state
+            .strangers
+            .lock()
+            .map_err(|_| "stranger store lock poisoned")?;
+        *store = StrangerStore::default();
+    }
+    if state.stranger_path.exists() {
+        std::fs::remove_file(&state.stranger_path).map_err(|error| error.to_string())?;
+    }
+    // Labeled people can reference these local crops from their persisted profile.
+    // Full user-data deletion removes the directory once those profiles are gone.
+    Ok(())
 }
 
 #[tauri::command]
@@ -2187,45 +2640,50 @@ fn enroll_last_face(
 }
 
 #[tauri::command]
-fn enroll_person_from_gallery(
+async fn enroll_person_from_gallery(
     app: tauri::AppHandle,
     person_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<GalleryEnrollmentReceipt, String> {
     #[cfg(mobile)]
     {
-        let batch = app
-            .state::<mobile_face::RealiaFace<tauri::Wry>>()
-            .pick_enrollment_photos()?;
-        if batch.selected_count != 9
-            || batch.valid_count != 9
-            || batch.embeddings.len() != 9
-            || batch.photo_paths.len() != 9
-        {
-            return Err(format!(
-                "人物录入需要 9 张有效照片，当前为 {}/{}/{}/{}",
-                batch.selected_count,
-                batch.valid_count,
-                batch.embeddings.len(),
-                batch.photo_paths.len()
-            ));
-        }
-        let batch_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("system clock error: {error}"))?
-            .as_millis() as u64;
-        let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
-        let mut staged = gallery.clone();
-        let mut receipt = staged.enroll_batch(
-            &person_id,
-            batch_id,
-            &batch.embeddings,
-            batch.processing_total_ms,
-        )?;
-        receipt.photo_paths = batch.photo_paths;
-        staged.save(&state.gallery_path)?;
-        *gallery = staged;
-        Ok(receipt)
+        let _ = state;
+        run_blocking_command("图库人物录入", move || {
+            let batch = app
+                .state::<mobile_face::RealiaFace<tauri::Wry>>()
+                .pick_enrollment_photos()?;
+            if batch.selected_count != 9
+                || batch.valid_count != 9
+                || batch.embeddings.len() != 9
+                || batch.photo_paths.len() != 9
+            {
+                return Err(format!(
+                    "人物录入需要 9 张有效照片，当前为 {}/{}/{}/{}",
+                    batch.selected_count,
+                    batch.valid_count,
+                    batch.embeddings.len(),
+                    batch.photo_paths.len()
+                ));
+            }
+            let batch_id = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| format!("system clock error: {error}"))?
+                .as_millis() as u64;
+            let state = app.state::<AppState>();
+            let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
+            let mut staged = gallery.clone();
+            let mut receipt = staged.enroll_batch(
+                &person_id,
+                batch_id,
+                &batch.embeddings,
+                batch.processing_total_ms,
+            )?;
+            receipt.photo_paths = batch.photo_paths;
+            staged.save(&state.gallery_path)?;
+            *gallery = staged;
+            Ok(receipt)
+        })
+        .await
     }
     #[cfg(not(mobile))]
     {
@@ -2291,6 +2749,7 @@ fn valid_bluetooth_address(value: &str) -> bool {
 pub fn run() {
     let builder = tauri::Builder::default()
         .setup(|app| {
+            diagnostics::log(app.handle(), "backend", "startup", "version=0.1.0");
             let gallery_path = app.path().app_data_dir()?.join("face-gallery.json");
             let stranger_path = app.path().app_data_dir()?.join("recent-strangers.json");
             let stranger_photo_root = app.path().app_data_dir()?.join("stranger-faces");
@@ -2320,18 +2779,26 @@ pub fn run() {
             open_bluetooth_settings,
             set_perception,
             set_person_alert,
+            show_choice_card,
             recording_audio,
             transcribe_recording,
+            transcribe_audio_path,
+            accept_vad_chunk,
             cloud_config,
             save_cloud_config,
             clear_cloud_api_key,
             cloud_complete,
+            backend_diagnostic_log,
             listen_mood,
+            listen_automatic_response,
+            record_phone_conversation,
             finish_mood_listen,
             cancel_mood_listen,
+            real_world_context,
             mark_recording_processed,
             gallery_list,
             recent_strangers,
+            clear_recent_strangers,
             label_stranger,
             enroll_last_face,
             enroll_person_from_gallery,
@@ -2361,9 +2828,11 @@ pub fn run() {
         .plugin(mobile_face::init())
         .plugin(mobile_models::init())
         .plugin(mobile_asr::init())
+        .plugin(mobile_vad::init())
         .plugin(mobile_vl::init())
         .plugin(mobile_cloud::init())
-        .plugin(mobile_mood::init());
+        .plugin(mobile_mood::init())
+        .plugin(mobile_context::init());
     builder
         .run(tauri::generate_context!())
         .expect("error while running RealTopia phone application");

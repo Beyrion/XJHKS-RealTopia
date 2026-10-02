@@ -12,10 +12,16 @@ import type {
   SessionState,
   RecentStranger,
   SceneObservationResult,
+  RealWorldContext,
+  Recording,
+  VadChunkResult,
 } from "../models";
 
 export const nativeService = {
   deleteUserData: () => invoke<void>("delete_user_data"),
+  galleryList: () => invoke<Record<string, number>>("gallery_list"),
+  removePerson: (personId: string) =>
+    invoke<number>("remove_person", { personId }),
   sessionState: () => invoke<SessionState>("session_state"),
   pairedGlasses: () => invoke<PairedGlass[]>("paired_glasses"),
   pairGlasses: (glassAddress: string) =>
@@ -39,6 +45,27 @@ export const nativeService = {
     }),
   requestCapture: (mode: "cold" | "hot", width: number, quality: number) =>
     invoke<{ request_id: number }>("request_capture", { mode, width, quality }),
+  showChoiceCard: (request: {
+    person_id: string;
+    name: string;
+    title: string;
+    affinity: number;
+    quest: string;
+    story: string;
+    choices_json: string;
+  }) => invoke<void>("show_choice_card", { request }),
+  dismissChoiceCard: (contextId: string) =>
+    invoke<void>("show_choice_card", {
+      request: {
+        person_id: "__dismiss__",
+        name: "对话助手",
+        title: "",
+        affinity: -2,
+        quest: "",
+        story: "",
+        choices_json: JSON.stringify({ kind: "dismiss", contextId }),
+      },
+    }),
   enrollLastFace: (personId: string) =>
     invoke<FaceEnrollmentReceipt>("enroll_last_face", { personId }),
   enrollPersonFromGallery: (personId: string) =>
@@ -46,6 +73,7 @@ export const nativeService = {
       personId,
     }),
   recentStrangers: () => invoke<RecentStranger[]>("recent_strangers"),
+  clearRecentStrangers: () => invoke<void>("clear_recent_strangers"),
   labelStranger: (strangerId: string, identity: string, relationship: string) =>
     invoke<RecentStranger>("label_stranger", {
       strangerId,
@@ -57,7 +85,22 @@ export const nativeService = {
     invoke<void>("mark_recording_processed", { recordingId, status }),
   transcribeRecording: (recordingId: number) =>
     invoke<LocalAsrResult>("transcribe_recording", { recordingId }),
+  transcribeAudioPath: (path: string, sampleRate: number, channels: number) =>
+    invoke<LocalAsrResult>("transcribe_audio_path", {
+      path,
+      sampleRate,
+      channels,
+    }),
+  acceptVadChunk: (recordingId: number) =>
+    invoke<VadChunkResult>("accept_vad_chunk", { recordingId }),
   listenMood: () => invoke<MoodSpeechResult>("listen_mood"),
+  listenAutomaticResponse: () =>
+    invoke<MoodSpeechResult>("listen_automatic_response"),
+  recordPhoneConversation: (conversationId: number, recordingId: number) =>
+    invoke<Recording>("record_phone_conversation", {
+      conversationId,
+      recordingId,
+    }),
   finishMoodListen: () => invoke<void>("finish_mood_listen"),
   cancelMoodListen: () => invoke<void>("cancel_mood_listen"),
 
@@ -101,8 +144,18 @@ export const nativeService = {
       maxNewTokens,
     }),
 
-  cloudComplete: (prompt: string, system: string | null, json: boolean) =>
-    invoke<NativeCloudResult>("cloud_complete", { prompt, system, json }),
+  cloudComplete: (
+    prompt: string,
+    system: string | null,
+    json: boolean,
+    timeoutMs = 12_000,
+  ) =>
+    invoke<NativeCloudResult>("cloud_complete", {
+      prompt,
+      system,
+      json,
+      timeoutMs,
+    }),
   cloudConfig: () => invoke<NativeCloudConfig>("cloud_config"),
   saveCloudConfig: (config: {
     provider: string;
@@ -112,4 +165,5 @@ export const nativeService = {
     apiKey: string | null;
   }) => invoke<NativeCloudConfig>("save_cloud_config", config),
   clearCloudApiKey: () => invoke<NativeCloudConfig>("clear_cloud_api_key"),
+  realWorldContext: () => invoke<RealWorldContext>("real_world_context"),
 };

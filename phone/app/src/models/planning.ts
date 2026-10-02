@@ -2,6 +2,8 @@ export interface MemoryContext {
   tasks: { id: string; title: string; body: string; personId: string | null }[];
   people: { id: string; name: string }[];
   selectedPersonId?: string | null;
+  recentConversation?: { transcript: string; speakerPersonId: string | null }[];
+  sceneSummary?: string | null;
 }
 
 export interface ExtractedPersonMemory {
@@ -31,6 +33,38 @@ export interface ExtractedInteractionEvent {
   confidence: number;
 }
 
+export interface DialogueSuggestion {
+  id: string;
+  label: string;
+  intent: "warm" | "curious" | "helpful" | "honest" | "exit";
+}
+
+export interface ConversationTurn {
+  id: string;
+  conversationId: number;
+  recordingId: number;
+  sequence: number;
+  transcript: string;
+  contextTranscript: string;
+  createdAt: string;
+  speakerPersonId: string | null;
+  sceneSummary: string | null;
+  replySuggestions: DialogueSuggestion[];
+  localReplySuggestions?: DialogueSuggestion[];
+  enhancedReplySuggestions?: DialogueSuggestion[];
+  enhancementStatus: "pending" | "complete" | "fallback" | "failed";
+  enhancementModel?: string;
+  enhancementRecommended?: boolean;
+  enhancementReason?: string;
+  enhancementDisplayed?: boolean;
+  selectedSuggestionId?: string;
+  selectedSuggestionLabel?: string;
+  selectedAt?: string;
+  responseSource?: "manual" | "voice";
+  spokenResponse?: string;
+  responseCompletedAt?: string;
+}
+
 export interface ConversationInsight {
   summary: string;
   story: string;
@@ -43,6 +77,10 @@ export interface ConversationInsight {
   memories: ExtractedPersonMemory[];
   taskOperations: ExtractedTaskOperation[];
   interactionEvents: ExtractedInteractionEvent[];
+  replySuggestions: DialogueSuggestion[];
+  /** Cloud judgement: replace the already-visible local suggestions. */
+  enhanceReplySuggestions: boolean;
+  enhancementReason: string;
 }
 
 export interface PlanningContext {

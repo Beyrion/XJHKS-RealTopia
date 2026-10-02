@@ -9,11 +9,14 @@ import {
   moodKinds,
   type GameEvent,
   type GlassSettings,
+  type ConversationTurn,
   type Memory,
   type MoodKind,
   type MoodSnapshot,
   type Person,
   type Quest,
+  type Souvenir,
+  type WorldEvent,
 } from "../models";
 import { inferQuestCategory } from "../utils/gameRules";
 
@@ -81,6 +84,31 @@ export const storage = {
       JSON.stringify(value.slice(0, 200)),
     );
   },
+  loadConversationHistory(): ConversationTurn[] {
+    return loadJson<ConversationTurn[]>("realtopia.conversationHistory.v1", [])
+      .filter(
+        (item) =>
+          item &&
+          typeof item.id === "string" &&
+          typeof item.transcript === "string",
+      )
+      .slice(0, 100);
+  },
+  saveConversationHistory(value: ConversationTurn[]) {
+    localStorage.setItem(
+      "realtopia.conversationHistory.v1",
+      JSON.stringify(value.slice(0, 100)),
+    );
+  },
+  upsertConversationTurn(value: ConversationTurn) {
+    const current = this.loadConversationHistory();
+    const next = [
+      value,
+      ...current.filter((item) => item.id !== value.id),
+    ].slice(0, 100);
+    this.saveConversationHistory(next);
+    return next;
+  },
   loadGlassSettings(): GlassSettings {
     const saved = loadJson<
       Partial<GlassSettings> & { intervalSeconds?: number }
@@ -130,6 +158,15 @@ export const storage = {
       JSON.stringify(value.slice(0, 500)),
     );
   },
+  loadSouvenirs(): Souvenir[] {
+    return loadJson<Souvenir[]>("realtopia.souvenirs.v1", []).slice(0, 100);
+  },
+  saveSouvenirs(value: Souvenir[]) {
+    localStorage.setItem(
+      "realtopia.souvenirs.v1",
+      JSON.stringify(value.slice(0, 100)),
+    );
+  },
   loadActiveQuestId() {
     return localStorage.getItem("realtopia.activeQuestId");
   },
@@ -148,5 +185,14 @@ export const storage = {
   },
   saveSceneObservationEnabled(value: boolean) {
     localStorage.setItem("realtopia.sceneObservation", value ? "on" : "off");
+  },
+  loadWorldEvents(): WorldEvent[] {
+    return loadJson<WorldEvent[]>("realtopia.worldEvents.v1", []).slice(0, 50);
+  },
+  saveWorldEvents(value: WorldEvent[]) {
+    localStorage.setItem(
+      "realtopia.worldEvents.v1",
+      JSON.stringify(value.slice(0, 50)),
+    );
   },
 };

@@ -16,6 +16,9 @@ interface RawInsight extends Partial<
     | "interactionEvents"
     | "speakerPersonId"
     | "mentionedPersonIds"
+    | "replySuggestions"
+    | "enhanceReplySuggestions"
+    | "enhancementReason"
   >
 > {
   people?: string[];
@@ -25,6 +28,9 @@ interface RawInsight extends Partial<
   interactionEvents?: unknown[];
   speakerPersonId?: unknown;
   mentionedPersonIds?: unknown;
+  replySuggestions?: unknown;
+  enhanceReplySuggestions?: unknown;
+  enhancementReason?: unknown;
 }
 
 const memoryKinds = new Set([
@@ -59,6 +65,52 @@ function compact(value: string, length: number) {
   return value.replace(/\s+/g, " ").trim().slice(0, length);
 }
 
+function heuristicReplies(
+  transcript: string,
+): ConversationInsight["replySuggestions"] {
+  const question = /[吗呢？?]|怎么|为什么|哪[里儿]|什么时候/.test(transcript);
+  const concern = /难过|累|压力|担心|害怕|生病|不舒服|麻烦/.test(transcript);
+  const request = /帮|需要|能不能|可以|记得|拜托/.test(transcript);
+  const labels = concern
+    ? ["听起来挺不容易的", "你想多说一点吗？", "有什么我能帮的？"]
+    : request
+      ? ["好，我记住了", "具体需要我怎么做？", "我们确认一下时间吧"]
+      : question
+        ? ["我认真想想", "你怎么看这件事？", "我还想听听细节"]
+        : ["原来是这样", "后来怎么样了？", "这对你很重要吧？"];
+  const intents: ConversationInsight["replySuggestions"][number]["intent"][] = [
+    "warm",
+    "curious",
+    request ? "helpful" : "honest",
+  ];
+  return labels.map((label, index) => ({
+    id: `reply_${index}`,
+    label,
+    intent: intents[index],
+  }));
+}
+
+function validateReplies(
+  raw: unknown,
+  fallback: ConversationInsight["replySuggestions"],
+): ConversationInsight["replySuggestions"] {
+  if (!Array.isArray(raw)) return fallback;
+  const allowed = new Set(["warm", "curious", "helpful", "honest", "exit"]);
+  const replies = raw.flatMap((value, index) => {
+    if (!value || typeof value !== "object") return [];
+    const item = value as Record<string, unknown>;
+    if (typeof item.label !== "string") return [];
+    const label = compact(item.label, 18);
+    if (!label) return [];
+    const intent =
+      typeof item.intent === "string" && allowed.has(item.intent)
+        ? (item.intent as ConversationInsight["replySuggestions"][number]["intent"])
+        : "honest";
+    return [{ id: `reply_${index}`, label, intent }];
+  });
+  return replies.length === 3 ? replies : fallback;
+}
+
 function confidence(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : 0;
@@ -91,7 +143,7 @@ function validIds(values: unknown, allowed: Set<string>) {
     : [];
 }
 
-function heuristic(
+export function localConversationInsight(
   transcript: string,
   context: MemoryContext,
 ): ConversationInsight {
@@ -134,7 +186,7 @@ function heuristic(
     .filter(Boolean);
   const followUps = sentences
     .filter((item) =>
-      /(下次|记得|需要|应该|准备|别忘|计划|帮我|麻烦|周[一二三四五六日天]|明天|后天)/.test(
+      /(下次|记得|需要|应该|准备|别忘|计划|帮我|麻烦|能不能|可以.{0,8}(?:吗|嘛)|发给我|今天|今晚|周[一二三四五六日天]|明天|后天)/.test(
         item,
       ),
     )
@@ -181,8 +233,9 @@ function heuristic(
           taskId: ranked[0] ?? null,
           title: compact(followUps[0], 48),
           deadline:
-            followUps[0].match(/(今天|明天|后天|周[一二三四五六日天])/)?.[1] ??
-            "",
+            followUps[0].match(
+              /(今天|今晚|明天|后天|周[一二三四五六日天])/,
+            )?.[1] ?? "",
           personId: speakerPersonId,
           steps: followUps.map((item) => compact(item, 80)),
           evidence: compact(followUps.join("。"), 240),
@@ -202,6 +255,9 @@ function heuristic(
     memories,
     taskOperations: taskOps,
     interactionEvents: interactions,
+    replySuggestions: heuristicReplies(transcript),
+    enhanceReplySuggestions: false,
+    enhancementReason: "本地即时建议",
   };
 }
 
@@ -314,7 +370,7 @@ export async function analyzeConversation(
 ): Promise<{ insight: ConversationInsight; model: ModelResponse }> {
   const clean = compact(transcript, 6000);
   if (!clean) throw new Error("transcript is empty");
-  const fallback = heuristic(clean, context);
+  const fallback = localConversationInsight(clean, context);
   const promptContext = {
     people: context.people,
     selectedPersonId: context.selectedPersonId ?? null,
@@ -323,13 +379,17 @@ export async function analyzeConversation(
       title: item.title,
       personId: item.personId,
     })),
+    recentConversation: (context.recentConversation ?? []).slice(-6),
+    currentScene: context.sceneSummary ?? null,
+    localReplySuggestions: fallback.replySuggestions,
   };
   const model = await modelHub.complete({
     purpose: "memory",
-    prompt: `<transcript>${clean}</transcript>\n<context>${JSON.stringify(promptContext)}</context>\nReturn one JSON object matching this shape: {summary, story, speakerPersonId, mentionedPersonIds, personIds, taskIds, memories:[{kind,personId,summary,evidence,confidence}], taskOperations:[{operation,taskId,title,deadline,personId,steps,evidence,confidence}], interactionEvents:[{type,personId,evidence,confidence}]}. speakerPersonId is the current interlocutor; mentionedPersonIds are third parties only. selectedPersonId, when present, was explicitly confirmed by the user and must be the speaker. Allowed memory kinds: conversation,fact,preference,promise,relationship. Allowed task operations: create,update,progress,complete_candidate. Allowed interaction types: meaningful_conversation,gratitude,help,promise,conflict. Use only IDs from context. Do not invent a person.`,
+    prompt: `<transcript>${clean}</transcript>\n<context>${JSON.stringify(promptContext)}</context>\nReturn one JSON object matching this shape: {summary, story, speakerPersonId, mentionedPersonIds, personIds, taskIds, memories:[{kind,personId,summary,evidence,confidence}], taskOperations:[{operation,taskId,title,deadline,personId,steps,evidence,confidence}], interactionEvents:[{type,personId,evidence,confidence}], replySuggestions:[{label,intent}], enhanceReplySuggestions, enhancementReason}. replySuggestions must contain exactly 3 natural first-person Chinese utterances that the wearer can say next, each at most 18 Chinese characters; make them meaningfully different and grounded in the transcript. intent must be warm,curious,helpful,honest,or exit. Compare replySuggestions with context.localReplySuggestions. Set enhanceReplySuggestions=true only when the new suggestions are materially more specific, useful, or contextually correct enough to justify interrupting and replacing the suggestions already visible to the user; otherwise set it false. enhancementReason must briefly explain that display decision in Chinese. speakerPersonId is the current interlocutor; mentionedPersonIds are third parties only. selectedPersonId, when present, was explicitly confirmed by the user and must be the speaker. Allowed memory kinds: conversation,fact,preference,promise,relationship. Allowed task operations: create,update,progress,complete_candidate. Allowed interaction types: meaningful_conversation,gratitude,help,promise,conflict. Use only IDs from context. Do not invent a person.`,
     system:
       "You extract auditable durable memory and real task operations from a Chinese conversation. Distinguish the current interlocutor from third parties merely mentioned in speech. Every claim must include a short verbatim evidence span and confidence from 0 to 1. Do not assign relationship scores. Return JSON only.",
     json: true,
+    timeoutMs: 7_000,
   });
   let raw: RawInsight;
   try {
@@ -348,6 +408,10 @@ export async function analyzeConversation(
   const memories = validateMemories(raw.memories, context);
   const operations = validateTaskOperations(raw.taskOperations, context);
   const interactions = validateInteractions(raw.interactionEvents, context);
+  const replySuggestions = validateReplies(
+    raw.replySuggestions,
+    fallback.replySuggestions,
+  );
   const allowedPeople = new Set(context.people.map((item) => item.id));
   const selectedPersonId =
     context.selectedPersonId && allowedPeople.has(context.selectedPersonId)
@@ -401,6 +465,12 @@ export async function analyzeConversation(
       interactionEvents: speakerInteractions.length
         ? speakerInteractions
         : fallback.interactionEvents,
+      replySuggestions,
+      enhanceReplySuggestions: raw.enhanceReplySuggestions === true,
+      enhancementReason:
+        typeof raw.enhancementReason === "string"
+          ? compact(raw.enhancementReason, 80)
+          : "云端未说明增强理由",
     },
   };
 }

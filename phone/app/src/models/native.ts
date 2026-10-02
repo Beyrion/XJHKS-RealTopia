@@ -54,14 +54,39 @@ export interface Recording {
   duration_ms: number;
   transfer_ms: number;
   path: string;
+  partial?: boolean;
+  conversation_id?: number;
+  sequence?: number;
+  chunk?: boolean;
+  final_chunk?: boolean;
+  vad_latency_ms?: number;
+  vad_reason?: string;
+  turn_label?: "complete" | "incomplete" | "invalid";
+  turn_latency_ms?: number;
+}
+
+export interface VadChunkResult {
+  ready: boolean;
+  speech_detected: boolean;
+  probability: number;
+  latency_ms: number;
+  reason: string;
+  turn_label: "complete" | "incomplete" | "invalid" | null;
+  turn_probabilities: number[];
+  turn_latency_ms: number;
+  turn_frontend_ms: number;
+  turn_inference_ms: number;
+  segment: Recording | null;
 }
 
 export interface PersonChoiceResult {
   event_id: number;
   person_id: string;
   choice_index: number;
-  choice_id: "greet" | "catch_up" | "later";
+  choice_id: string;
   label: string;
+  kind?: "person" | "dialogue" | "world_event" | string;
+  context_id?: string;
   input: "rokid_touchpad" | string;
   selected_at_elapsed_ms: number;
   received_at_ms: number;
@@ -130,6 +155,24 @@ export interface ModelDownloadStatus {
 
 export interface ModelDownloadStatuses {
   models: ModelDownloadStatus[];
+}
+
+export interface RealWorldContext {
+  captured_at_ms: number;
+  location: {
+    available: boolean;
+    latitude?: number;
+    longitude?: number;
+    accuracy_m?: number;
+    observed_at_ms?: number;
+  };
+  calendar: Array<{
+    id: string;
+    title: string;
+    start_ms: number;
+    end_ms: number;
+    location: string;
+  }>;
 }
 
 export interface SessionState {
