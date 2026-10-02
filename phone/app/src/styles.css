@@ -343,17 +343,26 @@ small { font-size: 13px!important; line-height: 1.4; }
 .secret { display: grid; grid-template-columns: 120px 1fr auto; gap: 10px; }
 .secret input { height: 48px; padding: 0 12px; border: 1.5px solid var(--line); border-radius: 10px; outline: 0; color: var(--ink); font: 14px ui-monospace, monospace; }
 .secret button { min-width: 44px; min-height: 44px; padding: 9px; border-radius: 9px; background: #edf0ff; color: var(--blue-dark); font-size: 13px; }
-.search { height: 48px; margin-top: 0; padding: 0 13px; display: flex; gap: 10px; align-items: center; border: 1.5px solid var(--ink); border-radius: 14px; background: #fff; }
+.memory-browser { min-width: 0; }
+.memory-toolbar { position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: minmax(220px,1fr) minmax(0,1fr); gap: 12px; align-items: center; padding-bottom: 11px; background: var(--panel); }
+.search { height: 44px; margin-top: 0; padding: 0 12px; display: flex; gap: 9px; align-items: center; border: 1.5px solid var(--ink); border-radius: 12px; background: #fff; }
 .search .ui-icon { color: var(--blue); }
 .search input { flex: 1; border: 0; outline: 0; background: none; color: var(--ink); font-size: 14px; }
-.memory-manager { display: block; }
-.mem-list { max-height: 340px; overflow: auto; }
-.mem-list button { width: 100%; min-height: 66px; padding: 10px 8px; display: grid; grid-template-columns: 90px 1fr auto; gap: 10px; align-items: center; border-bottom: 1.5px solid var(--line); background: none; text-align: left; }
-.mem-list button.active { border-radius: 12px; background: #edf0ff; }
-.mem-list time { color: var(--muted); font-size: 11px; }
+.memory-pages { min-width: 0; display: flex; gap: 6px; justify-content: flex-end; overflow-x: auto; scrollbar-width: thin; }
+.memory-pages button { flex: 0 0 auto; width: 34px; height: 34px; display: grid; place-items: center; border: 1.5px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-size: 12px; font-weight: 900; }
+.memory-pages button.active { border-color: var(--ink); background: var(--yellow); color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
+.memory-manager { min-width: 0; }
+.mem-list { padding: 3px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); grid-auto-rows: min-content; gap: 8px; align-content: start; }
+.mem-list button { min-width: 0; min-height: 58px; padding: 8px 9px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: center; border: 1.5px solid var(--line); border-radius: 11px; background: #fff; text-align: left; }
+.mem-list button:hover,.mem-list button:focus-visible { border-color: var(--blue); background: #f4f5ff; }
+.mem-list button > span:first-child { min-width: 0; }
+.memory-side { display: flex; gap: 4px; align-items: center; color: var(--muted); }
+.memory-side .ui-icon { width: 14px; height: 14px; }
+.mem-list time { white-space: nowrap; color: var(--muted); font-size: 10px; }
 .mem-list b, .mem-list small { display: block; }
-.mem-list b { font-size: 14px; }
-.mem-list small { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.mem-list b { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.mem-list small { margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mem-list > .empty-panel { grid-column: 1/-1; }
 .memory-drawer-backdrop { position: fixed; inset: 54px 0 0; z-index: 60; background: rgba(37,37,59,.22); }
 .memory-drawer { position: fixed; top: 54px; right: 0; bottom: 0; z-index: 61; width: min(520px,66vw); padding: 20px; overflow: auto; border-left: 2px solid var(--ink); background: var(--paper); box-shadow: -8px 0 24px rgba(37,37,59,.18); }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
@@ -586,6 +595,14 @@ small { font-size: 13px!important; line-height: 1.4; }
   .toggle input:checked + i:after { left: 21px; }
   .range { grid-template-columns: 135px 1fr 55px; gap: 10px; }
   .select input, .select select { min-width: 260px; height: 38px; font-size: 12px; }
+  .memory-toolbar { grid-template-columns: minmax(180px,1fr) minmax(0,.8fr); gap: 8px; padding-bottom: 8px; }
+  .search { height: 38px; padding-inline: 9px; }
+  .memory-pages { gap: 4px; }
+  .memory-pages button { width: 30px; height: 30px; border-radius: 8px; font-size: 10px; }
+  .mem-list { gap: 6px; }
+  .mem-list button { min-height: 50px; padding: 6px 7px; gap: 5px; }
+  .mem-list b { font-size: 11px; }
+  .mem-list time { font-size: 9px; }
 }
 
 /* Quieter task hierarchy and a continuous two-column people view. */
