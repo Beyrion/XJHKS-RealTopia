@@ -538,6 +538,7 @@ mod mobile_face {
         pub valid_count: usize,
         pub embeddings: Vec<Vec<f32>>,
         pub processing_total_ms: i64,
+        pub photo_paths: Vec<String>,
     }
 
     impl<R: Runtime> RealiaFace<R> {
@@ -2174,8 +2175,14 @@ fn enroll_last_face(
         (*request_id, embeddings[0].clone())
     };
     let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
-    let receipt = gallery.enroll(&person_id, request_id, &embedding)?;
+    let mut receipt = gallery.enroll(&person_id, request_id, &embedding)?;
     gallery.save(&state.gallery_path)?;
+    drop(gallery);
+    receipt.photo_paths = state
+        .strangers
+        .lock()
+        .map_err(|_| "stranger store lock poisoned")?
+        .photo_paths_for_request(request_id);
     Ok(receipt)
 }
 
@@ -2190,12 +2197,17 @@ fn enroll_person_from_gallery(
         let batch = app
             .state::<mobile_face::RealiaFace<tauri::Wry>>()
             .pick_enrollment_photos()?;
-        if batch.selected_count != 9 || batch.valid_count != 9 || batch.embeddings.len() != 9 {
+        if batch.selected_count != 9
+            || batch.valid_count != 9
+            || batch.embeddings.len() != 9
+            || batch.photo_paths.len() != 9
+        {
             return Err(format!(
-                "人物录入需要 9 张有效照片，当前为 {}/{}/{}",
+                "人物录入需要 9 张有效照片，当前为 {}/{}/{}/{}",
                 batch.selected_count,
                 batch.valid_count,
-                batch.embeddings.len()
+                batch.embeddings.len(),
+                batch.photo_paths.len()
             ));
         }
         let batch_id = SystemTime::now()
@@ -2204,12 +2216,13 @@ fn enroll_person_from_gallery(
             .as_millis() as u64;
         let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
         let mut staged = gallery.clone();
-        let receipt = staged.enroll_batch(
+        let mut receipt = staged.enroll_batch(
             &person_id,
             batch_id,
             &batch.embeddings,
             batch.processing_total_ms,
         )?;
+        receipt.photo_paths = batch.photo_paths;
         staged.save(&state.gallery_path)?;
         *gallery = staged;
         Ok(receipt)
@@ -2254,8 +2267,15 @@ fn delete_user_data(
             std::fs::remove_file(path).map_err(|error| error.to_string())?;
         }
     }
-    if state.stranger_photo_root.exists() {
-        std::fs::remove_dir_all(&state.stranger_photo_root).map_err(|error| error.to_string())?;
+    let person_photo_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("person-photos");
+    for root in [&state.stranger_photo_root, &person_photo_root] {
+        if root.exists() {
+            std::fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }

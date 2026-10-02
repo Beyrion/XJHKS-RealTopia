@@ -110,6 +110,7 @@ export interface Person {
   story: string;
   quests: string[];
   seen: string;
+  photoPaths?: string[];
 }
 
 export interface RecentStranger {

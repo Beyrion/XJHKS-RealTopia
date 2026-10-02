@@ -24,7 +24,10 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/stranger-faces/**"]
+        "scope": [
+          "$APPDATA/stranger-faces/**",
+          "$APPDATA/person-photos/**"
+        ]
       }
     }
   },

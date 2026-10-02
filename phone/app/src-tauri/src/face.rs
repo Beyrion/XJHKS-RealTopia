@@ -82,6 +82,7 @@ pub struct EnrollmentReceipt {
     pub request_id: u64,
     pub templates_for_person: usize,
     pub gallery_templates: usize,
+    pub photo_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -93,6 +94,7 @@ pub struct GalleryEnrollmentReceipt {
     pub templates_for_person: usize,
     pub gallery_templates: usize,
     pub processing_total_ms: i64,
+    pub photo_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,6 +170,7 @@ impl FaceGallery {
                 .filter(|template| template.person_id == person_id)
                 .count(),
             gallery_templates: self.templates.len(),
+            photo_paths: Vec::new(),
         })
     }
 
@@ -216,6 +219,7 @@ impl FaceGallery {
                 .count(),
             gallery_templates: self.templates.len(),
             processing_total_ms,
+            photo_paths: Vec::new(),
         })
     }
 

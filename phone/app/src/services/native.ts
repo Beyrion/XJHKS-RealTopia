@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   LocalAsrResult,
   LocalVisionResult,
+  FaceEnrollmentReceipt,
   GalleryEnrollmentReceipt,
   ModelDownloadStatus,
   MoodSpeechResult,
@@ -39,7 +40,7 @@ export const nativeService = {
   requestCapture: (mode: "cold" | "hot", width: number, quality: number) =>
     invoke<{ request_id: number }>("request_capture", { mode, width, quality }),
   enrollLastFace: (personId: string) =>
-    invoke<void>("enroll_last_face", { personId }),
+    invoke<FaceEnrollmentReceipt>("enroll_last_face", { personId }),
   enrollPersonFromGallery: (personId: string) =>
     invoke<GalleryEnrollmentReceipt>("enroll_person_from_gallery", {
       personId,

@@ -90,6 +90,25 @@ impl StrangerStore {
         self.records.iter().map(summary).collect()
     }
 
+    pub fn photo_paths_for_request(&self, request_id: u64) -> Vec<String> {
+        self.records
+            .iter()
+            .find(|record| {
+                record
+                    .photos
+                    .iter()
+                    .any(|photo| photo.request_id == request_id)
+            })
+            .map(|record| {
+                record
+                    .photos
+                    .iter()
+                    .map(|photo| photo.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn match_or_create_id(&self, embedding: &[f32], request_id: u64, now_ms: i64) -> String {
         self.records
             .iter()
@@ -282,5 +301,18 @@ mod tests {
         }
         assert_eq!(store.summaries().len(), MAX_RECENT_STRANGERS);
         assert_eq!(store.summaries()[0].id, "person-11");
+    }
+
+    #[test]
+    fn resolves_saved_portraits_from_the_enrollment_capture() {
+        let mut store = StrangerStore::default();
+        store.commit_photo("first".into(), &[1.0, 0.0], "one.jpg".into(), 7, 1);
+        store.commit_photo("first".into(), &[1.0, 0.0], "two.jpg".into(), 8, 2);
+
+        assert_eq!(
+            store.photo_paths_for_request(8),
+            vec!["one.jpg".to_string(), "two.jpg".to_string()]
+        );
+        assert!(store.photo_paths_for_request(9).is_empty());
     }
 }

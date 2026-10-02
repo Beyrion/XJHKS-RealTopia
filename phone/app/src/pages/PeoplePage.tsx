@@ -9,6 +9,10 @@ import { nativeService } from "../services/native";
 import { useAppStore } from "../store/AppStore";
 import { affinityLevel } from "../utils/gameRules";
 
+const mergePhotoPaths = (current: string[] = [], incoming: string[] = []) => [
+  ...new Set([...current, ...incoming].filter(Boolean)),
+];
+
 export default function PeoplePage() {
   const navigate = useNavigate();
   const {
@@ -62,11 +66,26 @@ export default function PeoplePage() {
     setEnrolling(true);
     try {
       const receipt = await nativeService.enrollPersonFromGallery(target.id);
+      if (receipt.photo_paths.length) {
+        updatePeople((current) =>
+          current.map((item) =>
+            item.id === target.id
+              ? {
+                  ...item,
+                  photoPaths: mergePhotoPaths(
+                    item.photoPaths,
+                    receipt.photo_paths,
+                  ),
+                }
+              : item,
+          ),
+        );
+      }
       notify(`已为 ${target.name} 录入 ${receipt.enrolled_count} 张人脸照片`);
-      return true;
+      return receipt;
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error));
-      return false;
+      return null;
     } finally {
       setEnrolling(false);
     }
@@ -94,12 +113,16 @@ export default function PeoplePage() {
       affinity: 50,
       tone: tones[people.length % tones.length],
       quote: "新的相遇，正在被慢慢记住。",
-      story: "通过 9 张照片建立了端侧人脸特征，照片本身不会存入人物特征库。",
+      story: "通过 9 张照片建立了端侧人脸特征，人物照片仅保存在本机档案中。",
       quests: [],
       seen: "刚刚录入",
     };
-    if (!(await enrollFromGallery(created))) return;
-    updatePeople((current) => [...current, created]);
+    const receipt = await enrollFromGallery(created);
+    if (!receipt) return;
+    updatePeople((current) => [
+      ...current,
+      { ...created, photoPaths: receipt.photo_paths },
+    ]);
     setSelectedId(created.id);
     setNewPersonName("");
     setCreateOpen(false);
@@ -107,7 +130,22 @@ export default function PeoplePage() {
 
   const enrollRecentFace = async () => {
     try {
-      await nativeService.enrollLastFace(person.id);
+      const receipt = await nativeService.enrollLastFace(person.id);
+      if (receipt.photo_paths.length) {
+        updatePeople((current) =>
+          current.map((item) =>
+            item.id === person.id
+              ? {
+                  ...item,
+                  photoPaths: mergePhotoPaths(
+                    item.photoPaths,
+                    receipt.photo_paths,
+                  ),
+                }
+              : item,
+          ),
+        );
+      }
       notify(`已将最近拍摄的人脸录入 ${person.name}`);
     } catch {
       notify("没有可录入的人脸，请先拍摄清晰正脸");
@@ -144,7 +182,16 @@ export default function PeoplePage() {
         );
         if (existing) {
           return current.map((item) =>
-            item.id === existing.id ? { ...item, role: relationship } : item,
+            item.id === existing.id
+              ? {
+                  ...item,
+                  role: relationship,
+                  photoPaths: mergePhotoPaths(
+                    item.photoPaths,
+                    saved.photo_paths,
+                  ),
+                }
+              : item,
           );
         }
         return [
@@ -159,6 +206,7 @@ export default function PeoplePage() {
             story: `由眼镜最近相遇保留的 ${saved.photo_count} 张人脸照片完成端侧录入。`,
             quests: [],
             seen: "刚刚标记",
+            photoPaths: saved.photo_paths,
           },
         ];
       });
@@ -352,7 +400,7 @@ export default function PeoplePage() {
                 onChange={(event) => setNewPersonName(event.target.value)}
               />
             </label>
-            <small>照片仅用于端侧提取特征，不会复制进人物库。</small>
+            <small>照片用于端侧提取特征，并仅保存在本机人物档案中。</small>
             <footer>
               <button
                 type="button"

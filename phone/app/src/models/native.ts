@@ -34,6 +34,15 @@ export interface GalleryEnrollmentReceipt {
   templates_for_person: number;
   gallery_templates: number;
   processing_total_ms: number;
+  photo_paths: string[];
+}
+
+export interface FaceEnrollmentReceipt {
+  person_id: string;
+  request_id: number;
+  templates_for_person: number;
+  gallery_templates: number;
+  photo_paths: string[];
 }
 
 export interface Recording {
