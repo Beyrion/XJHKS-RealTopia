@@ -89,6 +89,7 @@ class SecureCloudProvider implements ModelProvider {
       request.prompt,
       request.system ?? null,
       request.json ?? false,
+      request.timeoutMs,
     );
     return {
       text: result.text,

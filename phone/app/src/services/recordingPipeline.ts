@@ -4,21 +4,100 @@ import type {
   Person,
   Quest,
   Recording,
+  DialogueSuggestion,
+  ConversationInsight,
+  ConversationTurn,
 } from "../models";
 import { analyzeConversation } from "../utils/memoryPlanner";
+import { localConversationInsight } from "../utils/memoryPlanner";
 import { inferQuestCategory } from "../utils/gameRules";
 import { sanitizeText } from "../utils/text";
+import { souvenirForQuest } from "../utils/souvenir";
 import { nativeService } from "./native";
 
 export interface RecordingSnapshot {
   quests: Quest[];
   people: Person[];
   memories: Memory[];
+  selectedPersonId?: string | null;
+  transcriptPrefix?: string;
+  conversationHistory?: ConversationTurn[];
+  sceneSummary?: string | null;
+  /** A recognized-person recording is an explicit task-capture transaction. */
+  requireTask?: boolean;
+}
+
+export interface LocalTranscription {
+  transcript: string;
+  localText: string;
+  log: string;
+}
+
+function memoryContext(snapshot: RecordingSnapshot) {
+  return {
+    tasks: snapshot.quests.map((value) => ({
+      id: value.id,
+      title: value.title,
+      body: value.body,
+      personId: value.personId ?? null,
+    })),
+    people: snapshot.people.map((value) => ({
+      id: value.id,
+      name: value.name,
+    })),
+    selectedPersonId: snapshot.selectedPersonId,
+    recentConversation: (snapshot.conversationHistory ?? [])
+      .slice(0, 6)
+      .reverse()
+      .map((item) => ({
+        transcript: item.transcript.slice(-800),
+        speakerPersonId: item.speakerPersonId,
+      })),
+    sceneSummary: snapshot.sceneSummary,
+  };
+}
+
+export async function transcribeRecordingLocally(
+  recording: Recording,
+  transcriptPrefix?: string,
+): Promise<LocalTranscription> {
+  await nativeService.markRecordingProcessed(
+    recording.recording_id,
+    "local ASR transcribing",
+  );
+  const local = await nativeService.transcribeAudioPath(
+    recording.path,
+    recording.sample_rate,
+    recording.channels,
+  );
+  return {
+    localText: local.text,
+    transcript: [transcriptPrefix, local.text]
+      .filter(Boolean)
+      .join(" ")
+      .slice(-6_000),
+    log: `录音 #${recording.recording_id} 本地转写 ${local.latency_ms.toFixed(0)}ms · RTF ${local.realtime_factor.toFixed(2)} · 加载 ${local.model_load_ms}ms`,
+  };
+}
+
+export function immediateConversationInsight(
+  transcript: string,
+  snapshot: RecordingSnapshot,
+): ConversationInsight {
+  return localConversationInsight(transcript, memoryContext(snapshot));
 }
 
 export interface RecordingPipelineResult extends RecordingSnapshot {
   logs: string[];
   interactions: ExtractedInteractionEvent[];
+  transcript: string;
+  speakerPersonId: string | null;
+  replySuggestions: DialogueSuggestion[];
+  enhancementModel: string;
+  enhancementSide: "edge" | "cloud";
+  enhanceReplySuggestions: boolean;
+  enhancementReason: string;
+  generatedQuestIds: string[];
 }
 
 function clockTime() {
@@ -31,18 +110,14 @@ function clockTime() {
 export async function processRecordingPipeline(
   recording: Recording,
   snapshot: RecordingSnapshot,
+  transcribed?: LocalTranscription,
 ): Promise<RecordingPipelineResult> {
   try {
-    await nativeService.markRecordingProcessed(
-      recording.recording_id,
-      "local ASR transcribing",
-    );
-    const local = await nativeService.transcribeRecording(
-      recording.recording_id,
-    );
-    const logs = [
-      `录音 #${recording.recording_id} 本地转写 ${local.latency_ms.toFixed(0)}ms · RTF ${local.realtime_factor.toFixed(2)} · 加载 ${local.model_load_ms}ms`,
-    ];
+    const local =
+      transcribed ??
+      (await transcribeRecordingLocally(recording, snapshot.transcriptPrefix));
+    const logs = [local.log];
+    const conversationText = local.transcript;
     await nativeService.markRecordingProcessed(
       recording.recording_id,
       "extracting person memory",
@@ -51,17 +126,13 @@ export async function processRecordingPipeline(
     const quests = structuredClone(snapshot.quests);
     const people = structuredClone(snapshot.people);
     const memories = structuredClone(snapshot.memories);
-    const { insight, model } = await analyzeConversation(local.text, {
-      tasks: quests.map((value) => ({
-        id: value.id,
-        title: value.title,
-        body: value.body,
-        personId: value.personId ?? null,
-      })),
-      people: people.map((value) => ({ id: value.id, name: value.name })),
-    });
+    const { insight, model } = await analyzeConversation(
+      conversationText,
+      memoryContext({ ...snapshot, quests, people }),
+    );
 
     const taskIds = new Set(insight.taskIds);
+    const originalQuestIds = new Set(snapshot.quests.map((item) => item.id));
     insight.taskOperations.forEach((operation, index) => {
       if (operation.operation === "create") {
         const id = `conversation-${recording.recording_id}-task-${index}`;
@@ -86,7 +157,7 @@ export async function processRecordingPipeline(
           steps: operation.steps.map(sanitizeText).filter(Boolean),
           personId: person?.id,
           person: person?.name,
-          reward: person ? `完成后提升与 ${person.name} 的羁绊` : "记忆经验 +5",
+          reward: "完成后获得一件共同记忆纪念品",
           status: "inbox",
           source: "glasses",
           assignerPersonId: person?.id,
@@ -94,6 +165,7 @@ export async function processRecordingPipeline(
           createdAt: new Date().toISOString(),
         };
         quest.category = inferQuestCategory(quest);
+        quest.reward = `纪念品 · ${souvenirForQuest(quest, person).name}`;
         quests.unshift(quest);
         taskIds.add(id);
         return;
@@ -108,6 +180,51 @@ export async function processRecordingPipeline(
       // Progress/completion are deliberately not applied from LLM inference.
       // The candidate remains auditable in memory and the user completes it.
     });
+
+    // The glasses task flow is intentional: once the user starts recording
+    // with a recognized person, it must end in a persisted, auditable task.
+    // Cloud extraction can legitimately return no create operation for an
+    // indirect request, so provide a conservative inbox item instead of
+    // leaving the exclusive workflow locked forever.
+    if (
+      snapshot.requireTask &&
+      !quests.some((item) => !originalQuestIds.has(item.id))
+    ) {
+      const person = people.find(
+        (item) => item.id === snapshot.selectedPersonId,
+      );
+      const id = `conversation-${recording.recording_id}-task-fallback`;
+      const summary = sanitizeText(insight.summary || conversationText)
+        .replace(/[。！？!?]+$/g, "")
+        .slice(0, 40);
+      const quest: Quest = {
+        id,
+        group: "对话任务",
+        title: summary
+          ? `跟进 · ${summary}`
+          : `跟进与${person?.name ?? "对话人物"}的约定`,
+        meta: "待确认 · 对话流程兜底任务",
+        body: sanitizeText(conversationText).slice(0, 1_200),
+        priority: "普通",
+        progress: 0,
+        steps: ["确认约定的具体要求", "完成并向对方反馈"],
+        personId: person?.id,
+        person: person?.name,
+        reward: "完成后获得一件共同记忆纪念品",
+        status: "inbox",
+        source: "glasses",
+        assignerPersonId: person?.id,
+        createdAt: new Date().toISOString(),
+      };
+      quest.category = inferQuestCategory(quest);
+      quest.reward = `纪念品 · ${souvenirForQuest(quest, person).name}`;
+      quests.unshift(quest);
+      taskIds.add(id);
+    }
+
+    const generatedQuestIds = quests
+      .filter((item) => !originalQuestIds.has(item.id))
+      .map((item) => item.id);
 
     const linkedTitles = [...taskIds]
       .map((id) => quests.find((value) => value.id === id)?.title)
@@ -141,7 +258,7 @@ export async function processRecordingPipeline(
         meta: `${person?.name ?? "未关联人物"} · ${Math.round(item.confidence * 100)}% · ${model.model}`,
         kind: "person",
         summary: sanitizeText(item.summary),
-        transcript: sanitizeText(local.text).slice(0, 1_200),
+        transcript: sanitizeText(conversationText).slice(0, 1_200),
         personIds: [item.personId],
         taskIds: [...taskIds],
         personMemoryKind: item.kind,
@@ -175,13 +292,26 @@ export async function processRecordingPipeline(
       });
     }
 
-    const recordingMemory = memories.find(
+    let recordingMemory = memories.find(
       (value) => value.id === `recording-${recording.recording_id}`,
     );
+    if (!recordingMemory) {
+      recordingMemory = {
+        id: `recording-${recording.recording_id}`,
+        time: clockTime(),
+        title: "手机对话录音",
+        meta: `${(recording.duration_ms / 1_000).toFixed(1)} 秒 · 手机麦克风 · 本地 ASR`,
+        kind: "recording",
+      };
+      memories.unshift(recordingMemory);
+    }
     if (recordingMemory) {
       recordingMemory.title = sanitizeText(insight.summary).slice(0, 48);
       recordingMemory.summary = sanitizeText(insight.summary);
-      recordingMemory.transcript = sanitizeText(local.text).slice(0, 1_200);
+      recordingMemory.transcript = sanitizeText(conversationText).slice(
+        0,
+        1_200,
+      );
       recordingMemory.personIds = insight.personIds;
       recordingMemory.taskIds = [...taskIds];
       recordingMemory.sourceRecordingId = recording.recording_id;
@@ -190,7 +320,7 @@ export async function processRecordingPipeline(
           .map((id) => people.find((value) => value.id === id)?.name)
           .filter(Boolean)
           .join("、") || "未关联人物"
-      } · ${linkedTitles.join("、") || "未关联任务"} · ${local.model}`;
+      } · ${linkedTitles.join("、") || "未关联任务"} · 本地 ASR`;
     }
 
     logs.unshift(
@@ -205,6 +335,14 @@ export async function processRecordingPipeline(
       people,
       memories,
       interactions: insight.interactionEvents,
+      transcript: conversationText,
+      speakerPersonId: insight.speakerPersonId,
+      replySuggestions: insight.replySuggestions,
+      enhancementModel: model.model,
+      enhancementSide: model.side,
+      enhanceReplySuggestions: insight.enhanceReplySuggestions,
+      enhancementReason: insight.enhancementReason,
+      generatedQuestIds,
       logs,
     };
   } catch (error) {
