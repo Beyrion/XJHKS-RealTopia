@@ -69,11 +69,7 @@ install -Dm755 "$vl_jni_build_dir/librealtopia_vl_jni.so" \
   "$native_lib_dir/librealtopia_vl_jni.so"
 
 cd "$phone_dir"
-npm run build
-cd "$tauri_dir"
-cargo build --release --target aarch64-linux-android
-install -Dm755 target/aarch64-linux-android/release/librealtopia_phone_lib.so \
-  gen/android/app/src/main/jniLibs/arm64-v8a/librealtopia_phone_lib.so
+npm run tauri -- android build --debug --apk --target aarch64 --ci
 cd "$android_dir"
-./gradlew :app:testDebugUnitTest :app:assembleDebug
-echo "Phone APK: $android_dir/app/build/outputs/apk/debug/app-debug.apk"
+./gradlew :app:testDebugUnitTest
+echo "Phone APK: $android_dir/app/build/outputs/apk/universal/debug/app-universal-debug.apk"

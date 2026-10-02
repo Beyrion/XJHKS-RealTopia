@@ -3,8 +3,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$project_dir/scripts/android-env.sh"
 realtopia_android_build_env
-realtopia_require_env PHONE_SERIAL
-phone_serial="$PHONE_SERIAL"
+phone_serial="$(realtopia_detect_device phone)"
 sample="$project_dir/pc/.venv/lib/python3.12/site-packages/insightface/data/images/t1.jpg"
 
 test -f "$sample" || {

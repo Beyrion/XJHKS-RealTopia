@@ -311,28 +311,29 @@ show_status() {
 
 start_all() {
   resolve_adb
-  realtopia_require_env PHONE_SERIAL
-  realtopia_require_env GLASS_SERIAL
+  local phone_serial glass_serial
+  phone_serial="$(realtopia_detect_device phone)"
+  glass_serial="$(realtopia_detect_device glasses)"
   validate_port PHONE_CONTROL_PORT "$phone_port"
   validate_port GLASS_CONTROL_PORT "$glass_port"
   if [[ "$phone_port" == "$glass_port" ]]; then
     echo "PHONE_CONTROL_PORT and GLASS_CONTROL_PORT must be different." >&2
     return 1
   fi
-  check_device phone "$PHONE_SERIAL"
-  check_device glasses "$GLASS_SERIAL"
-  launch_realtopia phone "$PHONE_SERIAL" "$phone_component"
-  launch_realtopia glasses "$GLASS_SERIAL" "$glass_component"
+  check_device phone "$phone_serial"
+  check_device glasses "$glass_serial"
+  launch_realtopia phone "$phone_serial" "$phone_component"
+  launch_realtopia glasses "$glass_serial" "$glass_component"
   ensure_tool
   mkdir -p "$runtime_dir"
-  start_instance phone "$PHONE_SERIAL" "$phone_port"
-  if ! start_instance glasses "$GLASS_SERIAL" "$glass_port"; then
+  start_instance phone "$phone_serial" "$phone_port"
+  if ! start_instance glasses "$glass_serial" "$glass_port"; then
     stop_instance phone
     return 1
   fi
   echo
-  echo "  Phone  -> $(direct_url "$phone_port" "$PHONE_SERIAL" phone)"
-  echo "  Rokid  -> $(direct_url "$glass_port" "$GLASS_SERIAL" tablet)"
+  echo "  Phone  -> $(direct_url "$phone_port" "$phone_serial" phone)"
+  echo "  Rokid  -> $(direct_url "$glass_port" "$glass_serial" tablet)"
   echo
   echo "Click a link in the SSH development terminal to forward it locally."
   echo "Press Ctrl+C to stop both servers."
@@ -367,10 +368,9 @@ case "$action" in
     stop_instance phone
     ;;
   status)
-    realtopia_require_env PHONE_SERIAL
-    realtopia_require_env GLASS_SERIAL
-    show_status phone "$PHONE_SERIAL" "$phone_port"
-    show_status glasses "$GLASS_SERIAL" "$glass_port"
+    resolve_adb
+    show_status phone "$(realtopia_detect_device phone)" "$phone_port"
+    show_status glasses "$(realtopia_detect_device glasses)" "$glass_port"
     ;;
   *)
     usage >&2

@@ -40,6 +40,9 @@ model/face/*
 !model/face/README.md
 !model/face/manifest.json
 
+# Local Gradle cache used only when the shared reference cache is unavailable.
+/phone/.gradle-home/
+
 # Local model artifacts are provisioned separately.
 /model/
 *.mnn
