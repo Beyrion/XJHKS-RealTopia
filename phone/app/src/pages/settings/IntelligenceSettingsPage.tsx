@@ -9,7 +9,7 @@ import { nativeService } from "../../services/native";
 import { useAppStore } from "../../store/AppStore";
 
 export default function IntelligenceSettingsPage() {
-  const { asrDownload, refreshModelDownload, retryLastRecording, notify } =
+  const { modelDownloads, refreshModelDownload, retryLastRecording, notify } =
     useAppStore();
   const [settings, setSettings] = useState<ModelSettings>(() =>
     modelHub.load(),
@@ -53,17 +53,17 @@ export default function IntelligenceSettingsPage() {
       </div>
       <SettingCard title="ModelScope 端侧模型">
         <ModelRepositoryList
-          status={asrDownload}
-          onDownload={() =>
+          statuses={modelDownloads}
+          onDownload={(modelId) =>
             void nativeService
-              .startAsrDownload()
+              .startModelDownload(modelId)
               .then(() => {
-                notify("ASR 模型已加入系统下载队列");
+                notify("模型已加入系统下载队列");
                 window.setTimeout(() => void refreshModelDownload(true), 500);
               })
               .catch((error) =>
                 notify(
-                  error instanceof Error ? error.message : "ASR 下载启动失败",
+                    error instanceof Error ? error.message : "模型下载启动失败",
                 ),
               )
           }

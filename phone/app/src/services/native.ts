@@ -59,7 +59,11 @@ export const nativeService = {
 
   modelDownloadStatus: () =>
     invoke<ModelDownloadStatus>("model_download_status"),
+  modelDownloadStatuses: () =>
+    invoke<{ models: ModelDownloadStatus[] }>("model_download_statuses"),
   startAsrDownload: () => invoke<void>("start_asr_download"),
+  startModelDownload: (modelId: string) =>
+    invoke<void>("start_model_download", { modelId }),
   openModelRepository: (modelId: string) =>
     invoke<void>("open_model_repository", { modelId }),
 

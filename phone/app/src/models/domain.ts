@@ -128,5 +128,5 @@ export interface LocalModelRepository {
   id: string;
   name: string;
   kind: string;
-  install: "auto" | "manual";
+  install: "auto" | "on-demand" | "manual";
 }

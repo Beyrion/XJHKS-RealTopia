@@ -587,9 +587,14 @@ struct ModelDownloadStatus {
     last_error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ModelDownloadStatuses {
+    models: Vec<ModelDownloadStatus>,
+}
+
 #[cfg(mobile)]
 mod mobile_models {
-    use super::ModelDownloadStatus;
+    use super::{ModelDownloadStatus, ModelDownloadStatuses};
     use serde::Serialize;
     use tauri::{
         plugin::{Builder, PluginHandle, TauriPlugin},
@@ -601,6 +606,12 @@ mod mobile_models {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct OpenRepositoryRequest<'a> {
+        model_id: &'a str,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StartDownloadRequest<'a> {
         model_id: &'a str,
     }
 
@@ -616,10 +627,28 @@ mod mobile_models {
                 .map_err(|error| error.to_string())
         }
 
+        pub fn all_statuses(&self) -> Result<ModelDownloadStatuses, String> {
+            self.0
+                .run_mobile_plugin("allStatuses", ())
+                .map_err(|error| error.to_string())
+        }
+
         pub fn start_asr_download(&self) -> Result<(), String> {
             let response: AcceptedResponse = self
                 .0
                 .run_mobile_plugin("startAsrDownload", ())
+                .map_err(|error| error.to_string())?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err("model downloader rejected the request".into())
+            }
+        }
+
+        pub fn start_model_download(&self, model_id: &str) -> Result<(), String> {
+            let response: AcceptedResponse = self
+                .0
+                .run_mobile_plugin("startModelDownload", StartDownloadRequest { model_id })
                 .map_err(|error| error.to_string())?;
             if response.accepted {
                 Ok(())
@@ -846,6 +875,21 @@ fn model_download_status(app: tauri::AppHandle) -> Result<ModelDownloadStatus, S
 }
 
 #[tauri::command]
+fn model_download_statuses(app: tauri::AppHandle) -> Result<ModelDownloadStatuses, String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_models::RealiaModels<tauri::Wry>>()
+            .all_statuses();
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(ModelDownloadStatuses { models: Vec::new() })
+    }
+}
+
+#[tauri::command]
 fn start_asr_download(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(mobile)]
     {
@@ -856,6 +900,21 @@ fn start_asr_download(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(not(mobile))]
     {
         let _ = app;
+        Err("本地模型下载仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+fn start_model_download(model_id: String, app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_models::RealiaModels<tauri::Wry>>()
+            .start_model_download(&model_id);
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (model_id, app);
         Err("本地模型下载仅支持 Android 应用".into())
     }
 }
@@ -1880,7 +1939,9 @@ pub fn run() {
             enroll_person_from_gallery,
             remove_person,
             model_download_status,
+            model_download_statuses,
             start_asr_download,
+            start_model_download,
             open_model_repository,
             topia::load_topia_world,
             topia::save_topia_world,

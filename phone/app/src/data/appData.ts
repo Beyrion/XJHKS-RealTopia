@@ -52,13 +52,13 @@ export const localModelRepositories: LocalModelRepository[] = [
     id: "MNN/Qwen3-VL-2B-Instruct-MNN",
     name: "Qwen3-VL 2B Instruct",
     kind: "本地视觉理解",
-    install: "manual",
+    install: "on-demand",
   },
   {
     id: "MNN/Qwen3-VL-4B-Instruct-MNN",
     name: "Qwen3-VL 4B Instruct",
     kind: "本地视觉理解 · 高质量",
-    install: "manual",
+    install: "on-demand",
   },
   {
     id: "huangzhengxiang/Qwen3-TTS-0.6B-Base-FP16-MNN",

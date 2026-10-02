@@ -40,6 +40,7 @@ interface AppStoreValue {
   perception: boolean;
   session: SessionState;
   asrDownload: ModelDownloadStatus | null;
+  modelDownloads: ModelDownloadStatus[];
   logs: string[];
   toastMessage: string;
   activeQuestId: string | null;
@@ -87,6 +88,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionState>(emptySession);
   const [asrDownload, setAsrDownload] = useState<ModelDownloadStatus | null>(
     null,
+  );
+  const [modelDownloads, setModelDownloads] = useState<ModelDownloadStatus[]>(
+    [],
   );
   const [logs, setLogs] = useState([
     "系统启动 · 记忆索引加载完成",
@@ -347,11 +351,23 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     if (!force && now - lastModelStatusFetchRef.current < 1_500) return;
     lastModelStatusFetchRef.current = now;
     try {
-      const next = await nativeService.modelDownloadStatus();
+      const response = await nativeService.modelDownloadStatuses();
+      setModelDownloads(response.models);
+      const next =
+        response.models.find((item) => item.model_id.includes("Qwen3-ASR")) ??
+        null;
       asrRef.current = next;
       setAsrDownload(next);
     } catch {
-      // Browser preview and Android builds without the model plugin use the empty state.
+      // Preserve compatibility with APKs built before multi-model status support.
+      try {
+        const next = await nativeService.modelDownloadStatus();
+        asrRef.current = next;
+        setAsrDownload(next);
+        setModelDownloads([next]);
+      } catch {
+        // Browser preview and Android builds without the model plugin use empty state.
+      }
     }
   }, []);
 
@@ -636,6 +652,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       perception,
       session,
       asrDownload,
+      modelDownloads,
       logs,
       toastMessage,
       activeQuestId,
@@ -660,6 +677,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       asrDownload,
+      modelDownloads,
       activeQuestId,
       addQuest,
       appendLog,

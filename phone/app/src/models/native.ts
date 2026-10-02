@@ -90,6 +90,10 @@ export interface ModelDownloadStatus {
   last_error: string | null;
 }
 
+export interface ModelDownloadStatuses {
+  models: ModelDownloadStatus[];
+}
+
 export interface SessionState {
   phase: string;
   session_id: string | null;

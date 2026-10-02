@@ -25,6 +25,7 @@ function statusLabel(status: ModelDownloadStatus | null) {
         queued: "已排队",
         waiting_network: "等待联网",
         error: "下载失败",
+        not_installed: "未安装",
         mobile_only: "仅手机端",
       } as Record<string, string>
     )[status.state] ?? status.state
@@ -32,20 +33,23 @@ function statusLabel(status: ModelDownloadStatus | null) {
 }
 
 export function ModelRepositoryList({
-  status,
+  statuses,
   onDownload,
   onOpen,
 }: {
-  status: ModelDownloadStatus | null;
-  onDownload: () => void;
+  statuses: ModelDownloadStatus[];
+  onDownload: (modelId: string) => void;
   onOpen: (modelId: string) => void;
 }) {
   return (
     <>
       {localModelRepositories.map((model) => {
         const automatic = model.install === "auto";
+        const downloadable = model.install !== "manual";
+        const status =
+          statuses.find((item) => item.model_id === model.id) ?? null;
         const progress =
-          automatic && status?.total_bytes
+          downloadable && status?.total_bytes
             ? Math.min(
                 100,
                 Math.round(
@@ -53,9 +57,14 @@ export function ModelRepositoryList({
                 ),
               )
             : 0;
-        const detail = automatic
-          ? `${statusLabel(status)} · ${status?.total_bytes ? `${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}` : "约 1.33 GB · 联网后自动下载"}`
-          : "按需下载 · 不占用 APK 体积";
+        const expected = model.id.includes("VL-4B")
+          ? "约 2.96 GB"
+          : model.id.includes("VL-2B")
+            ? "约 1.47 GB"
+            : "约 1.33 GB";
+        const detail = downloadable
+          ? `${statusLabel(status)} · ${status?.total_bytes ? `${formatBytes(status.downloaded_bytes)} / ${formatBytes(status.total_bytes)}` : `${expected} · ${automatic ? "联网后自动下载" : "按需下载"}`}`
+          : "仓库入口 · 尚未接入推理";
         return (
           <div className="model-download" key={model.id}>
             <span
@@ -68,17 +77,31 @@ export function ModelRepositoryList({
               <small>
                 {model.kind} · {detail}
               </small>
-              {automatic && status?.total_bytes ? (
+              {downloadable && status?.total_bytes ? (
                 <i className="download-progress">
                   <em style={{ width: `${progress}%` }} />
                 </i>
               ) : null}
             </span>
             <div className="model-actions">
-              {automatic && !status?.ready && (
-                <button id="start-asr-download" onClick={onDownload}>
+              {downloadable && !status?.ready && (
+                <button
+                  id={automatic ? "start-asr-download" : undefined}
+                  data-model-download={model.id}
+                  onClick={() => onDownload(model.id)}
+                  disabled={
+                    status?.state === "checking" ||
+                    status?.state === "downloading" ||
+                    status?.state === "queued"
+                  }
+                >
                   <Icon name="Download" />
-                  {status?.state === "error" ? "重试" : "立即下载"}
+                  {status?.state === "error"
+                    ? "重试"
+                    : status?.state === "downloading" ||
+                        status?.state === "queued"
+                      ? "下载中"
+                      : "安装"}
                 </button>
               )}
               <button
