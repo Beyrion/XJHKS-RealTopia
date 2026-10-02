@@ -13,17 +13,19 @@ final class GlassHudView extends View {
     private static final int R=76, G=255, B=151, GREEN=Color.rgb(R,G,B);
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private Mode mode=Mode.READY;
-    private String detail="相机预热中", personName="", personSpeech="";
+    private String detail="相机预热中", personName="", personTitle="", personQuest="", personSpeech="";
+    private int personBond;
     private int personChoice;
     private String personResponse="";
     private static final String[] PERSON_CHOICES={"打个招呼","聊聊近况","稍后再说"};
+    private static final long PERSON_TIMEOUT_MS=15_000;
     private long modeStarted=SystemClock.elapsedRealtime();
     private boolean perception;
 
     GlassHudView(Context context){super(context);paint.setTypeface(android.graphics.Typeface.create("sans",android.graphics.Typeface.NORMAL));setBackgroundColor(Color.BLACK);}
     void setStatus(Mode next,String value){mode=next;detail=value==null?"":value;modeStarted=SystemClock.elapsedRealtime();invalidate();}
     void setPerception(boolean value){perception=value;invalidate();}
-    void showPerson(String name,String title,int bond,String quest,String speech){personName=name;personSpeech=speech;personChoice=0;personResponse="";setStatus(Mode.PERSON,"人物已相认");}
+    void showPerson(String name,String title,int bond,String quest,String speech){personName=name;personTitle=title;personBond=bond;personQuest=quest;personSpeech=speech;personChoice=0;personResponse="";setStatus(Mode.PERSON,bond<0?"检测到陌生人":"人物已相认");}
     boolean isPersonMode(){return mode==Mode.PERSON;}
     void nextPersonChoice(){if(mode!=Mode.PERSON)return;personChoice=(personChoice+1)%PERSON_CHOICES.length;personResponse="";invalidate();}
     void confirmPersonChoice(){if(mode!=Mode.PERSON)return;personResponse="已选择 · "+PERSON_CHOICES[personChoice];invalidate();}
@@ -31,17 +33,21 @@ final class GlassHudView extends View {
 
     @Override protected void onDraw(Canvas c){super.onDraw(c);float w=getWidth(),h=getHeight();paint.setStyle(Paint.Style.FILL);if(mode==Mode.PERSON)drawPerson(c,w,h);else drawFieldHud(c,w,h);postInvalidateDelayed(1000);}
     private void drawFieldHud(Canvas c,float w,float h){
-        text(c,"最近任务",22,36,15,mono(125),true);
-        text(c,"把书还给周野",22,68,21,GREEN,false);
-        text(c,"18:30 · 青苔书店",22,96,15,mono(120),false);
+        String heading=mode==Mode.RECORDING?"正在录音":mode==Mode.CAPTURING?"正在拍摄":
+                mode==Mode.SENDING?"正在传输":mode==Mode.ERROR?"连接异常":"RealTopia";
+        text(c,heading,22,36,15,mono(125),true);
+        wrapText(c,detail,22,70,w-44,20,mode==Mode.ERROR?mono(210):GREEN);
+        rightText(c,perception?"持续感知已开启":"短按拍照 · 长按录音",w-22,h-22,14,mono(125));
     }
     private void drawPerson(Canvas c,float w,float h){
         text(c,personName,18,44,30,GREEN,false);
+        text(c,personTitle+" · "+(personBond<0?"？？？":personBond+"/100"),18,68,14,mono(145),false);
         String line=personSpeech.length()>46?personSpeech.substring(0,46)+"…":personSpeech;
-        wrapText(c,"“"+line+"”",18,91,w-36,20,mono(210));
+        wrapText(c,"“"+line+"”",18,96,w-36,18,mono(210));
+        text(c,"关联任务 · "+personQuest,18,h-20,14,mono(145),false);
         float optionTop=h-96;for(int i=0;i<PERSON_CHOICES.length;i++){float y=optionTop+i*31;rightText(c,(i==personChoice?"› ":"  ")+PERSON_CHOICES[i],w-22,y,18,i==personChoice?GREEN:mono(125));}
         if(!personResponse.isEmpty())rightText(c,personResponse,w-22,optionTop-32,14,mono(150));
-        if(SystemClock.elapsedRealtime()-modeStarted>30_000)setStatus(Mode.READY,perception?"持续感知中":"物理按键已就绪");
+        if(SystemClock.elapsedRealtime()-modeStarted>PERSON_TIMEOUT_MS)setStatus(Mode.READY,perception?"持续感知中":"物理按键已就绪");
     }
     private void wrapText(Canvas c,String value,float x,float y,float max,int size,int color){StringBuilder line=new StringBuilder();float cursor=y;for(char ch:value.toCharArray()){paint.setTextSize(size);if(paint.measureText(line.toString()+ch)>max){text(c,line.toString(),x,cursor,size,color,false);line.setLength(0);cursor+=29;}line.append(ch);}text(c,line.toString(),x,cursor,size,color,false);}
     private void rightText(Canvas c,String value,float right,float y,float size,int color){paint.setTextSize(size);paint.setTypeface(android.graphics.Typeface.create("sans",android.graphics.Typeface.NORMAL));text(c,value,right-paint.measureText(value),y,size,color,false);}

@@ -8,7 +8,7 @@ final class RokidCommandBridge {
     static final String CONTROL_COMMAND="Realia_Control";
     static final String PERSON_COMMAND="Realia_Person";
     interface Listener{void onCapture(long requestId,int width,int jpegQuality,boolean forceCold);}
-    interface ControlListener{void onPerception(boolean enabled,int intervalSeconds,int width,int jpegQuality);}
+    interface ControlListener{void onPerception(boolean enabled,int framesPerSecond,int width,int jpegQuality);}
     interface PersonListener{void onPerson(String personId,String name,String title,int affinity,String quest,String story);}
     private final CXRServiceBridge bridge=new CXRServiceBridge();
     private final Listener listener;
@@ -33,10 +33,10 @@ final class RokidCommandBridge {
         int controlResult=bridge.subscribe(CONTROL_COMMAND,(command,caps,data)->{
             if(caps==null||caps.size()<2){Log.e("RealiaCxr","invalid control command");return;}
             boolean enabled=caps.at(0).getInt()!=0;
-            int interval=Math.max(5,Math.min(300,caps.at(1).getInt()));
+            int framesPerSecond=Math.max(2,Math.min(5,caps.at(1).getInt()));
             int width=caps.size()>2?Math.max(1280,Math.min(4032,caps.at(2).getInt())):4032;
             int quality=caps.size()>3?Math.max(50,Math.min(100,caps.at(3).getInt())):90;
-            controlListener.onPerception(enabled,interval,width,quality);
+            controlListener.onPerception(enabled,framesPerSecond,width,quality);
         });
         Log.i("RealiaCxr","SUBSCRIBED result="+controlResult+" command="+CONTROL_COMMAND);
         int personResult=bridge.subscribe(PERSON_COMMAND,(command,caps,data)->{
