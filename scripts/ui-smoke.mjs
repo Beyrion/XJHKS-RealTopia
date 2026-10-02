@@ -68,6 +68,51 @@ page.on("response", (response) => {
     httpErrors.push(`${response.status()} ${response.url()}`);
 });
 try {
+  await page.goto(`${base}/?screen=topia`, {
+    waitUntil: "networkidle",
+  });
+  const onboardingAudit = await page.evaluate(() => ({
+    open: Boolean(document.querySelector(".topia-studio-dialog")),
+    title: document.querySelector("#topia-studio-title")?.textContent,
+    subtitle: document.querySelector(".topia-studio-dialog > header p")
+      ?.textContent,
+    mode: document.querySelector(".topia-entry-choice")?.dataset
+      .topiaStudioMode,
+    choices: [...document.querySelectorAll(".topia-entry-cards button b")].map(
+      (element) => element.textContent,
+    ),
+    scrollable: (() => {
+      const dialog = document.querySelector(".topia-studio-dialog");
+      return dialog.scrollHeight > dialog.clientHeight + 1;
+    })(),
+    cardsFullyVisible: (() => {
+      const dialog = document
+        .querySelector(".topia-studio-dialog")
+        ?.getBoundingClientRect();
+      const cards = [...document.querySelectorAll(".topia-entry-cards button")]
+        .map((element) => element.getBoundingClientRect());
+      return Boolean(dialog) && cards.length === 2 && cards.every(
+        (card) => card.top >= dialog.top && card.bottom <= dialog.bottom,
+      );
+    })(),
+  }));
+  if (
+    !onboardingAudit.open ||
+    onboardingAudit.title !== "让每个人都成为自己人生开放世界中的主角。" ||
+    onboardingAudit.subtitle !== "开始创建你的 Topia" ||
+    onboardingAudit.mode !== "onboarding" ||
+    onboardingAudit.choices.join("|") !== "使用默认|自己定制" ||
+    onboardingAudit.scrollable ||
+    !onboardingAudit.cardsFullyVisible
+  )
+    throw new Error(
+      `Topia first-run onboarding audit failed: ${JSON.stringify(onboardingAudit)}`,
+    );
+  await page.locator(".topia-entry-cards button").first().click();
+  await page.locator(".topia-studio-dialog").waitFor({ state: "detached" });
+  await page.reload({ waitUntil: "networkidle" });
+  if (await page.locator(".topia-studio-dialog").count())
+    throw new Error("Topia onboarding reopened after user data was established");
   await page.goto(`${base}/?screen=quests`, { waitUntil: "networkidle" });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: "networkidle" });
@@ -327,6 +372,9 @@ try {
       activeQuest: focus?.getAttribute("data-active-quest"),
       storedActiveQuest: localStorage.getItem("realtopia.activeQuestId"),
       focusProgress: focus?.style.getPropertyValue("--focus-progress"),
+      renderStyle: world?.getAttribute("data-topia-render-style"),
+      canvasRenderStyle:
+        document.querySelector("#topia-canvas")?.dataset.topiaRenderStyle,
     };
   });
   if (
@@ -349,9 +397,129 @@ try {
     topiaAudit.focusParticles !== 10 ||
     !topiaAudit.focusCategory ||
     topiaAudit.activeQuest !== topiaAudit.storedActiveQuest ||
-    !topiaAudit.focusProgress?.endsWith("%")
+    !topiaAudit.focusProgress?.endsWith("%") ||
+    topiaAudit.renderStyle !== "storybook-ink" ||
+    topiaAudit.canvasRenderStyle !== "storybook-ink"
   )
     throw new Error(`Topia audit failed: ${JSON.stringify(topiaAudit)}`);
+  await page.locator(".topia-studio-trigger").click();
+  await page.locator(".topia-studio-dialog").waitFor();
+  const topiaStudioAudit = await page.evaluate(() => ({
+    title: document.querySelector("#topia-studio-title")?.textContent,
+    mode: document.querySelector(".topia-entry-choice")?.dataset
+      .topiaStudioMode,
+    entryCards: document.querySelectorAll(".topia-entry-cards button").length,
+    firstChoice: document.querySelector(
+      ".topia-entry-cards button:first-child b",
+    )?.textContent,
+    secondChoice: document.querySelector(
+      ".topia-entry-cards button:last-child b",
+    )?.textContent,
+    blurred: getComputedStyle(document.querySelector(".topia-studio-overlay"))
+      .backdropFilter,
+    triggerEmoji: document.querySelector(".topia-studio-trigger")?.textContent,
+    dialogWidth: document.querySelector(".topia-studio-dialog")?.getBoundingClientRect().width,
+    dialogHeight: document.querySelector(".topia-studio-dialog")?.getBoundingClientRect().height,
+    viewport: [innerWidth, innerHeight],
+  }));
+  if (
+    topiaStudioAudit.title !== "让每个人都成为自己人生开放世界中的主角。" ||
+    topiaStudioAudit.mode !== "manage" ||
+    topiaStudioAudit.entryCards !== 2 ||
+    topiaStudioAudit.firstChoice !== "自定义" ||
+    topiaStudioAudit.secondChoice !== "从历史选择" ||
+    !topiaStudioAudit.blurred.includes("blur") ||
+    topiaStudioAudit.triggerEmoji?.trim() !== "🎨" ||
+    topiaStudioAudit.dialogWidth > topiaStudioAudit.viewport[0] * 0.8 + 1 ||
+    topiaStudioAudit.dialogHeight > topiaStudioAudit.viewport[1] * 0.8 + 1
+  )
+    throw new Error(
+      `Topia studio audit failed: ${JSON.stringify(topiaStudioAudit)}`,
+    );
+  await page.locator(".topia-entry-cards button").last().click();
+  const historyAudit = await page.evaluate(() => ({
+    cards: document.querySelectorAll(".topia-history-grid > button").length,
+    defaultLabel: document.querySelector(
+      ".topia-history-grid > button:first-child em",
+    )?.textContent,
+    thumbnail: document
+      .querySelector(".topia-history-thumbnail img")
+      ?.getAttribute("src"),
+  }));
+  if (
+    historyAudit.cards < 1 ||
+    !["默认", "当前"].includes(historyAudit.defaultLabel ?? "") ||
+    !historyAudit.thumbnail?.startsWith("data:image/jpeg;base64,")
+  )
+    throw new Error(
+      `Topia history thumbnail audit failed: ${JSON.stringify(historyAudit)}`,
+    );
+  await page.locator(".topia-history-view + footer .secondary").click();
+  await page.locator(".topia-entry-cards button").first().click();
+  if (
+    (await page.locator("#topia-studio-title").textContent()) !==
+    "创建 Topia（第 1 / 4 步）"
+  )
+    throw new Error("Topia custom guide did not show the step in its title");
+  const customGuideAudit = await page.evaluate(() => ({
+    dimensions: document.querySelectorAll(".topia-imagery fieldset").length,
+    selected: document.querySelectorAll(".topia-imagery button.selected")
+      .length,
+    pages: document.querySelectorAll(".topia-guide-progress i").length,
+    emojiChoices: document.querySelectorAll(
+      ".topia-imagery fieldset button > span",
+    ).length,
+    next: document.querySelector(".topia-guide-actions button:last-child")
+      ?.textContent,
+  }));
+  if (
+    customGuideAudit.dimensions !== 2 ||
+    customGuideAudit.selected !== 2 ||
+    customGuideAudit.pages !== 4 ||
+    customGuideAudit.emojiChoices !== 12 ||
+    !customGuideAudit.next?.includes("下一页")
+  )
+    throw new Error(
+      `Topia custom guide audit failed: ${JSON.stringify(customGuideAudit)}`,
+    );
+  await page.evaluate(() => {
+    const dialog = document.querySelector(".topia-studio-dialog");
+    if (dialog) dialog.scrollTop = dialog.scrollHeight;
+  });
+  await page.locator(".topia-guide-actions button").last().click();
+  await page.waitForTimeout(50);
+  const nextPageTopAudit = await page.evaluate(() => ({
+    title: document.querySelector("#topia-studio-title")?.textContent,
+    scrollTop: document.querySelector(".topia-studio-dialog")?.scrollTop,
+  }));
+  if (
+    nextPageTopAudit.title !== "创建 Topia（第 2 / 4 步）" ||
+    nextPageTopAudit.scrollTop !== 0
+  )
+    throw new Error(
+      `Topia page did not reset to top: ${JSON.stringify(nextPageTopAudit)}`,
+    );
+  for (let index = 0; index < 2; index++)
+    await page.locator(".topia-guide-actions button").last().click();
+  const topiaStudioFinalAudit = await page.evaluate(() => ({
+    title: document.querySelector("#topia-studio-title")?.textContent,
+    styleChoices: document.querySelectorAll(".topia-imagery fieldset button")
+      .length,
+    randomSelected: document.querySelector(".topia-imagery button.selected")
+      ?.textContent,
+    generate: document.querySelector(".topia-guide-actions button:last-child")
+      ?.textContent,
+  }));
+  if (
+    topiaStudioFinalAudit.title !== "创建 Topia（第 4 / 4 步）" ||
+    topiaStudioFinalAudit.styleChoices !== 5 ||
+    !topiaStudioFinalAudit.randomSelected?.includes("完全随机") ||
+    !topiaStudioFinalAudit.generate?.includes("生成新的 Topia")
+  )
+    throw new Error(
+      `Topia studio final page audit failed: ${JSON.stringify(topiaStudioFinalAudit)}`,
+    );
+  await page.locator('[aria-label="关闭 Topia 工坊"]').click();
   await page.screenshot({
     path: path.join(root, "artifacts/mockups/phone-topia-exterior.png"),
   });
