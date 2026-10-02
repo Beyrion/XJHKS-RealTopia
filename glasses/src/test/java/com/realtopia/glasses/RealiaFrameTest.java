@@ -23,4 +23,12 @@ public class RealiaFrameTest {
         assertEquals(RealiaFrame.MAGIC,in.readInt());assertEquals(1,in.readUnsignedByte());assertEquals(2,in.readUnsignedByte());in.readUnsignedShort();assertEquals(91,in.readLong());
         int metadataLength=in.readInt();assertEquals(4,in.readInt());byte[] metadata=new byte[metadataLength];in.readFully(metadata);byte[] pcm=new byte[4];in.readFully(pcm);assertArrayEquals(new byte[]{1,2,3,4},pcm);
     }
+    @Test public void writesPersonChoiceAsTypeThree() throws Exception {
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+        RealiaFrame.writePersonChoice(new DataOutputStream(bytes),123,"{\"personId\":\"lin\",\"choiceId\":\"catch_up\"}");
+        DataInputStream in=new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()));
+        assertEquals(RealiaFrame.MAGIC,in.readInt());assertEquals(1,in.readUnsignedByte());assertEquals(3,in.readUnsignedByte());in.readUnsignedShort();assertEquals(123,in.readLong());
+        int metadataLength=in.readInt();assertEquals(1,in.readInt());byte[] metadata=new byte[metadataLength];in.readFully(metadata);assertEquals(1,in.readUnsignedByte());
+        String json=new String(metadata,java.nio.charset.StandardCharsets.UTF_8);assertEquals(true,json.contains("\"choiceId\":\"catch_up\""));
+    }
 }

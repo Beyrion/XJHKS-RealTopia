@@ -14,6 +14,7 @@ public final class RealiaFrameReader {
     static final int MAX_METADATA_BYTES = 64 * 1024;
     static final int MAX_JPEG_BYTES = 20 * 1024 * 1024;
     static final int MAX_AUDIO_BYTES = 32 * 1024 * 1024;
+    static final int MAX_EVENT_BYTES = 4 * 1024;
 
     public static final class Frame {
         private final long requestId, readStartedAtMs, readFinishedAtMs;
@@ -33,6 +34,7 @@ public final class RealiaFrameReader {
         public int type(){return type;}
         public boolean isPhoto(){return type==1;}
         public boolean isAudio(){return type==2;}
+        public boolean isPersonChoice(){return type==3;}
         public JSONObject metadata() { return metadata; }
         public byte[] jpeg() { return jpeg; }
         public long readStartedAtMs() { return readStartedAtMs; }
@@ -61,13 +63,13 @@ public final class RealiaFrameReader {
         long requestId = input.readLong();
         int metadataLength = input.readInt();
         int jpegLength = input.readInt();
-        if (magic != MAGIC || version != 1 || (type != 1 && type != 2)) {
+        if (magic != MAGIC || version != 1 || (type != 1 && type != 2 && type != 3)) {
             throw new IOException("unsupported REA/1 frame");
         }
         if (metadataLength < 2 || metadataLength > MAX_METADATA_BYTES) {
             throw new IOException("invalid metadata length " + metadataLength);
         }
-        int maximum=type==1?MAX_JPEG_BYTES:MAX_AUDIO_BYTES;
+        int maximum=type==1?MAX_JPEG_BYTES:type==2?MAX_AUDIO_BYTES:MAX_EVENT_BYTES;
         if (jpegLength < 1 || jpegLength > maximum) {
             throw new IOException("invalid payload length " + jpegLength);
         }

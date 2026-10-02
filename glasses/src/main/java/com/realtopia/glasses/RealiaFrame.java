@@ -9,6 +9,7 @@ final class RealiaFrame {
     static final int MAGIC = 0x52454131; // REA1
     static final int MAX_JPEG_BYTES = 20 * 1024 * 1024;
     static final int MAX_AUDIO_BYTES = 32 * 1024 * 1024;
+    private static final byte[] EVENT_MARKER={1};
     private RealiaFrame() { }
 
     static void write(DataOutputStream out, long requestId, JSONObject metadata,
@@ -35,6 +36,16 @@ final class RealiaFrame {
             throw new IOException("invalid audio length");
         }
         writePayload(out, 2, recordingId, metadata, pcm);
+    }
+
+    static void writePersonChoice(DataOutputStream out,long eventId,JSONObject metadata)
+            throws IOException {
+        writePersonChoice(out,eventId,metadata.toString());
+    }
+
+    static void writePersonChoice(DataOutputStream out,long eventId,String metadata)
+            throws IOException {
+        writePayload(out,3,eventId,metadata,EVENT_MARKER);
     }
 
     private static void writePayload(DataOutputStream out,int type,long id,String metadata,

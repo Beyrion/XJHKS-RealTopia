@@ -28,6 +28,7 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
         void onPhase(String phase, String transport, String detail);
         void onPhoto(RealiaFrameReader.Frame frame);
         void onAudio(RealiaFrameReader.Frame frame);
+        void onPersonChoice(RealiaFrameReader.Frame frame);
         void onError(String message);
     }
 
@@ -240,7 +241,7 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
         DataInputStream input = new DataInputStream(connected.getInputStream());
         while (started && !connected.isClosed()) {
             RealiaFrameReader.Frame frame=RealiaFrameReader.read(input);
-            if(frame.isAudio())listener.onAudio(frame);else listener.onPhoto(frame);
+            if(frame.isAudio())listener.onAudio(frame);else if(frame.isPersonChoice())listener.onPersonChoice(frame);else listener.onPhoto(frame);
         }
     }
 

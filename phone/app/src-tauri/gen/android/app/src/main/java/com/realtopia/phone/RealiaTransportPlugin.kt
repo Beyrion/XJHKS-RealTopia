@@ -69,6 +69,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
   private var completedCaptures = 0
   private var lastCapture: JSObject? = null
   private var lastRecording: JSObject? = null
+  private var lastPersonChoice: JSObject? = null
   private var samples = JSONArray()
   private val streamFiles = ArrayDeque<File>()
   private var desiredPerceptionEnabled = false
@@ -129,6 +130,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       completedCaptures = 0
       lastCapture = null
       lastRecording = null
+      lastPersonChoice = null
       samples = JSONArray()
       synchronized(streamFiles) {
         while (streamFiles.isNotEmpty()) streamFiles.removeFirst().delete()
@@ -307,6 +309,36 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
     }catch(error:Exception){onError("recording persistence failed: ${error.message}")}
   }
 
+  override fun onPersonChoice(frame: RealiaFrameReader.Frame) {
+    val metadata = frame.metadata()
+    val personId = metadata.optString("personId").trim()
+    val choiceId = metadata.optString("choiceId").trim()
+    val label = metadata.optString("label").trim()
+    val choiceIndex = metadata.optInt("choiceIndex", -1)
+    if (personId.isEmpty() || personId.length > 96 ||
+      choiceId !in setOf("greet", "catch_up", "later") ||
+      choiceIndex !in 0..2 || label.isEmpty() || label.length > 32) {
+      onError("invalid person choice event #${frame.requestId()}")
+      return
+    }
+    val item = JSObject().apply {
+      put("event_id", frame.requestId())
+      put("person_id", personId)
+      put("choice_index", choiceIndex)
+      put("choice_id", choiceId)
+      put("label", label)
+      put("input", metadata.optString("input", "rokid_touchpad"))
+      put("selected_at_elapsed_ms", metadata.optLong("selectedAtElapsedMs", -1))
+      put("received_at_ms", System.currentTimeMillis())
+    }
+    synchronized(lock) {
+      lastPersonChoice = item
+      detail = "person choice · $personId / $choiceId"
+      lastError = null
+    }
+    Log.i("RealiaPerson", "CHOICE_RECEIVED eventId=${frame.requestId()} personId=$personId choiceId=$choiceId")
+  }
+
   override fun onError(message: String) {
     synchronized(lock) {
       phase = "error"
@@ -325,6 +357,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       it.put("last_error", lastError)
       it.put("last_capture", lastCapture)
       it.put("last_recording",lastRecording)
+      it.put("last_person_choice",lastPersonChoice)
     }
   }
 

@@ -6,6 +6,9 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayDeque;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 final class PhotoSocketServer implements AutoCloseable {
@@ -15,6 +18,10 @@ final class PhotoSocketServer implements AutoCloseable {
     private ServerSocket server;
     private Socket client;
     private DataOutputStream output;
+    private final ArrayDeque<PendingChoice> pendingChoices=new ArrayDeque<>();
+    private final ExecutorService choiceIo=Executors.newSingleThreadExecutor(r->{
+        Thread thread=new Thread(r,"realia-person-choice");thread.setDaemon(true);return thread;
+    });
 
     void start() {
         if (running) return;
@@ -35,6 +42,7 @@ final class PhotoSocketServer implements AutoCloseable {
                     closeClient();
                     client = accepted;
                     output = new DataOutputStream(accepted.getOutputStream());
+                    flushPendingChoices();
                 }
                 Log.i(TAG, "CONNECTED peer=" + accepted.getRemoteSocketAddress());
             }
@@ -65,6 +73,19 @@ final class PhotoSocketServer implements AutoCloseable {
         catch(IOException error){Log.e(TAG,"audio send failed",error);closeClient();return false;}
     }
 
+    synchronized boolean sendPersonChoice(long eventId,JSONObject metadata){
+        PendingChoice choice=new PendingChoice(eventId,metadata);
+        enqueueChoice(choice);
+        Log.i(TAG,"PERSON_CHOICE_QUEUED eventId="+eventId);
+        if(output!=null)choiceIo.execute(this::flushPendingChoices);
+        return true;
+    }
+
+    private void writeChoice(PendingChoice choice)throws IOException{RealiaFrame.writePersonChoice(output,choice.eventId,choice.metadata);Log.i(TAG,"PERSON_CHOICE_SENT eventId="+choice.eventId);}
+    private void enqueueChoice(PendingChoice choice){while(pendingChoices.size()>=16)pendingChoices.removeFirst();pendingChoices.addLast(choice);}
+    private synchronized void flushPendingChoices(){while(output!=null&&!pendingChoices.isEmpty()){PendingChoice choice=pendingChoices.peekFirst();try{writeChoice(choice);pendingChoices.removeFirst();}catch(IOException error){Log.e(TAG,"pending choice flush failed",error);closeClient();return;}}}
+    private static final class PendingChoice{final long eventId;final JSONObject metadata;PendingChoice(long eventId,JSONObject metadata){this.eventId=eventId;this.metadata=metadata;}}
+
     private synchronized void closeClient() {
         try { if (client != null) client.close(); } catch (IOException ignored) { }
         client = null; output = null;
@@ -72,6 +93,7 @@ final class PhotoSocketServer implements AutoCloseable {
 
     @Override public synchronized void close() {
         running = false; closeClient();
+        choiceIo.shutdownNow();
         try { if (server != null) server.close(); } catch (IOException ignored) { }
         server = null;
     }
