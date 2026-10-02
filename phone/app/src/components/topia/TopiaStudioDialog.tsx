@@ -213,6 +213,16 @@ export function TopiaStudioDialog({
     });
     return () => cancelAnimationFrame(frame);
   }, [open, page, view]);
+  const historyWorlds = useMemo(
+    () =>
+      [...studio.worlds].sort((left, right) => {
+        const leftTime = Date.parse(left.generatedAt);
+        const rightTime = Date.parse(right.generatedAt);
+        if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return 0;
+        return rightTime - leftTime;
+      }),
+    [studio.worlds],
+  );
   if (!open) return null;
 
   const activePage = pages[page];
@@ -253,9 +263,7 @@ export function TopiaStudioDialog({
         <header>
           <span>
             <h2 id="topia-studio-title">{dialogTitle}</h2>
-            {view === "entry" && !generating && (
-              <p>开始创建你的 Topia</p>
-            )}
+            {view === "entry" && !generating && <p>开始创建你的 Topia</p>}
           </span>
           <button
             aria-label="关闭 Topia 工坊"
@@ -324,7 +332,7 @@ export function TopiaStudioDialog({
           <>
             <div className="topia-history-view">
               <div className="topia-history-grid">
-                {studio.worlds.map((world, index) => (
+                {historyWorlds.map((world) => (
                   <button
                     key={world.id}
                     className={world.active ? "active" : ""}
@@ -335,7 +343,7 @@ export function TopiaStudioDialog({
                         <img src={world.thumbnail} alt="" />
                       ) : (
                         <span aria-hidden="true">
-                          {index === 0 ? "🏡" : "☁️"}
+                          {world.source === "mock" ? "🏡" : "☁️"}
                         </span>
                       )}
                     </span>
@@ -344,7 +352,11 @@ export function TopiaStudioDialog({
                       <small>{world.archetype}</small>
                     </span>
                     <em>
-                      {world.active ? "当前" : index === 0 ? "默认" : "历史"}
+                      {world.active
+                        ? "当前"
+                        : world.source === "mock"
+                          ? "预设"
+                          : "历史"}
                     </em>
                   </button>
                 ))}
@@ -369,10 +381,7 @@ export function TopiaStudioDialog({
                   aria-label={`第 ${page + 1} 页，共 ${pages.length} 页`}
                 >
                   {pages.map((_, index) => (
-                    <i
-                      className={index <= page ? "active" : ""}
-                      key={index}
-                    />
+                    <i className={index <= page ? "active" : ""} key={index} />
                   ))}
                 </div>
                 {activePage.questions.map((dimension, question) => {

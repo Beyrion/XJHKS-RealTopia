@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { KeepAliveRoutes } from "../components/routing/KeepAliveRoutes";
 import type { IconName } from "../components/ui/Icon";
 import { Icon } from "../components/ui/Icon";
+import { SouvenirUnlockDialog } from "../components/topia/SouvenirUnlockDialog";
 import PeoplePage from "../pages/PeoplePage";
 import QuestsPage from "../pages/QuestsPage";
 import TopiaPage from "../pages/TopiaPage";
@@ -19,7 +20,13 @@ const tabs: { to: string; id: string; icon: IconName; label: string }[] = [
 export default function AppLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { quests, session, toastMessage } = useAppStore();
+  const {
+    quests,
+    session,
+    toastMessage,
+    newSouvenir,
+    dismissSouvenir,
+  } = useAppStore();
   const activeRoute = pathname.startsWith("/settings")
     ? "settings"
     : pathname === "/quests"
@@ -100,6 +107,15 @@ export default function AppLayout() {
       <div className={`toast ${toastMessage ? "show" : ""}`}>
         {toastMessage}
       </div>
+      {newSouvenir && (
+        <SouvenirUnlockDialog
+          souvenir={newSouvenir}
+          onCollect={() => {
+            dismissSouvenir();
+            navigate("/topia");
+          }}
+        />
+      )}
     </div>
   );
 }
