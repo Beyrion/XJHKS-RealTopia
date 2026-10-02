@@ -2,7 +2,10 @@
 #include <jni.h>
 
 #include <MNN/expr/ExprCreator.hpp>
+#include <MNN/expr/Module.hpp>
 #include <llm/llm.hpp>
+
+#include "turnsense_engine.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,6 +13,7 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <deque>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -33,6 +37,23 @@ struct Engine {
         if (llm != nullptr) Llm::destroy(llm);
     }
     Llm* llm;
+};
+
+struct VadEngine {
+    explicit VadEngine(MNN::Express::Module* value) : module(value) { reset(); }
+    ~VadEngine() { if (module != nullptr) MNN::Express::Module::destroy(module); }
+
+    void reset() {
+        std::vector<float> zeros(2 * 1 * 64, 0.0f);
+        h = _Const(zeros.data(), {2, 1, 64}, NCHW, halide_type_of<float>());
+        c = _Const(zeros.data(), {2, 1, 64}, NCHW, halide_type_of<float>());
+        residual.clear();
+    }
+
+    MNN::Express::Module* module = nullptr;
+    VARP h;
+    VARP c;
+    std::deque<float> residual;
 };
 
 std::string fromJString(JNIEnv* env, jstring value) {
@@ -120,6 +141,14 @@ jstring errorJson(JNIEnv* env, const std::string& error) {
     return env->NewStringUTF(json.c_str());
 }
 
+VARP detachedState(VARP value) {
+    const auto* info = value == nullptr ? nullptr : value->getInfo();
+    const float* data = value == nullptr ? nullptr : value->readMap<float>();
+    if (info == nullptr || data == nullptr) return nullptr;
+    std::vector<float> copy(data, data + info->size);
+    return _Const(copy.data(), info->dim, NCHW, halide_type_of<float>());
+}
+
 }  // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -195,4 +224,125 @@ Java_com_realtopia_phone_asr_AsrNative_transcribe(
 extern "C" JNIEXPORT void JNICALL
 Java_com_realtopia_phone_asr_AsrNative_destroy(JNIEnv*, jobject, jlong handle) {
     delete reinterpret_cast<Engine*>(handle);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_realtopia_phone_vad_VadNative_createVad(JNIEnv* env, jobject, jstring modelPath) {
+    const std::string path = fromJString(env, modelPath);
+    if (path.empty()) return 0;
+    std::vector<std::string> inputs = {"x", "h", "c"};
+    std::vector<std::string> outputs = {"prob", "new_h", "new_c"};
+    auto* module = MNN::Express::Module::load(inputs, outputs, path.c_str());
+    if (module == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, "RealTopiaVad", "could not load VAD model at %s", path.c_str());
+        return 0;
+    }
+    return reinterpret_cast<jlong>(new VadEngine(module));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_realtopia_phone_vad_VadNative_analyzeVad(
+        JNIEnv* env, jobject, jlong handle, jstring pcmPath) {
+    constexpr size_t kWindowSamples = 512;
+    auto* engine = reinterpret_cast<VadEngine*>(handle);
+    if (engine == nullptr || engine->module == nullptr) return errorJson(env, "VAD engine is not loaded");
+    std::vector<float> samples;
+    std::string error;
+    if (!readPcm16(fromJString(env, pcmPath), &samples, &error)) return errorJson(env, error);
+    engine->residual.insert(engine->residual.end(), samples.begin(), samples.end());
+
+    const auto started = std::chrono::steady_clock::now();
+    std::vector<float> probabilities;
+    std::vector<float> window(kWindowSamples);
+    while (engine->residual.size() >= kWindowSamples) {
+        for (size_t index = 0; index < kWindowSamples; ++index) {
+            window[index] = engine->residual.front();
+            engine->residual.pop_front();
+        }
+        VARP x = _Const(window.data(), {1, static_cast<int>(kWindowSamples)}, NCHW,
+                        halide_type_of<float>());
+        auto result = engine->module->onForward({x, engine->h, engine->c});
+        if (result.size() != 3 || result[0] == nullptr) return errorJson(env, "MNN VAD inference failed");
+        const float* probability = result[0]->readMap<float>();
+        VARP nextH = detachedState(result[1]);
+        VARP nextC = detachedState(result[2]);
+        if (probability == nullptr || nextH == nullptr || nextC == nullptr) {
+            return errorJson(env, "MNN VAD produced invalid state");
+        }
+        probabilities.push_back(std::clamp(probability[0], 0.0f, 1.0f));
+        engine->h = std::move(nextH);
+        engine->c = std::move(nextC);
+    }
+    const double latencyMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+    const float maximum = probabilities.empty() ? 0.0f :
+            *std::max_element(probabilities.begin(), probabilities.end());
+    std::ostringstream json;
+    json << "{\"probabilities\":[";
+    for (size_t index = 0; index < probabilities.size(); ++index) {
+        if (index != 0) json << ',';
+        json << probabilities[index];
+    }
+    json << "],\"max_probability\":" << maximum
+         << ",\"latency_ms\":" << latencyMs
+         << ",\"window_count\":" << probabilities.size()
+         << ",\"residual_samples\":" << engine->residual.size() << '}';
+    return env->NewStringUTF(json.str().c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_realtopia_phone_vad_VadNative_resetVad(JNIEnv*, jobject, jlong handle) {
+    auto* engine = reinterpret_cast<VadEngine*>(handle);
+    if (engine != nullptr) engine->reset();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_realtopia_phone_vad_VadNative_destroyVad(JNIEnv*, jobject, jlong handle) {
+    delete reinterpret_cast<VadEngine*>(handle);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_realtopia_phone_vad_VadNative_createTurnSense(
+        JNIEnv* env, jobject, jstring modelPath, jstring cmvnPath) {
+    auto engine = std::make_unique<realtopia::TurnSenseEngine>(
+        fromJString(env, modelPath), fromJString(env, cmvnPath));
+    if (!engine->valid()) {
+        __android_log_print(ANDROID_LOG_ERROR, "RealTopiaTurnSense", "could not load TurnSense");
+        return 0;
+    }
+    return reinterpret_cast<jlong>(engine.release());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_realtopia_phone_vad_VadNative_classifyTurn(
+        JNIEnv* env, jobject, jlong handle, jbyteArray pcmBytes) {
+    auto* engine = reinterpret_cast<realtopia::TurnSenseEngine*>(handle);
+    if (engine == nullptr || !engine->valid()) return errorJson(env, "TurnSense engine is not loaded");
+    if (pcmBytes == nullptr) return errorJson(env, "TurnSense PCM is missing");
+    const jsize byteCount = env->GetArrayLength(pcmBytes);
+    if (byteCount <= 0 || (byteCount % 2) != 0) return errorJson(env, "TurnSense PCM is malformed");
+    std::vector<jbyte> bytes(static_cast<size_t>(byteCount));
+    env->GetByteArrayRegion(pcmBytes, 0, byteCount, bytes.data());
+    if (env->ExceptionCheck()) return errorJson(env, "cannot read TurnSense PCM");
+    std::vector<float> samples(static_cast<size_t>(byteCount) / 2);
+    for (size_t index = 0; index < samples.size(); ++index) {
+        const uint16_t packed = static_cast<uint8_t>(bytes[index * 2]) |
+            (static_cast<uint16_t>(static_cast<uint8_t>(bytes[index * 2 + 1])) << 8);
+        samples[index] = static_cast<int16_t>(packed) / 32768.0f;
+    }
+    auto result = engine->classify(samples);
+    if (!result.error.empty()) return errorJson(env, result.error);
+    std::ostringstream json;
+    json << "{\"label\":\"" << result.label << "\",\"probabilities\":["
+         << result.probabilities[0] << ',' << result.probabilities[1] << ','
+         << result.probabilities[2] << "],\"feature_frames\":" << result.featureFrames
+         << ",\"frontend_ms\":" << result.frontendMs
+         << ",\"inference_ms\":" << result.inferenceMs
+         << ",\"latency_ms\":" << result.frontendMs + result.inferenceMs << '}';
+    return env->NewStringUTF(json.str().c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_realtopia_phone_vad_VadNative_destroyTurnSense(JNIEnv*, jobject, jlong handle) {
+    delete reinterpret_cast<realtopia::TurnSenseEngine*>(handle);
 }

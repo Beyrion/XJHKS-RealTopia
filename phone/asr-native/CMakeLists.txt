@@ -23,7 +23,12 @@ set_target_properties(MNNAudio PROPERTIES IMPORTED_LOCATION "${MNN_ANDROID_LIB_D
 add_library(llm SHARED IMPORTED)
 set_target_properties(llm PROPERTIES IMPORTED_LOCATION "${MNN_ANDROID_LIB_DIR}/libllm.so")
 
-add_library(realtopia_asr_jni SHARED src/asr_jni.cpp)
+add_library(
+    realtopia_asr_jni SHARED
+    src/asr_jni.cpp
+    src/turnsense_engine.cpp
+    src/turnsense_frontend.cpp
+)
 target_include_directories(
     realtopia_asr_jni PRIVATE
     "${MNN_ROOT}/include"

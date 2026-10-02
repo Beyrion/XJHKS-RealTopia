@@ -18,6 +18,11 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import com.realtopia.phone.vad.SileroVadModel
+import com.realtopia.phone.vad.TurnSenseModel
+import com.realtopia.phone.vad.VadEndpointState
+import com.realtopia.phone.vad.VadNative
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -38,17 +43,33 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
   private var pending: Invoke? = null
   private var outputFile: File? = null
   private var startedAtMs = 0L
+  private var permissionAutomaticEndpoint = false
+  private val vadNative = VadNative()
+  private val acousticModel = SileroVadModel(activity, vadNative)
+  private val semanticModel = TurnSenseModel(activity, vadNative)
+  private val endpoint = VadEndpointState()
   private val recordingTimeout = Runnable { stopRecording(false) }
 
   @Command
   fun listen(invoke: Invoke) {
+    requestRecording(invoke, false)
+  }
+
+  /** Records until Silero VAD and TurnSense agree that a spoken reply is complete. */
+  @Command
+  fun listenAutomatic(invoke: Invoke) {
+    requestRecording(invoke, true)
+  }
+
+  private fun requestRecording(invoke: Invoke, useAutomaticEndpoint: Boolean) {
     if (ContextCompat.checkSelfPermission(activity, Manifest.permission.RECORD_AUDIO) !=
       PackageManager.PERMISSION_GRANTED
     ) {
+      permissionAutomaticEndpoint = useAutomaticEndpoint
       requestPermissionForAlias(RECORD_AUDIO_ALIAS, invoke, "microphonePermissionResult")
       return
     }
-    startRecording(invoke)
+    startRecording(invoke, useAutomaticEndpoint)
   }
 
   @PermissionCallback
@@ -56,13 +77,13 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
     if (ContextCompat.checkSelfPermission(activity, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
     ) {
-      startRecording(invoke)
+      startRecording(invoke, permissionAutomaticEndpoint)
     } else {
       invoke.reject("麦克风权限未授予，请在系统设置中允许 RealTopia 使用麦克风")
     }
   }
 
-  private fun startRecording(invoke: Invoke) {
+  private fun startRecording(invoke: Invoke, useAutomaticEndpoint: Boolean) {
     activity.runOnUiThread {
       if (pending != null || recording) {
         invoke.reject("已有一段心情语音正在录入")
@@ -96,9 +117,64 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
       outputFile = file
       cancelled = false
       recording = true
+      endpoint.reset()
+      acousticModel.reset()
       startedAtMs = SystemClock.elapsedRealtime()
-      handler.postDelayed(recordingTimeout, MAX_RECORDING_MS)
-      worker.execute { recordLoop(audioRecord, file) }
+      handler.postDelayed(
+        recordingTimeout,
+        if (useAutomaticEndpoint) AUTOMATIC_RESPONSE_TIMEOUT_MS else MAX_RECORDING_MS,
+      )
+      worker.execute {
+        if (useAutomaticEndpoint) recordAutomaticLoop(audioRecord, file)
+        else recordLoop(audioRecord, file)
+      }
+    }
+  }
+
+  private fun recordAutomaticLoop(audioRecord: AudioRecord, file: File) {
+    val captured = ByteArrayOutputStream()
+    val chunkFile = File(activity.cacheDir, "automatic-response-vad.pcm")
+    try {
+      val buffer = ByteArray(8_192)
+      audioRecord.startRecording()
+      while (recording) {
+        val read = audioRecord.read(buffer, 0, buffer.size)
+        if (read > 0) {
+          captured.write(buffer, 0, read)
+          chunkFile.outputStream().use { it.write(buffer, 0, read) }
+          val acoustic = acousticModel.analyze(chunkFile)
+          val decision = endpoint.accept(acoustic.probabilities)
+          if (!decision.endpoint) continue
+          if (decision.reason != "neural_silence") {
+            recording = false
+            break
+          }
+          when (semanticModel.classify(captured.toByteArray()).label) {
+            "complete" -> {
+              recording = false
+              break
+            }
+            "incomplete" -> endpoint.deferSemanticEndpoint()
+            else -> {
+              // A cough/noise candidate is discarded and listening continues.
+              captured.reset()
+              endpoint.reset()
+              acousticModel.reset()
+            }
+          }
+        } else if (read < 0 && recording) {
+          throw IllegalStateException("麦克风读取失败（$read）")
+        }
+      }
+      try { audioRecord.stop() } catch (_: IllegalStateException) { }
+      file.outputStream().use { captured.writeTo(it) }
+      finishRecording(file)
+    } catch (error: Exception) {
+      val current = clearState()
+      file.delete()
+      current?.reject(error.message ?: "自动回应感知失败")
+    } finally {
+      chunkFile.delete()
     }
   }
 
@@ -177,6 +253,8 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
     try { recorder?.release() } catch (_: Exception) { }
     recorder = null
     outputFile = null
+    endpoint.reset()
+    acousticModel.reset()
     val current = pending
     pending = null
     return current
@@ -184,13 +262,18 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun onDestroy(activity: AppCompatActivity) {
     if (pending != null) stopRecording(true)
+    worker.execute {
+      acousticModel.close()
+      semanticModel.close()
+    }
     worker.shutdown()
   }
 
   companion object {
     private const val RECORD_AUDIO_ALIAS = "recordAudio"
     private const val SAMPLE_RATE = 16_000
-    private const val MAX_RECORDING_MS = 30_000L
+    private const val MAX_RECORDING_MS = 45_000L
+    private const val AUTOMATIC_RESPONSE_TIMEOUT_MS = 45_000L
     private const val MIN_PCM_BYTES = 3_200L
   }
 }
