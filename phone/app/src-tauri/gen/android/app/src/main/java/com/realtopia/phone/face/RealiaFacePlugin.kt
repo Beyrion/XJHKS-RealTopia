@@ -289,12 +289,62 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  private fun savePortraitCrop(source: Bitmap, bounds: JSONArray, output: File) {
+    require(bounds.length() == 4) { "invalid portrait bounds" }
+    val x1 = bounds.optDouble(0).toFloat()
+    val y1 = bounds.optDouble(1).toFloat()
+    val x2 = bounds.optDouble(2).toFloat()
+    val y2 = bounds.optDouble(3).toFloat()
+    val faceWidth = x2 - x1
+    val faceHeight = y2 - y1
+    require(faceWidth > 1.0f && faceHeight > 1.0f) { "invalid portrait bounds" }
+    val side = maxOf(faceWidth, faceHeight) * FACE_CROP_MARGIN
+    val centerX = (x1 + x2) * 0.5f
+    val centerY = (y1 + y2) * 0.5f
+    val left = (centerX - side * 0.5f).toInt().coerceIn(0, source.width - 1)
+    val top = (centerY - side * 0.5f).toInt().coerceIn(0, source.height - 1)
+    val cropWidth = side.toInt().coerceAtLeast(1).coerceAtMost(source.width - left)
+    val cropHeight = side.toInt().coerceAtLeast(1).coerceAtMost(source.height - top)
+    val cropped = Bitmap.createBitmap(source, left, top, cropWidth, cropHeight)
+    val portrait = if (maxOf(cropWidth, cropHeight) > FACE_CROP_SIDE) {
+      val scale = FACE_CROP_SIDE.toFloat() / maxOf(cropWidth, cropHeight)
+      Bitmap.createScaledBitmap(
+        cropped,
+        (cropWidth * scale).toInt().coerceAtLeast(1),
+        (cropHeight * scale).toInt().coerceAtLeast(1),
+        true,
+      )
+    } else cropped
+    try {
+      output.parentFile?.mkdirs()
+      val temporary = File(output.parentFile, "${output.name}.tmp")
+      FileOutputStream(temporary).use { stream ->
+        check(portrait.compress(Bitmap.CompressFormat.JPEG, FACE_CROP_QUALITY, stream)) {
+          "portrait JPEG encode failed"
+        }
+        stream.fd.sync()
+      }
+      Files.move(
+        temporary.toPath(), output.toPath(),
+        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
+      )
+    } finally {
+      if (portrait !== cropped) portrait.recycle()
+      cropped.recycle()
+    }
+  }
+
   private fun analyzeEnrollmentPhotos(invoke: Invoke, uris: List<Uri>) {
     val startedAt = SystemClock.elapsedRealtime()
+    val photoDirectory = File(
+      activity.applicationInfo.dataDir,
+      "person-photos/gallery-${System.currentTimeMillis()}",
+    )
     try {
       ensureEngine()
       val embeddings = JSONArray()
       val photos = JSONArray()
+      val photoPaths = JSONArray()
       uris.forEachIndexed { index, uri ->
         var bitmap: Bitmap? = null
         try {
@@ -336,11 +386,15 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
                 "其中 ${eligible.size} 张可用$sizeHint",
             )
           }
-          embeddings.put(eligible.single().getJSONArray("embedding"))
+          val enrolledFace = eligible.single()
+          embeddings.put(enrolledFace.getJSONArray("embedding"))
+          val portrait = File(photoDirectory, "${index + 1}.jpg")
+          savePortraitCrop(bitmap, enrolledFace.getJSONArray("bbox"), portrait)
+          photoPaths.put(portrait.absolutePath)
           photos.put(JSObject().apply {
             put("index", index + 1)
             put("detected_count", nativeResult.optInt("detected_count"))
-            put("detection_score", eligible.single().optDouble("detection_score"))
+            put("detection_score", enrolledFace.optDouble("detection_score"))
             put("decode_ms", decodeMs)
             put("processing_ms", SystemClock.elapsedRealtime() - photoStartedAt)
           })
@@ -353,6 +407,7 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
         put("valid_count", embeddings.length())
         put("embeddings", embeddings)
         put("photos", photos)
+        put("photo_paths", photoPaths)
         put("model_load_ms", modelLoadMs)
         put("processing_total_ms", SystemClock.elapsedRealtime() - startedAt)
       }
@@ -364,6 +419,7 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
       lastError = null
       invoke.resolve(response)
     } catch (error: Exception) {
+      photoDirectory.deleteRecursively()
       lastError = error.message ?: error.javaClass.simpleName
       Log.e(TAG, "enrollment photo analysis failed", error)
       invoke.reject(lastError!!)
