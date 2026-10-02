@@ -21,6 +21,23 @@ const categorySouvenirs = {
 } as const;
 
 export function souvenirForQuest(quest: Quest, person?: Person): Souvenir {
+  if (quest.id === "seed-weekly-cooking") {
+    return {
+      id: `souvenir-${quest.id}`,
+      questId: quest.id,
+      personId: quest.assignerPersonId ?? quest.personId,
+      name: "冒火平底锅雕塑",
+      emoji: "🔥",
+      description:
+        "本周料理远征的锅气凝成了一座正冒着大火的平底锅雕塑，纪念你与老陈完成的厨房协作。",
+      acquiredAt: new Date().toISOString(),
+      presentation: {
+        modelKind: "flaming-pan-sculpture",
+        preferredLocation: "interior",
+        scale: 0.96,
+      },
+    };
+  }
   const text = `${quest.title} ${quest.body} ${quest.steps.join(" ")}`;
   const category = quest.category ?? inferQuestCategory(quest);
   const [fallbackName, fallbackEmoji] = categorySouvenirs[category];
@@ -121,6 +138,7 @@ function souvenirModelKind(souvenir: Souvenir): SouvenirModelKind {
   if (/罗盘|旅途|云路/.test(text)) return "star-compass";
   if (/芽|花园|家园/.test(text)) return "sprout-lantern";
   if (/齿轮|机械|创造/.test(text)) return "clockwork-bird";
+  if (/平底锅|锅气|料理|厨房/.test(text)) return "flaming-pan-sculpture";
   if (/光|星|护符/.test(text)) return "firefly-bottle";
   return "moon-rabbit-doll";
 }

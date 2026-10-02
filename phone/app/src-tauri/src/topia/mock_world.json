@@ -770,7 +770,7 @@
           }
         },
         {
-          "id": "plot-garden",
+          "id": "plot-cvpr",
           "prefab": "crop-plot",
           "position": [
             -2.45,
@@ -784,11 +784,11 @@
           "params": {
             "crop": "sunflower"
           },
-          "taskId": "garden",
-          "anchorId": "crop-garden"
+          "taskId": "seed-cvpr-figure",
+          "anchorId": "crop-cvpr"
         },
         {
-          "id": "plot-album",
+          "id": "plot-fitness",
           "prefab": "crop-plot",
           "position": [
             0,
@@ -800,13 +800,13 @@
             12024146
           ],
           "params": {
-            "crop": "tomato"
+            "crop": "herb"
           },
-          "taskId": "album",
-          "anchorId": "crop-album"
+          "taskId": "seed-daily-fitness",
+          "anchorId": "crop-fitness"
         },
         {
-          "id": "plot-app",
+          "id": "plot-cooking",
           "prefab": "crop-plot",
           "position": [
             2.45,
@@ -818,46 +818,10 @@
             12024146
           ],
           "params": {
-            "crop": "lavender"
+            "crop": "tomato"
           },
-          "taskId": "app",
-          "anchorId": "crop-app"
-        },
-        {
-          "id": "plot-book",
-          "prefab": "crop-plot",
-          "position": [
-            -1.3,
-            0.3,
-            1.15
-          ],
-          "colors": [
-            7754047,
-            12024146
-          ],
-          "params": {
-            "crop": "pumpkin"
-          },
-          "taskId": "book",
-          "anchorId": "crop-book"
-        },
-        {
-          "id": "plot-dentist",
-          "prefab": "crop-plot",
-          "position": [
-            1.3,
-            0.3,
-            1.15
-          ],
-          "colors": [
-            7754047,
-            12024146
-          ],
-          "params": {
-            "crop": "herb"
-          },
-          "taskId": "dentist",
-          "anchorId": "crop-dentist"
+          "taskId": "seed-weekly-cooking",
+          "anchorId": "crop-cooking"
         },
         {
           "id": "farm-shed",
@@ -922,104 +886,56 @@
       ],
       "landmarks": [
         {
-          "id": "crop-garden",
-          "anchorId": "crop-garden",
+          "id": "crop-cvpr",
+          "anchorId": "crop-cvpr",
           "location": "garden",
           "emoji": "🌻",
-          "label": "让阳台重新生长",
+          "label": "星图绘境 · CVPR 万象图卷",
           "eyebrow": "任务作物",
-          "description": "这株向日葵会随阳台花园任务继续生长。",
+          "description": "这株星芒向日葵会随着 CVPR 图卷的绘制进度继续生长。",
           "fallbackPlacement": {
             "left": "25%",
             "top": "57%"
           },
-          "memoryIds": [
-            "seed-garden"
-          ],
+          "memoryIds": [],
           "taskIds": [
-            "garden"
+            "seed-cvpr-figure"
           ],
-          "personIds": [
-            "lin"
-          ]
+          "personIds": []
         },
         {
-          "id": "crop-album",
-          "anchorId": "crop-album",
+          "id": "crop-fitness",
+          "anchorId": "crop-fitness",
           "location": "garden",
-          "emoji": "🍅",
-          "label": "整理母亲的旧相册",
+          "emoji": "🌿",
+          "label": "梦想成为肌肉男计划 · 第二期",
           "eyebrow": "任务作物",
-          "description": "番茄会随着旧相册归档逐渐结果。",
+          "description": "力量香草会随着每日训练的完成逐渐舒展枝叶。",
           "fallbackPlacement": {
             "left": "47%",
             "top": "57%"
           },
           "memoryIds": [],
           "taskIds": [
-            "album"
-          ],
-          "personIds": [
-            "mom"
-          ]
-        },
-        {
-          "id": "crop-app",
-          "anchorId": "crop-app",
-          "location": "garden",
-          "emoji": "🪻",
-          "label": "完成 RealTopia 原型",
-          "eyebrow": "任务作物",
-          "description": "薰衣草会随着 RealTopia 原型推进继续开花。",
-          "fallbackPlacement": {
-            "left": "69%",
-            "top": "57%"
-          },
-          "memoryIds": [
-            "seed-e2e"
-          ],
-          "taskIds": [
-            "app"
+            "seed-daily-fitness"
           ],
           "personIds": []
         },
         {
-          "id": "crop-book",
-          "anchorId": "crop-book",
+          "id": "crop-cooking",
+          "anchorId": "crop-cooking",
           "location": "garden",
-          "emoji": "🎃",
-          "label": "把书还给周野",
+          "emoji": "🍅",
+          "label": "胡闹厨房 · 本周料理远征",
           "eyebrow": "任务作物",
-          "description": "南瓜会在归还书本的约定完成时成熟。",
+          "description": "料理番茄会随着本周食材、器具和配方的收集逐渐结果。",
           "fallbackPlacement": {
-            "left": "36%",
-            "top": "34%"
-          },
-          "memoryIds": [
-            "seed-bookstore"
-          ],
-          "taskIds": [
-            "book"
-          ],
-          "personIds": [
-            "zhou"
-          ]
-        },
-        {
-          "id": "crop-dentist",
-          "anchorId": "crop-dentist",
-          "location": "garden",
-          "emoji": "🌿",
-          "label": "预约牙医复诊",
-          "eyebrow": "任务作物",
-          "description": "药草代表照顾自己的小任务。",
-          "fallbackPlacement": {
-            "left": "59%",
-            "top": "34%"
+            "left": "69%",
+            "top": "57%"
           },
           "memoryIds": [],
           "taskIds": [
-            "dentist"
+            "seed-weekly-cooking"
           ],
           "personIds": []
         }

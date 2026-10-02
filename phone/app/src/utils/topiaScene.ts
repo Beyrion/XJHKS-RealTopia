@@ -927,6 +927,71 @@ function detailedSouvenir(object: TopiaObjectConfig) {
       group.add(lensStar, shutter, photo, photoStar);
       break;
     }
+    case "flaming-pan-sculpture": {
+      const panOuter = mesh(
+        new THREE.CylinderGeometry(0.42, 0.32, 0.15, 20),
+        0x22242b,
+      );
+      panOuter.position.y = 0.43;
+      const panRim = mesh(
+        new THREE.TorusGeometry(0.41, 0.035, 7, 30),
+        0x5c606b,
+      );
+      panRim.rotation.x = Math.PI / 2;
+      panRim.position.y = 0.52;
+      const panGlow = glowing(
+        new THREE.CylinderGeometry(0.32, 0.3, 0.035, 20),
+        0xff5a2f,
+      );
+      panGlow.position.y = 0.515;
+      const handle = mesh(
+        new THREE.CylinderGeometry(0.07, 0.095, 0.72, 10),
+        0x292a32,
+      );
+      handle.rotation.z = Math.PI / 2;
+      handle.position.set(0.68, 0.47, 0);
+      const handleEnd = mesh(
+        new THREE.CylinderGeometry(0.105, 0.105, 0.18, 10),
+        0x14151a,
+      );
+      handleEnd.rotation.z = Math.PI / 2;
+      handleEnd.position.set(1.03, 0.47, 0);
+      group.add(panOuter, panRim, panGlow, handle, handleEnd);
+
+      const flames = [
+        [-0.24, 0.83, 0.02, 0.22, 0.62, -0.16],
+        [0, 0.95, -0.04, 0.3, 0.88, 0.04],
+        [0.25, 0.8, 0.05, 0.2, 0.56, 0.18],
+        [-0.08, 0.75, 0.2, 0.16, 0.48, -0.08],
+        [0.13, 0.7, 0.22, 0.14, 0.4, 0.12],
+      ] as const;
+      flames.forEach(([x, y, z, radius, height, lean], index) => {
+        const flame = glowing(
+          new THREE.ConeGeometry(radius, height, 7),
+          index % 2 ? 0xffc238 : 0xff542f,
+        );
+        flame.position.set(x, y, z);
+        flame.rotation.z = lean;
+        flame.userData.topiaSouvenirFlame = true;
+        flame.userData.flameIndex = index;
+        flame.userData.baseScaleY = 1;
+        group.add(flame);
+
+        if (index < 3) {
+          const core = glowing(
+            new THREE.ConeGeometry(radius * 0.45, height * 0.56, 6),
+            0xfff3a6,
+          );
+          core.position.set(x, y - height * 0.12, z + 0.025);
+          core.rotation.z = lean;
+          core.userData.topiaSouvenirFlame = true;
+          core.userData.flameIndex = index + 5;
+          core.userData.baseScaleY = 1;
+          group.add(core);
+        }
+      });
+      break;
+    }
     case "mnn-engine-core": {
       const core = glowing(new THREE.IcosahedronGeometry(0.2, 1), 0xff4e35);
       core.position.y = 0.53;
@@ -2930,6 +2995,16 @@ export function mountTopiaScene(
           ) {
             const pulse = 0.72 + (Math.sin(now * 0.0048 + child.id) + 1) * 0.42;
             child.scale.setScalar(pulse);
+          }
+          if (
+            child.userData.topiaSouvenirFlame &&
+            child instanceof THREE.Mesh
+          ) {
+            const phase = now * 0.006 + Number(child.userData.flameIndex ?? 0);
+            child.scale.y =
+              Number(child.userData.baseScaleY ?? 1) *
+              (0.84 + (Math.sin(phase) + 1) * 0.13);
+            child.rotation.y = Math.sin(phase * 0.7) * 0.12;
           }
         });
       }

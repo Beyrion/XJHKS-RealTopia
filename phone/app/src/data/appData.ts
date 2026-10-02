@@ -7,6 +7,7 @@ import type {
   Person,
   Quest,
 } from "../models";
+import { starterQuests as initialQuests } from "./starterQuests";
 
 export const moodProfiles: Record<MoodKind, MoodProfile> = {
   joyful: { label: "愉快", weather: "晴光", effect: "阳光与闪光" },
@@ -29,10 +30,9 @@ export const moodEmoji: Record<MoodKind, string> = {
 };
 
 export const personIdByName: Record<string, string> = {
-  林澄: "lin",
-  周野: "zhou",
-  沈弦: "shen",
+  老孙: "老孙",
   妈妈: "mom",
+  老陈: "老陈",
 };
 
 export const localModelRepositories: LocalModelRepository[] = [
@@ -68,154 +68,32 @@ export const localModelRepositories: LocalModelRepository[] = [
   },
 ];
 
-export const starterQuests: Quest[] = [
-  {
-    id: "garden",
-    group: "世界任务",
-    title: "让阳台重新生长",
-    meta: "家园 · 长线",
-    body: "把那块闲置的阳台变成一个会随季节变化的小花园。先从容易照料的香草开始。",
-    priority: "首要",
-    progress: 45,
-    steps: [
-      "测量日照与可用面积",
-      "和林澄确认周末花市时间",
-      "购买薄荷与迷迭香",
-      "完成第一周浇水记录",
-    ],
-    person: "林澄",
-    personId: "lin",
-    reward: "记忆组件 · 风铃苗圃",
-  },
-  {
-    id: "album",
-    group: "世界任务",
-    title: "整理母亲的旧相册",
-    meta: "关系 · 家人",
-    body: "将散落的家庭照片按年份整理，并记录每张照片背后的故事。",
-    priority: "普通",
-    progress: 20,
-    steps: ["收集三处旧相册", "扫描 1998—2005 年照片", "周日致电妈妈询问背景"],
-    person: "妈妈",
-    personId: "mom",
-    reward: "人物故事 · 旧日夏天",
-  },
-  {
-    id: "app",
-    group: "世界任务",
-    title: "完成 RealTopia 原型",
-    meta: "创造 · 项目",
-    body: "打通眼镜与手机的日常记录体验，让技术悄悄退到生活后面。",
-    priority: "首要",
-    progress: 68,
-    steps: [
-      "双端视觉统一",
-      "任务与人物关联",
-      "真机延迟回归",
-      "邀请两位朋友试用",
-    ],
-    reward: "场景组件 · 微光观测站",
-  },
-  {
-    id: "book",
-    group: "突发任务",
-    title: "把书还给周野",
-    meta: "今天 · 18:30 前",
-    body: "下班路过青苔书店时把《看不见的城市》还给周野。",
-    priority: "首要",
-    progress: 0,
-    steps: ["出门时带上书", "18:30 前到青苔书店"],
-    person: "周野",
-    personId: "zhou",
-    reward: "好感度 +12",
-  },
-  {
-    id: "dentist",
-    group: "突发任务",
-    title: "预约牙医复诊",
-    meta: "今天 · 5 分钟",
-    body: "打电话确认下周三下午是否有空位。",
-    priority: "普通",
-    progress: 0,
-    steps: ["致电诊所", "写入日历"],
-    reward: "生命力 +5",
-  },
-];
+export const starterQuests: Quest[] = initialQuests;
 
-export const starterMemories: Memory[] = [
-  {
-    id: "seed-bookstore",
-    time: "今天 17:42",
-    title: "青苔书店的雨",
-    meta: "人物 · 周野 / 地点 · 老街",
-    kind: "person",
-    personIds: ["zhou"],
-    taskIds: ["book"],
-  },
-  {
-    id: "seed-garden",
-    time: "08.08 21:06",
-    title: "阳台花园的计划",
-    meta: "人物 · 林澄 / 关联任务 2",
-    kind: "task",
-    personIds: ["lin"],
-    taskIds: ["garden"],
-  },
-  {
-    id: "seed-e2e",
-    time: "08.06 09:13",
-    title: "第一次眼镜端 E2E 测试",
-    meta: "项目 · RealTopia / 图片 6",
-    kind: "recording",
-    taskIds: ["app"],
-  },
-];
+export const starterMemories: Memory[] = [];
 
 export const starterPeople: Person[] = [
   {
-    id: "lin",
-    name: "林澄",
-    role: "植物研究员 / 老朋友",
-    affinity: 86,
+    id: "老孙",
+    name: "老孙",
+    role: "公司同事",
+    affinity: 88,
     tone: "jade",
-    quote: "等迷迭香长高一点，我们就能闻着夏天做饭了。",
-    story:
-      "你们在大学的旧温室认识。她总能记住每一株植物的名字，也总会在你忙得忘记吃饭时发来一张晚霞。",
-    quests: ["让阳台重新生长", "周末去城南花市"],
-    seen: "上次见面 · 3 天前",
+    quote: "有事情随时沟通。",
+    story: "与老陈是公司同事，彼此熟悉，日常工作中经常协作。",
+    quests: ["星图绘境 · CVPR 万象图卷", "梦想成为肌肉男计划 · 第二期"],
+    seen: "已录入",
   },
   {
-    id: "zhou",
-    name: "周野",
-    role: "青苔书店主理人",
-    affinity: 64,
+    id: "老陈",
+    name: "老陈",
+    role: "公司同事",
+    affinity: 84,
     tone: "amber",
-    quote: "书不用急着还，故事看完就好。",
-    story: "住在老街尽头的书店老板。认识之后，你的借阅时间总比别人长一些。",
-    quests: ["把书还给周野"],
-    seen: "上次见面 · 昨天",
-  },
-  {
-    id: "shen",
-    name: "沈弦",
-    role: "独立音乐人",
-    affinity: 41,
-    tone: "violet",
-    quote: "雨落在不同屋檐上，是不同的节拍。",
-    story: "在一次小型演出后认识。她正在收集城市里被忽略的声音。",
-    quests: ["整理城市声音采样"],
-    seen: "上次见面 · 12 天前",
-  },
-  {
-    id: "mom",
-    name: "妈妈",
-    role: "家人",
-    affinity: 92,
-    tone: "rose",
-    quote: "旧照片别扔，背后写着日期呢。",
-    story: "她总说家里的事不用挂心，但会把每一次通话的日期写在厨房日历上。",
-    quests: ["整理母亲的旧相册"],
-    seen: "上次通话 · 5 天前",
+    quote: "工作上的事我们一起推进。",
+    story: "与老孙是公司同事，合作比较密切，彼此关系很好。",
+    quests: ["胡闹厨房 · 本周料理远征", "梦想成为肌肉男计划 · 第二期"],
+    seen: "尚未识别",
   },
 ];
 

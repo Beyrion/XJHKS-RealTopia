@@ -31,15 +31,6 @@ export function Portrait({
     setPhotoIndex(0);
   }, [person.id, person.photoPaths]);
 
-  useEffect(() => {
-    if (!canSwitch) return;
-    const timer = window.setInterval(
-      () => setPhotoIndex((current) => current + 1),
-      4_500,
-    );
-    return () => window.clearInterval(timer);
-  }, [canSwitch, availablePhotos.length, person.id, photoIndex]);
-
   const contents = (
     <>
       {currentPhoto ? (

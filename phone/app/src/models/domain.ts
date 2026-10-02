@@ -195,6 +195,7 @@ export interface Souvenir {
     modelKind: SouvenirModelKind;
     preferredLocation?: "exterior" | "interior" | "garden";
     scale?: number;
+    level?: number;
   };
 }
 
@@ -211,6 +212,7 @@ export type SouvenirModelKind =
   | "clockwork-bird"
   | "aurora-key"
   | "dream-camera"
+  | "flaming-pan-sculpture"
   | "mnn-engine-core";
 
 export interface MoodProfile {
