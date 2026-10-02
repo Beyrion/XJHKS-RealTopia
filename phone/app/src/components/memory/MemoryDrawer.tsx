@@ -1,4 +1,5 @@
 import type { Memory, Person, Quest } from "../../models";
+import { personMemoryLabel } from "../../utils/personMemory";
 import { Icon } from "../ui/Icon";
 
 export function MemoryDrawer({
@@ -44,6 +45,18 @@ export function MemoryDrawer({
         </div>
         <h3>{memory.title}</h3>
         <p>{memory.summary ?? memory.meta}</p>
+        {memory.personMemoryKind && (
+          <div className="memory-relations">
+            <span>人物记忆　{personMemoryLabel(memory.personMemoryKind)}</span>
+            <span>
+              置信度　
+              {memory.confidence === undefined
+                ? "未记录"
+                : `${Math.round(memory.confidence * 100)}%`}
+            </span>
+          </div>
+        )}
+        {memory.evidence && <blockquote>证据：{memory.evidence}</blockquote>}
         {memory.transcript && <blockquote>{memory.transcript}</blockquote>}
         <div className="memory-relations">
           <span>人物　{relatedPeople.join("、") || "未关联"}</span>

@@ -67,8 +67,22 @@ export type GameEventType =
   | "task_focused"
   | "task_progressed"
   | "task_completed"
+  | "conversation_recorded"
   | "scene_observed"
   | "affinity_changed";
+
+export type InteractionEventType =
+  "meaningful_conversation" | "gratitude" | "help" | "promise" | "conflict";
+
+export type PersonMemoryKind =
+  | "conversation"
+  | "fact"
+  | "preference"
+  | "promise"
+  | "task_assigned"
+  | "task_completed"
+  | "task_failed"
+  | "relationship";
 
 export interface GameEvent {
   id: string;
@@ -79,6 +93,7 @@ export interface GameEvent {
   progress?: number;
   vitalityDelta?: number;
   affinityDelta?: number;
+  interactionType?: InteractionEventType;
   evidence?: string;
   dedupeKey?: string;
   source: "user" | "asr" | "vision" | "llm" | "system";
@@ -120,11 +135,14 @@ export interface Memory {
   taskIds?: string[];
   mood?: MoodKind;
   intensity?: number;
+  personMemoryKind?: PersonMemoryKind;
   evidence?: string;
   confidence?: number;
+  sourceRecordingId?: number;
   status?: "active" | "superseded" | "dismissed";
   dedupeKey?: string;
 }
+
 export interface SceneObservationStatus {
   running: boolean;
   lastObservedAt: string | null;
