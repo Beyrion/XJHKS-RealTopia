@@ -902,6 +902,26 @@ try {
     ),
   });
   await page.locator(".drawer-head [data-close-memory]").click();
+  await page.locator('[data-setting="testing"]').click();
+  await page.getByRole("heading", { name: "测试", exact: true }).waitFor();
+  const deleteUserDataAudit = await page.evaluate(() => {
+    const button = document.querySelector("#delete-user-data");
+    return {
+      count: document.querySelectorAll("#delete-user-data").length,
+      label: button?.textContent?.trim(),
+      enabled: button instanceof HTMLButtonElement && !button.disabled,
+      danger: button?.classList.contains("danger"),
+    };
+  });
+  if (
+    deleteUserDataAudit.count !== 1 ||
+    deleteUserDataAudit.label !== "删除用户数据" ||
+    !deleteUserDataAudit.enabled ||
+    !deleteUserDataAudit.danger
+  )
+    throw new Error(
+      `delete user data control audit failed: ${JSON.stringify(deleteUserDataAudit)}`,
+    );
   const promptAudit = [];
   for (const screen of [
     "topia",

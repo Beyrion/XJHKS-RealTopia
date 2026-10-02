@@ -35,6 +35,11 @@ export const storage = {
         !key.startsWith("realtopia.topiaStudio"),
     );
   },
+  clearUserData() {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("realtopia.")) localStorage.removeItem(key);
+    }
+  },
   loadQuests(): Quest[] {
     const value = loadJson<Quest[]>("realtopia.quests", []);
     return (value.length ? value : structuredClone(starterQuests)).map(

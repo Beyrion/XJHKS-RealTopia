@@ -1,6 +1,8 @@
 import type { IconName } from "../../components/ui/Icon";
 import { Icon } from "../../components/ui/Icon";
 import { SettingCard } from "../../components/ui/SettingCard";
+import { nativeService } from "../../services/native";
+import { storage } from "../../services/storage";
 import { useAppStore } from "../../store/AppStore";
 
 const tests: { id: string; icon: IconName; title: string; detail: string }[] = [
@@ -35,6 +37,21 @@ export default function TestingSettingsPage() {
         ),
       );
     else notify("请长按眼镜物理按钮开始录音");
+  };
+  const deleteUserData = async () => {
+    if (!confirm("删除本机任务、人物、记忆、心情、Topia 和人脸数据，并恢复首次打开状态？"))
+      return;
+    try {
+      await nativeService.clearCloudApiKey().catch(() => undefined);
+      await nativeService.deleteUserData();
+      storage.clearUserData();
+      window.location.hash = "/topia";
+      window.location.reload();
+    } catch (error) {
+      notify(
+        `删除失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   };
   return (
     <div className="setting-view">
@@ -124,6 +141,14 @@ export default function TestingSettingsPage() {
           >
             <Icon name="RefreshCw" />
             刷新状态
+          </button>
+        </div>
+      </SettingCard>
+      <SettingCard title="用户数据">
+        <div className="buttons">
+          <button className="danger" id="delete-user-data" onClick={() => void deleteUserData()}>
+            <Icon name="Trash2" />
+            删除用户数据
           </button>
         </div>
       </SettingCard>

@@ -14,6 +14,7 @@ import type {
 } from "../models";
 
 export const nativeService = {
+  deleteUserData: () => invoke<void>("delete_user_data"),
   sessionState: () => invoke<SessionState>("session_state"),
   pairedGlasses: () => invoke<PairedGlass[]>("paired_glasses"),
   pairGlasses: (glassAddress: string) =>

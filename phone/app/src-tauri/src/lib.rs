@@ -2222,6 +2222,35 @@ fn remove_person(person_id: String, state: tauri::State<'_, AppState>) -> Result
     Ok(removed)
 }
 
+#[tauri::command]
+fn delete_user_data(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    topia::delete_topia_user_data(&app)?;
+
+    {
+        let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
+        *gallery = FaceGallery::default();
+    }
+    {
+        let mut strangers = state
+            .strangers
+            .lock()
+            .map_err(|_| "stranger store lock poisoned")?;
+        *strangers = StrangerStore::default();
+    }
+    for path in [&state.gallery_path, &state.stranger_path] {
+        if path.exists() {
+            std::fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    }
+    if state.stranger_photo_root.exists() {
+        std::fs::remove_dir_all(&state.stranger_photo_root).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn valid_bluetooth_address(value: &str) -> bool {
     let parts: Vec<_> = value.split(':').collect();
     parts.len() == 6
@@ -2278,6 +2307,7 @@ pub fn run() {
             enroll_last_face,
             enroll_person_from_gallery,
             remove_person,
+            delete_user_data,
             model_download_status,
             model_download_statuses,
             start_asr_download,
