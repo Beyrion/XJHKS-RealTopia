@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 pub const UNKNOWN: &str = "unknown";
 pub const AMBIGUOUS: &str = "ambiguous";
-const DEFAULT_THRESHOLD: f32 = 0.50;
+const DEFAULT_THRESHOLD: f32 = 0.48;
 const DEFAULT_MARGIN: f32 = 0.08;
-const DEFAULT_TEMPLATE_TOP_K: usize = 2;
+const DEFAULT_TEMPLATE_TOP_K: usize = 3;
+const DEFAULT_MIN_SUPPORT: usize = 2;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NativeTimings {
@@ -81,6 +82,17 @@ pub struct EnrollmentReceipt {
     pub request_id: u64,
     pub templates_for_person: usize,
     pub gallery_templates: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct GalleryEnrollmentReceipt {
+    pub person_id: String,
+    pub batch_id: u64,
+    pub selected_count: usize,
+    pub enrolled_count: usize,
+    pub templates_for_person: usize,
+    pub gallery_templates: usize,
+    pub processing_total_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -159,6 +171,54 @@ impl FaceGallery {
         })
     }
 
+    pub fn enroll_batch(
+        &mut self,
+        person_id: &str,
+        batch_id: u64,
+        embeddings: &[Vec<f32>],
+        processing_total_ms: i64,
+    ) -> Result<GalleryEnrollmentReceipt, String> {
+        let person_id = person_id.trim();
+        if person_id.is_empty() || person_id.len() > 96 {
+            return Err("person_id must contain 1 to 96 characters".into());
+        }
+        if embeddings.len() != 9 {
+            return Err(format!(
+                "gallery enrollment requires exactly 9 embeddings, found {}",
+                embeddings.len()
+            ));
+        }
+        // Normalize every template before mutating the gallery. A malformed item can
+        // therefore never leave a partially enrolled person in memory.
+        let normalized = embeddings
+            .iter()
+            .map(|embedding| {
+                validate_embedding(embedding)?;
+                normalize(embedding)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        self.version = 1;
+        self.templates
+            .extend(normalized.into_iter().map(|embedding| GalleryTemplate {
+                person_id: person_id.to_owned(),
+                request_id: batch_id,
+                embedding,
+            }));
+        Ok(GalleryEnrollmentReceipt {
+            person_id: person_id.to_owned(),
+            batch_id,
+            selected_count: embeddings.len(),
+            enrolled_count: embeddings.len(),
+            templates_for_person: self
+                .templates
+                .iter()
+                .filter(|template| template.person_id == person_id)
+                .count(),
+            gallery_templates: self.templates.len(),
+            processing_total_ms,
+        })
+    }
+
     pub fn remove(&mut self, person_id: &str) -> usize {
         let before = self.templates.len();
         self.templates
@@ -203,21 +263,26 @@ impl FaceGallery {
                 scores.sort_by(|left, right| right.total_cmp(left));
                 let count = scores.len().min(DEFAULT_TEMPLATE_TOP_K);
                 let aggregate = scores[..count].iter().sum::<f32>() / count as f32;
-                (person_id.to_owned(), aggregate)
+                let support = scores
+                    .iter()
+                    .filter(|score| **score >= DEFAULT_THRESHOLD)
+                    .count();
+                let required_support = scores.len().min(DEFAULT_MIN_SUPPORT);
+                (person_id.to_owned(), aggregate, support, required_support)
             })
             .collect::<Vec<_>>();
         ranked.sort_by(|left, right| right.1.total_cmp(&left.1));
-        let (best_id, best_score) = ranked
+        let (best_id, best_score, best_support, required_support) = ranked
             .first()
             .cloned()
-            .unwrap_or_else(|| (String::new(), -1.0));
+            .unwrap_or_else(|| (String::new(), -1.0, 0, 1));
         let second_score = ranked.get(1).map(|entry| entry.1).unwrap_or(-1.0);
         let margin = if ranked.len() > 1 {
             best_score - second_score
         } else {
             2.0
         };
-        if best_score < DEFAULT_THRESHOLD {
+        if best_score < DEFAULT_THRESHOLD || best_support < required_support {
             Ok((UNKNOWN.into(), None, best_score, second_score, margin))
         } else if ranked.len() > 1 && margin < DEFAULT_MARGIN {
             Ok((AMBIGUOUS.into(), None, best_score, second_score, margin))
@@ -349,5 +414,42 @@ mod tests {
         let result = gallery.identify(&query).unwrap();
         assert_eq!(result.0, AMBIGUOUS);
         assert_eq!(result.1, None);
+    }
+
+    #[test]
+    fn requires_two_supporting_templates_for_multi_photo_identity() {
+        fn with_cosine(score: f32, axis: usize) -> Vec<f32> {
+            let mut value = vec![0.0; 512];
+            value[0] = score;
+            value[axis] = (1.0 - score * score).sqrt();
+            value
+        }
+
+        let mut gallery = FaceGallery::default();
+        gallery.enroll("alice", 1, &unit(0)).unwrap();
+        gallery.enroll("alice", 2, &with_cosine(0.40, 1)).unwrap();
+        gallery.enroll("alice", 3, &with_cosine(0.40, 2)).unwrap();
+        let result = gallery.identify(&unit(0)).unwrap();
+        // Top-3 mean is 0.60, but only one independent template reaches the threshold.
+        assert!(result.2 > DEFAULT_THRESHOLD);
+        assert_eq!(result.0, UNKNOWN);
+        assert_eq!(result.1, None);
+    }
+
+    #[test]
+    fn accepts_two_templates_just_above_relaxed_threshold() {
+        fn with_cosine(score: f32, axis: usize) -> Vec<f32> {
+            let mut value = vec![0.0; 512];
+            value[0] = score;
+            value[axis] = (1.0 - score * score).sqrt();
+            value
+        }
+
+        let mut gallery = FaceGallery::default();
+        gallery.enroll("alice", 1, &with_cosine(0.49, 1)).unwrap();
+        gallery.enroll("alice", 2, &with_cosine(0.49, 2)).unwrap();
+        let result = gallery.identify(&unit(0)).unwrap();
+        assert_eq!(result.0, "known");
+        assert_eq!(result.1.as_deref(), Some("alice"));
     }
 }

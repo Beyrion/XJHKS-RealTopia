@@ -34,7 +34,7 @@ export interface MoodSnapshot extends MoodAnalysis {
 }
 
 export interface GlassSettings {
-  intervalSeconds: number;
+  framesPerSecond: number;
   width: number;
   quality: number;
   personAlert: "poster" | "quiet";
@@ -92,6 +92,16 @@ export interface Person {
   story: string;
   quests: string[];
   seen: string;
+}
+
+export interface RecentStranger {
+  id: string;
+  first_seen_at_ms: number;
+  last_seen_at_ms: number;
+  identity: string | null;
+  relationship: string | null;
+  photo_paths: string[];
+  photo_count: number;
 }
 
 export interface Memory {

@@ -69,12 +69,18 @@ export const storage = {
     );
   },
   loadGlassSettings(): GlassSettings {
+    const saved = loadJson<
+      Partial<GlassSettings> & { intervalSeconds?: number }
+    >("realtopia.glassSettings", {});
     return {
-      intervalSeconds: 15,
-      width: 4032,
-      quality: 90,
-      personAlert: "poster",
-      ...loadJson<Partial<GlassSettings>>("realtopia.glassSettings", {}),
+      ...saved,
+      framesPerSecond: Math.max(
+        2,
+        Math.min(5, Number(saved.framesPerSecond) || 2),
+      ),
+      width: saved.width ?? 1280,
+      quality: saved.quality ?? 75,
+      personAlert: saved.personAlert ?? "poster",
     };
   },
   saveGlassSettings(value: GlassSettings) {

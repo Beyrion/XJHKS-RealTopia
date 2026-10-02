@@ -1,12 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   LocalAsrResult,
+  GalleryEnrollmentReceipt,
   ModelDownloadStatus,
   MoodSpeechResult,
   NativeCloudConfig,
   NativeCloudResult,
   PairedGlass,
   SessionState,
+  RecentStranger,
 } from "../models";
 
 export const nativeService = {
@@ -19,13 +21,13 @@ export const nativeService = {
     invoke<void>("set_person_alert", { enabled }),
   setPerception: (
     enabled: boolean,
-    intervalSeconds: number,
+    framesPerSecond: number,
     width: number,
     quality: number,
   ) =>
     invoke<void>("set_perception", {
       enabled,
-      intervalSeconds,
+      framesPerSecond,
       width,
       quality,
     }),
@@ -33,6 +35,17 @@ export const nativeService = {
     invoke<{ request_id: number }>("request_capture", { mode, width, quality }),
   enrollLastFace: (personId: string) =>
     invoke<void>("enroll_last_face", { personId }),
+  enrollPersonFromGallery: (personId: string) =>
+    invoke<GalleryEnrollmentReceipt>("enroll_person_from_gallery", {
+      personId,
+    }),
+  recentStrangers: () => invoke<RecentStranger[]>("recent_strangers"),
+  labelStranger: (strangerId: string, identity: string, relationship: string) =>
+    invoke<RecentStranger>("label_stranger", {
+      strangerId,
+      identity,
+      relationship,
+    }),
 
   markRecordingProcessed: (recordingId: number, status: string) =>
     invoke<void>("mark_recording_processed", { recordingId, status }),

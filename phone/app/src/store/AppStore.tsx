@@ -369,12 +369,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         await nativeService.setPersonAlert(settings.personAlert === "poster");
         await nativeService.setPerception(
           perceptionRef.current,
-          settings.intervalSeconds,
+          settings.framesPerSecond,
           settings.width,
           settings.quality,
         );
         appendLog(
-          `眼镜参数已同步 · ${settings.intervalSeconds}s / ${settings.width}px / Q${settings.quality}`,
+          `眼镜参数已同步 · ${settings.framesPerSecond} FPS / ${settings.width}px / Q${settings.quality}`,
         );
       } catch {
         syncedSessionRef.current = null;
@@ -591,12 +591,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     void refreshSession();
     void refreshModelDownload(true);
     if (!sessionRef.current.session_id) void connectGlasses(true);
-    const timer = window.setInterval(() => {
-      void refreshSession();
-      void refreshModelDownload();
-    }, 1_000);
+    const sessionTimer = window.setInterval(() => void refreshSession(), 100);
+    const modelTimer = window.setInterval(
+      () => void refreshModelDownload(),
+      2_000,
+    );
     return () => {
-      window.clearInterval(timer);
+      window.clearInterval(sessionTimer);
+      window.clearInterval(modelTimer);
       window.clearTimeout(toastTimer.current);
     };
   }, [connectGlasses, refreshModelDownload, refreshSession]);

@@ -78,6 +78,12 @@ android {
     }
 }
 
+// The checked-in Tauri runtime sources are the canonical copies for this customized
+// Android shell. `tauri android build` may emit identical Kotlin files into generated/.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    exclude("**/com/realtopia/phone/generated/**")
+}
+
 dependencies {
     
     

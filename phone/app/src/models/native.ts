@@ -1,6 +1,7 @@
 export interface CaptureMetric {
   request_id: number;
-  mode: "cold" | "hot";
+  mode: "cold" | "hot" | "stream";
+  stream?: boolean;
   bytes: number;
   camera_open_ms: number;
   warmup_ms: number;
@@ -18,6 +19,16 @@ export interface FaceResult {
   detection_ms: number;
   recognition_ms: number;
   recognizer_load_ms: number;
+  processing_total_ms: number;
+}
+
+export interface GalleryEnrollmentReceipt {
+  person_id: string;
+  batch_id: number;
+  selected_count: number;
+  enrolled_count: number;
+  templates_for_person: number;
+  gallery_templates: number;
   processing_total_ms: number;
 }
 

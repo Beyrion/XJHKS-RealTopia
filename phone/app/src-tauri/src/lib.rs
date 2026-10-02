@@ -1,15 +1,19 @@
 mod face;
+mod strangers;
 mod topia;
 
 #[cfg(mobile)]
 use face::apply_gallery;
-use face::{EnrollmentReceipt, FaceAnalysis, FaceGallery, NativeFaceAnalysis};
+use face::{
+    EnrollmentReceipt, FaceAnalysis, FaceGallery, GalleryEnrollmentReceipt, NativeFaceAnalysis,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(mobile)]
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
+use strangers::{photo_path, StrangerStore, StrangerSummary};
 use tauri::Manager;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -79,6 +83,8 @@ struct GlassDevice {
 struct CaptureMetric {
     request_id: u64,
     mode: String,
+    #[serde(default)]
+    stream: bool,
     bytes: u64,
     width: u32,
     height: u32,
@@ -183,14 +189,25 @@ struct PersonHud<'a> {
     id: &'a str,
     name: &'a str,
     title: &'a str,
-    affinity: u32,
+    affinity: i32,
     quest: &'a str,
     story: &'a str,
 }
 
 #[cfg(mobile)]
+const STRANGER_HUD_ID: &str = "__stranger__";
+
+#[cfg(mobile)]
 fn person_hud(person_id: &str) -> PersonHud<'_> {
     match person_id {
+        STRANGER_HUD_ID => PersonHud {
+            id: person_id,
+            name: "陌生人",
+            title: "？？？",
+            affinity: -1,
+            quest: "？？？",
+            story: "？？？",
+        },
         "lin" => PersonHud {
             id: person_id,
             name: "林澄",
@@ -264,7 +281,7 @@ mod mobile_transport {
     #[serde(rename_all = "camelCase")]
     struct PerceptionRequest {
         enabled: bool,
-        interval_seconds: u32,
+        frames_per_second: u32,
         width: u32,
         quality: u8,
     }
@@ -275,7 +292,7 @@ mod mobile_transport {
         person_id: &'a str,
         name: &'a str,
         title: &'a str,
-        affinity: u32,
+        affinity: i32,
         quest: &'a str,
         story: &'a str,
     }
@@ -358,7 +375,7 @@ mod mobile_transport {
         pub fn perception(
             &self,
             enabled: bool,
-            interval_seconds: u32,
+            frames_per_second: u32,
             width: u32,
             quality: u8,
         ) -> Result<(), String> {
@@ -368,7 +385,7 @@ mod mobile_transport {
                     "perception",
                     PerceptionRequest {
                         enabled,
-                        interval_seconds,
+                        frames_per_second,
                         width,
                         quality,
                     },
@@ -419,6 +436,7 @@ mod mobile_transport {
 #[cfg(mobile)]
 mod mobile_face {
     use super::NativeFaceAnalysis;
+    use serde::Deserialize;
     use serde::Serialize;
     use tauri::{
         plugin::{Builder, PluginHandle, TauriPlugin},
@@ -427,12 +445,44 @@ mod mobile_face {
 
     pub struct RealiaFace<R: Runtime>(PluginHandle<R>);
 
+    const RUNTIME_MINIMUM_FACE_AT_640: f32 = 40.0;
+
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct AnalyzeRequest<'a> {
         path: &'a str,
         rotation_degrees: i32,
         minimum_face_at640: f32,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SaveFaceCropRequest<'a> {
+        path: &'a str,
+        output_path: &'a str,
+        rotation_degrees: i32,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+    }
+
+    #[derive(Deserialize)]
+    struct SavedFaceCrop {
+        #[allow(dead_code)]
+        path: String,
+        #[allow(dead_code)]
+        width: u32,
+        #[allow(dead_code)]
+        height: u32,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    pub struct NativeEnrollmentBatch {
+        pub selected_count: usize,
+        pub valid_count: usize,
+        pub embeddings: Vec<Vec<f32>>,
+        pub processing_total_ms: i64,
     }
 
     impl<R: Runtime> RealiaFace<R> {
@@ -447,10 +497,41 @@ mod mobile_face {
                     AnalyzeRequest {
                         path,
                         rotation_degrees,
-                        minimum_face_at640: 24.0,
+                        minimum_face_at640: RUNTIME_MINIMUM_FACE_AT_640,
                     },
                 )
                 .map_err(|error| error.to_string())
+        }
+
+        pub fn pick_enrollment_photos(&self) -> Result<NativeEnrollmentBatch, String> {
+            self.0
+                .run_mobile_plugin("pickEnrollmentPhotos", ())
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn save_face_crop(
+            &self,
+            path: &str,
+            output_path: &str,
+            rotation_degrees: i32,
+            bbox: [f32; 4],
+        ) -> Result<(), String> {
+            let _: SavedFaceCrop = self
+                .0
+                .run_mobile_plugin(
+                    "saveFaceCrop",
+                    SaveFaceCropRequest {
+                        path,
+                        output_path,
+                        rotation_degrees,
+                        x1: bbox[0],
+                        y1: bbox[1],
+                        x2: bbox[2],
+                        y2: bbox[3],
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(())
         }
     }
 
@@ -819,8 +900,139 @@ impl ProcessingGateway for MnnFaceProcessingGateway {
 struct AppState {
     session: Mutex<SessionState>,
     gallery: Mutex<FaceGallery>,
+    strangers: Mutex<StrangerStore>,
     last_native_face: Mutex<Option<(u64, NativeFaceAnalysis)>>,
     gallery_path: PathBuf,
+    stranger_path: PathBuf,
+    stranger_photo_root: PathBuf,
+    #[cfg(mobile)]
+    hud_stability: Mutex<HudStability>,
+}
+
+fn unix_time_ms() -> Result<i64, String> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock error: {error}"))?
+        .as_millis() as i64)
+}
+
+#[cfg(mobile)]
+fn retain_unknown_faces(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    capture: &CaptureMetric,
+    native: &NativeFaceAnalysis,
+    analysis: &FaceAnalysis,
+) -> Result<(), String> {
+    for (face_index, (native_face, matched_face)) in
+        native.faces.iter().zip(&analysis.matches).enumerate()
+    {
+        if !matches!(matched_face.decision.as_str(), "unknown" | "ambiguous")
+            || !native_face.eligible
+            || native_face.embedding.len() != 512
+        {
+            continue;
+        }
+        let now_ms = unix_time_ms()?;
+        let (stranger_id, should_retain) = {
+            let store = state
+                .strangers
+                .lock()
+                .map_err(|_| "stranger store lock poisoned")?;
+            let id = store.match_or_create_id(&native_face.embedding, capture.request_id, now_ms);
+            let retain = store.should_retain_photo(&id, now_ms);
+            (id, retain)
+        };
+        if !should_retain {
+            if let Ok(mut store) = state.strangers.lock() {
+                store.touch(&stranger_id, now_ms);
+            }
+            continue;
+        }
+        let output = photo_path(
+            &state.stranger_photo_root,
+            &stranger_id,
+            capture.request_id,
+            face_index,
+        );
+        let output_value = output.to_string_lossy().into_owned();
+        app.state::<mobile_face::RealiaFace<tauri::Wry>>()
+            .save_face_crop(
+                &capture.path,
+                &output_value,
+                capture.rotation_degrees,
+                native_face.bbox,
+            )?;
+        let evicted = {
+            let mut store = state
+                .strangers
+                .lock()
+                .map_err(|_| "stranger store lock poisoned")?;
+            let evicted = store.commit_photo(
+                stranger_id,
+                &native_face.embedding,
+                output_value,
+                capture.request_id,
+                now_ms,
+            );
+            store.save(&state.stranger_path)?;
+            evicted
+        };
+        for path in evicted {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(mobile)]
+#[derive(Default)]
+struct HudStability {
+    candidate: Option<String>,
+    consecutive: u8,
+    last_sent: Option<String>,
+    consecutive_misses: u8,
+}
+
+#[cfg(mobile)]
+fn stable_hud_person(
+    state: &AppState,
+    recognized: Option<String>,
+    stream: bool,
+) -> Result<Option<String>, String> {
+    if !stream {
+        return Ok(recognized);
+    }
+    let mut stability = state
+        .hud_stability
+        .lock()
+        .map_err(|_| "HUD stability lock poisoned")?;
+    let Some(person_id) = recognized else {
+        stability.candidate = None;
+        stability.consecutive = 0;
+        stability.consecutive_misses = stability.consecutive_misses.saturating_add(1);
+        if stability.consecutive_misses >= 2 {
+            // End the current encounter after two processed frames without a
+            // recognizable face. The same person may then trigger the HUD again.
+            stability.last_sent = None;
+        }
+        return Ok(None);
+    };
+    stability.consecutive_misses = 0;
+    if stability.candidate.as_deref() == Some(person_id.as_str()) {
+        stability.consecutive = stability.consecutive.saturating_add(1);
+    } else {
+        stability.candidate = Some(person_id.clone());
+        stability.consecutive = 1;
+    }
+    if stability.consecutive < 2 {
+        return Ok(None);
+    }
+    if stability.last_sent.as_deref() == Some(person_id.as_str()) {
+        return Ok(None);
+    }
+    stability.last_sent = Some(person_id.clone());
+    Ok(Some(person_id))
 }
 #[cfg(mobile)]
 fn merge_native(value: &mut SessionState, native: NativeTransportState) {
@@ -1154,12 +1366,12 @@ fn open_bluetooth_settings(app: tauri::AppHandle) -> Result<(), String> {
 fn set_perception(
     app: tauri::AppHandle,
     enabled: bool,
-    interval_seconds: u32,
+    frames_per_second: u32,
     width: u32,
     quality: u8,
 ) -> Result<(), String> {
-    if !(5..=300).contains(&interval_seconds) {
-        return Err("perception interval must be between 5 and 300 seconds".into());
+    if !(2..=5).contains(&frames_per_second) {
+        return Err("perception frame rate must be between 2 and 5 FPS".into());
     }
     if !(1280..=4032).contains(&width) || !(50..=100).contains(&quality) {
         return Err("capture width must be 1280..4032 and quality 50..100".into());
@@ -1167,10 +1379,10 @@ fn set_perception(
     #[cfg(mobile)]
     return app
         .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
-        .perception(enabled, interval_seconds, width, quality);
+        .perception(enabled, frames_per_second, width, quality);
     #[cfg(not(mobile))]
     {
-        let _ = (app, enabled, width, quality);
+        let _ = (app, enabled, frames_per_second, width, quality);
         Ok(())
     }
 }
@@ -1234,15 +1446,22 @@ fn begin_session(
     if !valid_bluetooth_address(&glass_address) {
         return Err("请输入 AA:BB:CC:DD:EE:FF 格式的蓝牙地址".into());
     }
+    let normalized_address = glass_address.to_uppercase();
+    let mut value = state.session.lock().map_err(|_| "state lock poisoned")?;
+    if value.glass_address.as_deref() == Some(normalized_address.as_str())
+        && value.session_id.is_some()
+        && matches!(value.phase, Phase::P2pNegotiating | Phase::Ready)
+    {
+        return Ok(value.clone());
+    }
     let id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis();
-    let mut value = state.session.lock().map_err(|_| "state lock poisoned")?;
     *value = SessionState {
         phase: Phase::P2pNegotiating,
         session_id: Some(format!("session-{id}")),
-        glass_address: Some(glass_address.to_uppercase()),
+        glass_address: Some(normalized_address),
         transport: "CXR negotiation pending".into(),
         completed_captures: 0,
         last_error: None,
@@ -1348,25 +1567,55 @@ fn wait_for_capture_and_process(app: &tauri::AppHandle, request_id: u64) -> Resu
     let gateway = MnnFaceProcessingGateway { app: app.clone() };
     let receipt = gateway.submit(CapturedImage {
         request_id,
-        path: capture.path,
+        path: capture.path.clone(),
         rotation_degrees: capture.rotation_degrees,
-    })?;
+    });
+    let receipt = match receipt {
+        Ok(value) => value,
+        Err(error) => {
+            if capture.stream {
+                let _ = std::fs::remove_file(&capture.path);
+            }
+            return Err(error);
+        }
+    };
     if !receipt.accepted || receipt.provider != "mnn" {
+        if capture.stream {
+            let _ = std::fs::remove_file(&capture.path);
+        }
         return Err("MNN processing gateway rejected the capture".into());
     }
-    let native = receipt
-        .analysis
-        .ok_or_else(|| "MNN processing gateway returned no analysis".to_string())?;
+    let native = match receipt.analysis {
+        Some(value) => value,
+        None => {
+            if capture.stream {
+                let _ = std::fs::remove_file(&capture.path);
+            }
+            return Err("MNN processing gateway returned no analysis".into());
+        }
+    };
     let state = app.state::<AppState>();
     let analysis = {
         let gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
         apply_gallery(request_id, &native, &gallery)?
     };
+    let stranger_result = retain_unknown_faces(&app, &state, &capture, &native, &analysis);
+    if capture.stream {
+        let _ = std::fs::remove_file(&capture.path);
+    }
+    stranger_result?;
     let recognized_person = analysis
         .matches
         .iter()
         .find(|face| face.decision == "known")
-        .and_then(|face| face.person_id.clone());
+        .and_then(|face| face.person_id.clone())
+        .or_else(|| {
+            analysis
+                .matches
+                .iter()
+                .any(|face| matches!(face.decision.as_str(), "unknown" | "ambiguous"))
+                .then(|| STRANGER_HUD_ID.to_string())
+        });
     *state
         .last_native_face
         .lock()
@@ -1378,7 +1627,7 @@ fn wait_for_capture_and_process(app: &tauri::AppHandle, request_id: u64) -> Resu
     let show_person_hud = session.person_hud_enabled;
     drop(session);
     if show_person_hud {
-        if let Some(person_id) = recognized_person {
+        if let Some(person_id) = stable_hud_person(&state, recognized_person, capture.stream)? {
             let person = person_hud(&person_id);
             if let Err(error) = app
                 .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
@@ -1399,6 +1648,51 @@ fn gallery_list(
 ) -> Result<std::collections::BTreeMap<String, usize>, String> {
     let gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
     Ok(gallery.summary())
+}
+
+#[tauri::command]
+fn recent_strangers(state: tauri::State<'_, AppState>) -> Result<Vec<StrangerSummary>, String> {
+    let store = state
+        .strangers
+        .lock()
+        .map_err(|_| "stranger store lock poisoned")?;
+    Ok(store.summaries())
+}
+
+#[tauri::command]
+fn label_stranger(
+    stranger_id: String,
+    identity: String,
+    relationship: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<StrangerSummary, String> {
+    let now_ms = unix_time_ms()?;
+    let mut store = state
+        .strangers
+        .lock()
+        .map_err(|_| "stranger store lock poisoned")?;
+    let mut staged_store = store.clone();
+    let label = staged_store.label(&stranger_id, &identity, &relationship, now_ms)?;
+    if label.newly_labeled {
+        if label.embeddings.is_empty() {
+            return Err("这个陌生人还没有可用的人脸特征".into());
+        }
+        let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
+        let mut staged_gallery = gallery.clone();
+        let batch_id = now_ms as u64;
+        for (index, embedding) in label.embeddings.iter().enumerate() {
+            staged_gallery.enroll(
+                identity.trim(),
+                batch_id.saturating_add(index as u64),
+                embedding,
+            )?;
+        }
+        staged_gallery.save(&state.gallery_path)?;
+        *gallery = staged_gallery;
+    }
+    staged_store.save(&state.stranger_path)?;
+    *store = staged_store;
+    Ok(label.summary)
 }
 
 #[tauri::command]
@@ -1435,6 +1729,48 @@ fn enroll_last_face(
 }
 
 #[tauri::command]
+fn enroll_person_from_gallery(
+    app: tauri::AppHandle,
+    person_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<GalleryEnrollmentReceipt, String> {
+    #[cfg(mobile)]
+    {
+        let batch = app
+            .state::<mobile_face::RealiaFace<tauri::Wry>>()
+            .pick_enrollment_photos()?;
+        if batch.selected_count != 9 || batch.valid_count != 9 || batch.embeddings.len() != 9 {
+            return Err(format!(
+                "人物录入需要 9 张有效照片，当前为 {}/{}/{}",
+                batch.selected_count,
+                batch.valid_count,
+                batch.embeddings.len()
+            ));
+        }
+        let batch_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("system clock error: {error}"))?
+            .as_millis() as u64;
+        let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
+        let mut staged = gallery.clone();
+        let receipt = staged.enroll_batch(
+            &person_id,
+            batch_id,
+            &batch.embeddings,
+            batch.processing_total_ms,
+        )?;
+        staged.save(&state.gallery_path)?;
+        *gallery = staged;
+        Ok(receipt)
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (app, person_id, state);
+        Err("图库人物录入仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
 fn remove_person(person_id: String, state: tauri::State<'_, AppState>) -> Result<usize, String> {
     let mut gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
     let removed = gallery.remove(person_id.trim());
@@ -1456,13 +1792,22 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .setup(|app| {
             let gallery_path = app.path().app_data_dir()?.join("face-gallery.json");
+            let stranger_path = app.path().app_data_dir()?.join("recent-strangers.json");
+            let stranger_photo_root = app.path().app_data_dir()?.join("stranger-faces");
             let gallery = FaceGallery::load(&gallery_path)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            let strangers = StrangerStore::load(&stranger_path)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
             app.manage(AppState {
                 session: Mutex::new(SessionState::default()),
                 gallery: Mutex::new(gallery),
+                strangers: Mutex::new(strangers),
                 last_native_face: Mutex::new(None),
                 gallery_path,
+                stranger_path,
+                stranger_photo_root,
+                #[cfg(mobile)]
+                hud_stability: Mutex::new(HudStability::default()),
             });
             Ok(())
         })
@@ -1485,7 +1830,10 @@ pub fn run() {
             cancel_mood_listen,
             mark_recording_processed,
             gallery_list,
+            recent_strangers,
+            label_stranger,
             enroll_last_face,
+            enroll_person_from_gallery,
             remove_person,
             model_download_status,
             start_asr_download,
