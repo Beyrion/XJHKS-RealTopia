@@ -141,9 +141,9 @@ try {
   if ((await page.locator(".q-item").count()) < 5)
     throw new Error("all quest filter did not expose every task");
   await page.locator('[data-quest-filter="active"]').click();
-  const initialTitle = await page.locator(".q-detail > h1").textContent();
+  const initialTitle = await page.locator(".q-title-row h1").textContent();
   await page.locator(".q-item").nth(1).click();
-  if ((await page.locator(".q-detail > h1").textContent()) === initialTitle)
+  if ((await page.locator(".q-title-row h1").textContent()) === initialTitle)
     throw new Error("quest selection did not update the detail view");
   await page.locator(".step").first().click();
   await page.locator('[data-quest="book"]').click();
@@ -154,6 +154,24 @@ try {
       )?.affinity ?? 64,
   );
   await page.locator('[data-focus-quest="book"]').click();
+  const focusControlAudit = await page.evaluate(() => {
+    const row = document.querySelector(".q-title-row");
+    const title = row?.querySelector("h1")?.getBoundingClientRect();
+    const button = row?.querySelector(".focus-quest-button")?.getBoundingClientRect();
+    return {
+      label: row?.querySelector(".focus-quest-button")?.textContent?.trim(),
+      insideTitleRow: Boolean(row && row.contains(row.querySelector(".focus-quest-button"))),
+      afterTitle: Boolean(title && button && button.left >= title.right - 1),
+    };
+  });
+  if (
+    focusControlAudit.label !== "已追踪" ||
+    !focusControlAudit.insideTitleRow ||
+    !focusControlAudit.afterTitle
+  )
+    throw new Error(
+      `quest tracking control misplaced: ${JSON.stringify(focusControlAudit)}`,
+    );
   await page.locator(".step").nth(0).click();
   await page.locator(".step").nth(1).click();
   await page.waitForFunction(() =>
@@ -294,7 +312,7 @@ try {
     return {
       header: height(".top"),
       nav: size(".top nav button"),
-      title: size(".q-detail > h1"),
+      title: size(".q-title-row h1"),
       item: size(".q-item span b"),
       caption: size(".q-item span small"),
       navTarget: height(".top nav button"),
@@ -348,10 +366,36 @@ try {
       interactionPromptCount: document.querySelectorAll(".explore").length,
       hasInteractionPrompt: /拖动查看|双指缩放/.test(text),
       quickActions: actions.querySelectorAll("button").length,
+      quickActionLabels: [...actions.querySelectorAll("button")].map((button) =>
+        button.textContent?.trim(),
+      ),
+      quickActionsSingleLine: [...actions.querySelectorAll("button")].every(
+        (button) =>
+          getComputedStyle(button).whiteSpace === "nowrap" &&
+          button.scrollWidth <= button.clientWidth,
+      ),
+      quickActionWidths: [...actions.querySelectorAll("button")].map(
+        (button) => button.getBoundingClientRect().width,
+      ),
       quickActionHeight: actions.querySelector("button").getBoundingClientRect()
         .height,
       quickActionsOutsideToday: !panel.contains(actions),
       quickActionsAboveToday: actionsBox.bottom <= panelBox.top,
+      journeyCards: [...panel.querySelectorAll(".today-item")].map((card) => {
+        const outer = card.getBoundingClientRect();
+        const icon = card.querySelector(".item-icon").getBoundingClientRect();
+        const style = getComputedStyle(card);
+        return {
+          borderWidth: parseFloat(style.borderTopWidth),
+          radius: parseFloat(style.borderRadius),
+          iconGap: Math.min(
+            icon.left - outer.left,
+            outer.right - icon.right,
+            icon.top - outer.top,
+            outer.bottom - icon.bottom,
+          ),
+        };
+      }),
       locationButtons: document.querySelectorAll("[data-topia-location]")
         .length,
       activeLocation: document
@@ -383,9 +427,16 @@ try {
     topiaAudit.interactionPromptCount ||
     topiaAudit.hasInteractionPrompt ||
     topiaAudit.quickActions !== 3 ||
+    topiaAudit.quickActionLabels.join("|") !== "新任务|对话感知|记录心情" ||
+    !topiaAudit.quickActionsSingleLine ||
+    !(topiaAudit.quickActionWidths[0] < topiaAudit.quickActionWidths[1]) ||
     topiaAudit.quickActionHeight < 40 ||
     !topiaAudit.quickActionsOutsideToday ||
     !topiaAudit.quickActionsAboveToday ||
+    topiaAudit.journeyCards.length !== 2 ||
+    topiaAudit.journeyCards.some(
+      (card) => card.borderWidth < 1 || card.radius < 8 || card.iconGap < 5,
+    ) ||
     topiaAudit.locationButtons !== 3 ||
     topiaAudit.activeLocation !== "exterior" ||
     topiaAudit.portalButtons !== 2 ||
@@ -744,7 +795,9 @@ try {
     people: document.querySelectorAll(".conversation-person-list > button")
       .length,
     unknown: Boolean(document.querySelector(".conversation-unknown")),
-    autoStarted: Boolean(document.querySelector("#record-conversation.is-listening")),
+    autoStarted: Boolean(
+      document.querySelector("#record-conversation.is-listening"),
+    ),
   }));
   if (
     conversationPickerAudit.title !== "你正在和谁对话？" ||
@@ -931,6 +984,19 @@ try {
         document.querySelector("#enroll-person").parentElement ===
           document.querySelector(".p-list") && enroll.top >= grid.bottom,
       enrollAtBottom: list.bottom - enroll.bottom < 12,
+      strangerInbox: (() => {
+        const inbox = document.querySelector(".stranger-inbox");
+        const box = inbox.getBoundingClientRect();
+        return {
+          title: inbox.querySelector("b")?.textContent,
+          subtitle: inbox.querySelector("small")?.textContent?.trim(),
+          tagCount: inbox.querySelectorAll("em").length,
+          iconCount: inbox.querySelectorAll("svg").length,
+          fits: inbox.scrollWidth <= inbox.clientWidth &&
+            inbox.scrollHeight <= inbox.clientHeight,
+          insideList: box.left >= list.left && box.right <= list.right,
+        };
+      })(),
     };
   });
   if (
@@ -941,7 +1007,13 @@ try {
     !peopleAudit.filterSameRow ||
     peopleAudit.heroPortraits !== 1 ||
     !peopleAudit.enrollOutsideGrid ||
-    !peopleAudit.enrollAtBottom
+    !peopleAudit.enrollAtBottom ||
+    peopleAudit.strangerInbox.title !== "最近陌生人" ||
+    !/^\d+ 人待标记$/.test(peopleAudit.strangerInbox.subtitle ?? "") ||
+    peopleAudit.strangerInbox.tagCount !== 0 ||
+    peopleAudit.strangerInbox.iconCount !== 0 ||
+    !peopleAudit.strangerInbox.fits ||
+    !peopleAudit.strangerInbox.insideList
   )
     throw new Error(
       `people layout audit failed: ${JSON.stringify(peopleAudit)}`,
@@ -1229,7 +1301,7 @@ try {
       `browser errors: ${[...consoleErrors, ...httpErrors].join(" | ")}`,
     );
   process.stdout.write(
-    `${JSON.stringify({ ok: true, gameplayAudit, visualAudit, topiaAudit, anchorAudit, interiorDrawerAudit, gardenAudit, conversationPickerAudit, quickListeningAudit, quickProcessingAudit, quickSuccessAudit, quickErrorAudit, moodEffectAudit, filterAudit, peopleAudit, intelligenceAudit, settingsDecorationAudit, memoryPaginationAudit, memoryDrawerAudit, promptAudit, dynamicWorldAudit })}\n`,
+    `${JSON.stringify({ ok: true, gameplayAudit, visualAudit, topiaAudit, topiaStudioAudit, anchorAudit, interiorDrawerAudit, gardenAudit, conversationPickerAudit, quickListeningAudit, quickProcessingAudit, quickSuccessAudit, quickErrorAudit, moodEffectAudit, filterAudit, peopleAudit, intelligenceAudit, settingsDecorationAudit, memoryPaginationAudit, memoryDrawerAudit, promptAudit, dynamicWorldAudit })}\n`,
   );
 } finally {
   await browser.close();

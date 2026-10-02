@@ -193,12 +193,12 @@ export default function PeoplePage() {
           type="button"
           onClick={() => setStrangerOpen(true)}
         >
-          <Icon name="ScanFace" />
           <span>
             <b>最近陌生人</b>
-            <small>保留最近 {strangers.length}/10 人 · 每人至多 9 张</small>
+            <small>
+              {strangers.filter((item) => !item.identity).length} 人待标记
+            </small>
           </span>
-          <em>{strangers.filter((item) => !item.identity).length} 待标记</em>
         </button>
         <div className="p-grid">
           {people.map((item) => (
@@ -224,16 +224,6 @@ export default function PeoplePage() {
           ))}
         </div>
         <button
-          className="import"
-          id="enroll-person"
-          disabled={enrolling}
-          onClick={() => setCreateOpen(true)}
-        >
-          <Icon name="UserRoundPlus" />
-          <b>{enrolling ? "正在分析照片…" : "新建并录入人物"}</b>
-          <small>选择 9 张同一人的清晰照片</small>
-        </button>
-        <button
           className="enroll-recent"
           disabled={enrolling || !live?.eligible_count}
           onClick={() => void enrollRecentFace()}
@@ -246,6 +236,16 @@ export default function PeoplePage() {
           onClick={() => void enrollFromGallery(person)}
         >
           为 {person.name} 追加 9 张图库照片
+        </button>
+        <button
+          className="import"
+          id="enroll-person"
+          disabled={enrolling}
+          onClick={() => setCreateOpen(true)}
+        >
+          <Icon name="UserRoundPlus" />
+          <b>{enrolling ? "正在分析照片…" : "新建并录入人物"}</b>
+          <small>选择 9 张同一人的清晰照片</small>
         </button>
       </aside>
       <article className="p-info">

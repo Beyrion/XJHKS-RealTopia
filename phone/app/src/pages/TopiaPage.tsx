@@ -359,8 +359,8 @@ export default function TopiaPage() {
             }
             aria-label={
               quickVoice.kind === "task" && quickVoice.phase === "listening"
-                ? "停止记录任务"
-                : "记录任务"
+                ? "停止记录新任务"
+                : "新任务"
             }
             aria-busy={
               quickVoice.kind === "task" && quickVoice.phase === "processing"
@@ -372,7 +372,7 @@ export default function TopiaPage() {
             onClick={() => quickAction("task")}
           >
             <Icon name={quickActionIcon("task")} />
-            记录任务
+            新任务
           </button>
           <button
             id="record-conversation"
@@ -384,8 +384,8 @@ export default function TopiaPage() {
             aria-label={
               quickVoice.kind === "conversation" &&
               quickVoice.phase === "listening"
-                ? "停止记录人物对话"
-                : "记录人物对话"
+                ? "停止对话感知"
+                : "对话感知"
             }
             aria-busy={
               quickVoice.kind === "conversation" &&
@@ -399,7 +399,7 @@ export default function TopiaPage() {
             onClick={() => quickAction("conversation")}
           >
             <Icon name={quickActionIcon("conversation")} />
-            人物对话
+            对话感知
           </button>
           <button
             id="record-mood"

@@ -36,18 +36,19 @@ export function QuestDetail({
           {questCategoryMeta[category].label}
         </span>
       </div>
-      <h1>{quest.title}</h1>
-      {quest.progress < 100 && (
-        <button
-          className={`focus-quest-button ${isFocused ? "active" : ""}`}
-          data-focus-quest={quest.id}
-          aria-pressed={isFocused}
-          onClick={onFocus}
-        >
-          <Icon name={isFocused ? "Orbit" : "Telescope"} />
-          {isFocused ? "主页正在追踪" : "设为当前任务"}
-        </button>
-      )}
+      <div className="q-title-row">
+        <h1>{quest.title}</h1>
+        {quest.progress < 100 && (
+          <button
+            className={`focus-quest-button ${isFocused ? "active" : ""}`}
+            data-focus-quest={quest.id}
+            aria-pressed={isFocused}
+            onClick={onFocus}
+          >
+            {isFocused ? "已追踪" : "追踪"}
+          </button>
+        )}
+      </div>
       <small>
         {quest.meta}
         {quest.person ? `　·　关联人物 ${quest.person}` : ""}
