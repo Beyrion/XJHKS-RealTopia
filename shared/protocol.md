@@ -1,4 +1,4 @@
-# REA/1 Bluetooth commands and photo transport
+# REA/1 transport protocol
 
 控制面使用 Rokid CXR 的蓝牙链路：
 
