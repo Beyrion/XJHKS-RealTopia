@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "../phone/app/node_modules/playwright-core/index.mjs";
+import { installTopiaCommandMock } from "./topia-command-mock.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(root, "phone/app");
@@ -61,6 +62,7 @@ const page = await browser.newPage({
   viewport: { width: 800, height: 361 },
   deviceScaleFactor: 1,
 });
+await installTopiaCommandMock(page, root);
 
 async function open(screen) {
   await page.goto(`${baseUrl}/?screen=${screen}`, { waitUntil: "networkidle" });
@@ -79,7 +81,52 @@ try {
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: "networkidle" });
   await page.locator(".world.webgl-ready").waitFor({ timeout: 10_000 });
-  await capture("topia");
+  await capture("topia-exterior");
+
+  const topiaCanvas = await page.locator("#topia-canvas").boundingBox();
+  if (!topiaCanvas) throw new Error("Topia canvas has no bounds");
+  await page.mouse.move(
+    topiaCanvas.x + topiaCanvas.width * 0.8,
+    topiaCanvas.y + topiaCanvas.height * 0.82,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    topiaCanvas.x + topiaCanvas.width * 0.58,
+    topiaCanvas.y + topiaCanvas.height * 0.72,
+    { steps: 10 },
+  );
+  await page.mouse.up();
+  await page.waitForTimeout(650);
+  await page.mouse.move(
+    topiaCanvas.x + topiaCanvas.width * 0.8,
+    topiaCanvas.y + topiaCanvas.height * 0.82,
+  );
+  await page.mouse.wheel(0, -650);
+  await page.waitForTimeout(350);
+  await capture("topia-exterior-rotated");
+
+  await page.locator('[data-topia-location="interior"]').click();
+  await page.locator(".world.webgl-ready.location-interior").waitFor();
+  await capture("topia-interior");
+  const interiorCanvas = await page.locator("#topia-canvas").boundingBox();
+  if (!interiorCanvas) throw new Error("Interior canvas has no bounds");
+  await page.mouse.move(
+    interiorCanvas.x + interiorCanvas.width * 0.8,
+    interiorCanvas.y + interiorCanvas.height * 0.82,
+  );
+  await page.mouse.wheel(0, -650);
+  await page.waitForTimeout(350);
+  await page.locator('[data-topia-landmark="window-garden"]').click();
+  await page.locator('.topia-drawer[role="dialog"]').waitFor();
+  await capture("topia-landmark-drawer");
+  await page.locator(".topia-drawer [data-close-topia-drawer]").click();
+
+  await page.locator('[data-topia-location="garden"]').click();
+  await page.locator(".world.webgl-ready.location-garden").waitFor();
+  await capture("topia-garden");
+
+  await page.locator('[data-topia-location="exterior"]').click();
+  await page.locator(".world.webgl-ready.location-exterior").waitFor();
 
   await page.evaluate(() => {
     const previous = window.__TAURI_INTERNALS__;
