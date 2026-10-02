@@ -25,6 +25,11 @@ class StartTransportArgs {
 }
 
 @InvokeArg
+class PairTransportArgs {
+  lateinit var glassAddress: String
+}
+
+@InvokeArg
 class CaptureTransportArgs {
   var requestId: Long = 0
   var mode: String = "hot"
@@ -84,6 +89,29 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       invoke.resolve(JSObject().apply { put("devices", devices) })
     } catch (error: SecurityException) {
       invoke.reject("需要附近设备权限后才能选择眼镜")
+    }
+  }
+
+  @Command
+  fun pair(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(PairTransportArgs::class.java)
+      val adapter = activity.getSystemService(BluetoothManager::class.java)?.adapter
+        ?: return invoke.reject("蓝牙不可用")
+      val device = adapter.getRemoteDevice(args.glassAddress)
+      if (device.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED) {
+        invoke.resolve()
+        return
+      }
+      if (device.createBond()) {
+        invoke.resolve()
+      } else {
+        invoke.reject("系统未接受眼镜配对请求")
+      }
+    } catch (error: IllegalArgumentException) {
+      invoke.reject("眼镜蓝牙地址无效")
+    } catch (error: SecurityException) {
+      invoke.reject("需要附近设备权限后才能配对眼镜")
     }
   }
 

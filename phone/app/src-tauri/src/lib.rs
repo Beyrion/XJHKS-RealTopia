@@ -267,6 +267,11 @@ mod mobile_transport {
     struct StartRequest<'a> {
         glass_address: &'a str,
     }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PairRequest<'a> {
+        glass_address: &'a str,
+    }
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -321,6 +326,11 @@ mod mobile_transport {
                 .run_mobile_plugin("paired", ())
                 .map_err(|error| error.to_string())?;
             Ok(response.devices)
+        }
+        pub fn pair(&self, glass_address: &str) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin("pair", PairRequest { glass_address })
+                .map_err(|error| error.to_string())
         }
 
         pub fn open_bluetooth_settings(&self) -> Result<(), String> {
@@ -1350,6 +1360,22 @@ fn paired_glasses(app: tauri::AppHandle) -> Result<Vec<GlassDevice>, String> {
 }
 
 #[tauri::command]
+fn pair_glasses(app: tauri::AppHandle, glass_address: String) -> Result<(), String> {
+    if !valid_bluetooth_address(&glass_address) {
+        return Err("请输入 AA:BB:CC:DD:EE:FF 格式的蓝牙地址".into());
+    }
+    #[cfg(mobile)]
+    return app
+        .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
+        .pair(&glass_address);
+    #[cfg(not(mobile))]
+    {
+        let _ = (app, glass_address);
+        Err("眼镜配对仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
 fn open_bluetooth_settings(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(mobile)]
     return app
@@ -1816,6 +1842,7 @@ pub fn run() {
             begin_session,
             request_capture,
             paired_glasses,
+            pair_glasses,
             open_bluetooth_settings,
             set_perception,
             set_person_alert,

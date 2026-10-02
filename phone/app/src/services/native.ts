@@ -14,6 +14,8 @@ import type {
 export const nativeService = {
   sessionState: () => invoke<SessionState>("session_state"),
   pairedGlasses: () => invoke<PairedGlass[]>("paired_glasses"),
+  pairGlasses: (glassAddress: string) =>
+    invoke<void>("pair_glasses", { glassAddress }),
   beginSession: (glassAddress: string) =>
     invoke<SessionState>("begin_session", { glassAddress }),
   openBluetoothSettings: () => invoke<void>("open_bluetooth_settings"),

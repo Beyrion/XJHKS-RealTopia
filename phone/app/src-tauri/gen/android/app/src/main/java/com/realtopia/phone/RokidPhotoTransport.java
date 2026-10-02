@@ -36,12 +36,15 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
     private static final String CAPTURE_COMMAND = "Realia_Capture";
     private static final String CONTROL_COMMAND = "Realia_Control";
     private static final String PERSON_COMMAND = "Realia_Person";
+    private static final String CLIENT_INFO = "RealTopia";
     private static final int PHOTO_PORT = 39831;
     private final Context context;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean activatingBluetooth = new AtomicBoolean(false);
     private final AtomicBoolean connectingSocket = new AtomicBoolean(false);
+    private final AtomicBoolean p2pRequestInFlight = new AtomicBoolean(false);
     private final AtomicBoolean p2pRetryScheduled = new AtomicBoolean(false);
     private final CxrController cxr = CxrController.getInstance();
     private volatile WifiController wifi;
@@ -60,7 +63,7 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
         started = true;
         listener.onPhase("bt_connecting", "CXR Bluetooth", "connecting " + glassAddress);
         cxr.setCallback(this);
-        cxr.connectBluetooth(context, CXR_SOCKET_UUID, glassAddress, "RealTopia");
+        cxr.connectBluetooth(context, CXR_SOCKET_UUID, glassAddress, CLIENT_INFO);
     }
 
     boolean isReady() {
@@ -99,21 +102,35 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
     }
 
     private void startP2p() {
-        if (!started || !cxr.isBluetoothConnected()) return;
+        if (!started || !cxr.isBluetoothConnected()
+                || !p2pRequestInFlight.compareAndSet(false, true)) return;
         listener.onPhase("p2p_negotiating", "CXR Bluetooth", "requesting Wi-Fi Direct");
         Caps caps = new Caps();
         caps.write("Sync_Start");
         caps.write("{\"type\":\"Android\"}");
         ValueUtil.CxrStatus result = cxr.request(2, "Med", caps, null);
         Log.i(TAG, "P2P_INIT result=" + result);
-        if (result != ValueUtil.CxrStatus.REQUEST_SUCCEED) postError("P2P request rejected: " + result);
+        if (result != ValueUtil.CxrStatus.REQUEST_SUCCEED) {
+            p2pRequestInFlight.set(false);
+            postError("P2P request rejected: " + result);
+        }
     }
 
     @Override public void onStatusUpdate(ValueUtil.CxrStatus status,
                                           ValueUtil.CxrBluetoothErrorCode error) {
         Log.i(TAG, "BT_STATUS status=" + status + " error=" + error);
-        if (status == ValueUtil.CxrStatus.BLUETOOTH_AVAILABLE) startP2p();
+        if (status == ValueUtil.CxrStatus.BLUETOOTH_AVAILABLE) {
+            activatingBluetooth.set(false);
+            startP2p();
+        }
+        else if (status == ValueUtil.CxrStatus.BLUETOOTH_INACTIVECONNECT
+                && activatingBluetooth.compareAndSet(false, true)) {
+            listener.onPhase("bt_connecting", "CXR Bluetooth", "locating RealTopia client");
+            cxr.fetchClientList();
+            Log.i(TAG, "BT_CLIENT_LIST requested");
+        }
         else if (status == ValueUtil.CxrStatus.BLUETOOTH_UNAVAILABLE) {
+            activatingBluetooth.set(false);
             ready = false;
             listener.onPhase("bt_connecting", "CXR Bluetooth", "Bluetooth unavailable: " + error);
         }
@@ -148,6 +165,7 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
         }
         else if (status == ValueUtil.CxrStatus.WIFI_UNAVAILABLE) {
             ready = false;
+            p2pRequestInFlight.set(false);
             listener.onPhase("p2p_negotiating", "Wi-Fi Direct", "Wi-Fi unavailable: " + error);
             // CXR-M 1.0.8 can keep a stale peer callback queued after provision
             // discovery fails and dereference a removed device. Tear the failed
@@ -236,12 +254,34 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
     @Override public void onAudioStream(int id, byte[] data, int offset, int length) { }
     @Override public void onAudioStreamFinish(int id) { }
     @Override public void onARTCFrame(byte[] data, long timestamp) { }
-    @Override public void onBtClientsInfo(List<ValueUtil.BtClientInfo> clients) { }
+    @Override public void onBtClientsInfo(List<ValueUtil.BtClientInfo> clients) {
+        ValueUtil.BtClientInfo match = null;
+        if (clients != null) {
+            for (ValueUtil.BtClientInfo client : clients) {
+                Log.i(TAG, "BT_CLIENT customInfo=" + client.customInfo
+                        + " status=" + client.bluetoothStatus);
+                if (CLIENT_INFO.equals(client.customInfo)
+                        && client.bluetoothStatus == ValueUtil.CxrStatus.BLUETOOTH_INACTIVECONNECT) {
+                    match = client;
+                }
+            }
+        }
+        if (match == null || match.mac == null || match.mac.isBlank()) {
+            activatingBluetooth.set(false);
+            postError("RealTopia CXR client was not reported by the glasses");
+            return;
+        }
+        listener.onPhase("bt_connecting", "CXR Bluetooth", "activating RealTopia client");
+        cxr.activeBluetoothConnect(match.mac);
+        Log.i(TAG, "BT_ACTIVE requested");
+    }
 
     synchronized void close() {
         started = false;
         ready = false;
+        activatingBluetooth.set(false);
         p2pRetryScheduled.set(false);
+        p2pRequestInFlight.set(false);
         main.removeCallbacksAndMessages(null);
         try { if (socket != null) socket.close(); } catch (IOException ignored) { }
         socket = null;
