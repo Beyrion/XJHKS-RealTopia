@@ -51,4 +51,13 @@ public class RealiaFrameReaderTest {
         RealiaFrameReader.Frame frame=RealiaFrameReader.read(new DataInputStream(new ByteArrayInputStream(bytes.toByteArray())),()->100L);
         assertEquals(true,frame.isPersonChoice());assertEquals(123,frame.requestId());assertEquals("lin",frame.metadata().getString("personId"));assertEquals("catch_up",frame.metadata().getString("choiceId"));
     }
+    @Test public void readsDynamicWorldEventChoice() throws Exception {
+        byte[] metadata="{\"personId\":\"__world_event__\",\"choiceIndex\":0,\"choiceId\":\"accept\",\"label\":\"接受事件\",\"kind\":\"world_event\",\"contextId\":\"world-77\"}".getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();DataOutputStream out=new DataOutputStream(bytes);
+        out.writeInt(RealiaFrameReader.MAGIC);out.writeByte(1);out.writeByte(3);out.writeShort(0);out.writeLong(77);out.writeInt(metadata.length);out.writeInt(1);out.write(metadata);out.writeByte(1);
+        RealiaFrameReader.Frame frame=RealiaFrameReader.read(new DataInputStream(new ByteArrayInputStream(bytes.toByteArray())),()->100L);
+        assertEquals("accept",frame.metadata().getString("choiceId"));
+        assertEquals("world_event",frame.metadata().getString("kind"));
+        assertEquals("world-77",frame.metadata().getString("contextId"));
+    }
 }
