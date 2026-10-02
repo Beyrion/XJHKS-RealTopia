@@ -149,6 +149,8 @@ export const starterMemories: Memory[] = [
     title: "青苔书店的雨",
     meta: "人物 · 周野 / 地点 · 老街",
     kind: "person",
+    personIds: ["zhou"],
+    taskIds: ["book"],
   },
   {
     id: "seed-garden",
@@ -156,6 +158,8 @@ export const starterMemories: Memory[] = [
     title: "阳台花园的计划",
     meta: "人物 · 林澄 / 关联任务 2",
     kind: "task",
+    personIds: ["lin"],
+    taskIds: ["garden"],
   },
   {
     id: "seed-e2e",
@@ -163,6 +167,7 @@ export const starterMemories: Memory[] = [
     title: "第一次眼镜端 E2E 测试",
     meta: "项目 · RealTopia / 图片 6",
     kind: "recording",
+    taskIds: ["app"],
   },
 ];
 

@@ -1,5 +1,6 @@
 export type ModelSide = "edge" | "cloud";
-export type ModelPurpose = "speech" | "task-planning" | "memory" | "vision";
+export type ModelPurpose =
+  "speech" | "task-planning" | "memory" | "vision" | "world-generation";
 
 export interface ModelRequest {
   purpose: ModelPurpose;

@@ -1,5 +1,12 @@
 import * as THREE from "three";
-import type { MoodKind } from "../models";
+import type {
+  MoodKind,
+  TopiaCropKind,
+  TopiaLocation,
+  TopiaObjectConfig,
+  TopiaSceneConfig,
+  TopiaSceneCrop,
+} from "../models";
 
 type MoodLook = {
   fog: number;
@@ -86,7 +93,7 @@ const moodLooks: Record<MoodKind, MoodLook> = {
     ground: 0x778590,
     sun: 0xe6e9ff,
     sunIntensity: 3.3,
-    exposure: 1.0,
+    exposure: 1,
     sparkle: 0xe9ddff,
     sparkleOpacity: 0.62,
     cloudSpeed: 0.00034,
@@ -157,7 +164,7 @@ const moodLooks: Record<MoodKind, MoodLook> = {
   },
 };
 
-const C = {
+const fallback = {
   ink: 0x3b4168,
   cream: 0xfff3d6,
   wall: 0xf8e8c8,
@@ -169,43 +176,40 @@ const C = {
   mint: 0x69d4a3,
   yellow: 0xffd75e,
   lavender: 0xc9c4ff,
-  blanket: 0x8995ff,
   cloud: 0xf7fbff,
 };
 
-function mat(color: number, roughness = 0.82) {
+function color(object: TopiaObjectConfig, index: number, value: number) {
+  return object.colors?.[index] ?? value;
+}
+
+function parameter(object: TopiaObjectConfig, key: string, value: number) {
+  const candidate = Number(object.params?.[key]);
+  return Number.isFinite(candidate) ? candidate : value;
+}
+
+function material(value: number, roughness = 0.82) {
   return new THREE.MeshStandardMaterial({
-    color,
+    color: value,
     roughness,
     metalness: 0.03,
     flatShading: true,
   });
 }
-function mesh(geometry: THREE.BufferGeometry, color: number) {
-  const value = new THREE.Mesh(geometry, mat(color));
-  value.castShadow = true;
-  value.receiveShadow = true;
-  return value;
+
+function mesh(geometry: THREE.BufferGeometry, value: number) {
+  const result = new THREE.Mesh(geometry, material(value));
+  result.castShadow = true;
+  result.receiveShadow = true;
+  return result;
 }
-function block(
-  w: number,
-  h: number,
-  d: number,
-  color: number,
-  x: number,
-  y: number,
-  z: number,
-) {
-  const value = mesh(new THREE.BoxGeometry(w, h, d), color);
-  value.position.set(x, y, z);
-  return value;
-}
-function glow(geometry: THREE.BufferGeometry, color: number) {
+
+function glowing(geometry: THREE.BufferGeometry, value: number) {
   return new THREE.Mesh(
     geometry,
     new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
+      color: value,
+      emissive: value,
       emissiveIntensity: 1.6,
       roughness: 0.35,
       flatShading: true,
@@ -213,54 +217,64 @@ function glow(geometry: THREE.BufferGeometry, color: number) {
   );
 }
 
-function cloud(x: number, y: number, z: number, scale: number) {
+function block(
+  width: number,
+  height: number,
+  depth: number,
+  value: number,
+  x = 0,
+  y = 0,
+  z = 0,
+) {
+  const result = mesh(new THREE.BoxGeometry(width, height, depth), value);
+  result.position.set(x, y, z);
+  return result;
+}
+
+function lowPolyCloud(value: number) {
   const group = new THREE.Group();
   [
     [-0.55, 0, 0, 0.65],
     [0, 0.12, 0, 0.82],
     [0.62, -0.03, 0.03, 0.56],
     [0.1, -0.16, 0.08, 0.72],
-  ].forEach(([px, py, pz, s]) => {
-    const puff = mesh(new THREE.IcosahedronGeometry(0.75, 1), C.cloud);
-    puff.position.set(px, py, pz);
-    puff.scale.set(s, s * 0.72, s);
+  ].forEach(([x, y, z, scale]) => {
+    const puff = mesh(new THREE.IcosahedronGeometry(0.75, 1), value);
+    puff.position.set(x, y, z);
+    puff.scale.set(scale, scale * 0.72, scale);
     group.add(puff);
   });
-  group.position.set(x, y, z);
-  group.scale.setScalar(scale);
   return group;
 }
 
-function plant(x: number, z: number) {
-  const group = new THREE.Group(),
-    pot = mesh(new THREE.CylinderGeometry(0.28, 0.22, 0.35, 6), C.coral);
+function plant(object: TopiaObjectConfig) {
+  const group = new THREE.Group();
+  const pot = mesh(
+    new THREE.CylinderGeometry(0.28, 0.22, 0.35, 6),
+    color(object, 0, fallback.coral),
+  );
   pot.position.y = 0.18;
   group.add(pot);
   [
     [-0.13, 0.52, 0, -0.42],
     [0.13, 0.57, 0.03, 0.38],
     [0, 0.69, -0.05, 0.05],
-  ].forEach(([px, py, pz, rotation]) => {
-    const leaf = mesh(new THREE.IcosahedronGeometry(0.24, 1), C.mint);
+  ].forEach(([x, y, z, rotation]) => {
+    const leaf = mesh(
+      new THREE.IcosahedronGeometry(0.24, 1),
+      color(object, 1, fallback.mint),
+    );
     leaf.scale.set(0.6, 1, 0.45);
-    leaf.position.set(px, py, pz);
+    leaf.position.set(x, y, z);
     leaf.rotation.z = rotation;
     group.add(leaf);
   });
-  group.position.set(x, 0.06, z);
   return group;
-}
-
-function crystal(x: number, y: number, z: number, color: number, scale = 1) {
-  const value = glow(new THREE.OctahedronGeometry(0.18 * scale, 0), color);
-  value.position.set(x, y, z);
-  value.scale.y = 1.6;
-  return value;
 }
 
 function fantasySky(look: MoodLook, paletteMix: number) {
   const neutral = moodLooks.neutral;
-  const color = (base: number, target: number) =>
+  const blend = (base: number, target: number) =>
     new THREE.Color(base).lerp(new THREE.Color(target), paletteMix);
   const skyMaterial = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -269,10 +283,10 @@ function fantasySky(look: MoodLook, paletteMix: number) {
     uniforms: {
       uTime: { value: 0 },
       uMagic: { value: 0.42 + paletteMix * 0.58 },
-      uTop: { value: color(neutral.skyTop, look.skyTop) },
-      uMid: { value: color(neutral.skyMid, look.skyMid) },
-      uLow: { value: color(neutral.skyLow, look.skyLow) },
-      uAurora: { value: color(neutral.aurora, look.aurora) },
+      uTop: { value: blend(neutral.skyTop, look.skyTop) },
+      uMid: { value: blend(neutral.skyMid, look.skyMid) },
+      uLow: { value: blend(neutral.skyLow, look.skyLow) },
+      uAurora: { value: blend(neutral.aurora, look.aurora) },
     },
     vertexShader: `varying vec3 vDirection;varying vec2 vScreen;
       void main(){vDirection=normalize(position);vec4 clip=projectionMatrix*modelViewMatrix*vec4(position,1.0);vScreen=clip.xy/clip.w;gl_Position=clip;}`,
@@ -290,8 +304,7 @@ function fantasySky(look: MoodLook, paletteMix: number) {
         float ribbon=pow(clamp(waves*.5+.5,0.0,1.0),5.0);
         float veil=smoothstep(.28,.48,height)*(1.0-smoothstep(.86,1.0,height));
         color+=uAurora*ribbon*veil*(.18+uMagic*.28);
-        float horizon=1.0-smoothstep(.0,.22,abs(height-.43));
-        color+=uAurora*horizon*.075*uMagic;
+        color+=uAurora*(1.0-smoothstep(.0,.22,abs(height-.43)))*.075*uMagic;
         gl_FragColor=vec4(color,1.0);
       }`,
   });
@@ -303,12 +316,12 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   dome.renderOrder = -10;
   group.add(dome);
 
-  const count = 150,
-    positions = new Float32Array(count * 3);
+  const count = 150;
+  const positions = new Float32Array(count * 3);
   for (let index = 0; index < count; index++) {
-    const y = -0.08 + (index / (count - 1)) * 1.04,
-      radial = Math.sqrt(Math.max(0, 1 - y * y)),
-      angle = index * 2.399963;
+    const y = -0.08 + (index / (count - 1)) * 1.04;
+    const radial = Math.sqrt(Math.max(0, 1 - y * y));
+    const angle = index * 2.399963;
     positions[index * 3] = Math.cos(angle) * radial * 38;
     positions[index * 3 + 1] = y * 38;
     positions[index * 3 + 2] = Math.sin(angle) * radial * 38;
@@ -321,7 +334,7 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   const stars = new THREE.Points(
     starGeometry,
     new THREE.PointsMaterial({
-      color: color(neutral.stars, look.stars),
+      color: blend(neutral.stars, look.stars),
       size: 0.16,
       transparent: true,
       opacity: THREE.MathUtils.lerp(0.5, look.sparkleOpacity, paletteMix),
@@ -332,26 +345,25 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   group.add(stars);
 
   const celestial = new THREE.Group();
-  celestial.position.set(-8.5, 10, -17);
-  const orbColor = color(neutral.celestial, look.celestial);
-  const aura = new THREE.Mesh(
-    new THREE.CircleGeometry(1.55, 32),
-    new THREE.MeshBasicMaterial({
-      color: orbColor,
-      transparent: true,
-      opacity: 0.16,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
+  const orbColor = blend(neutral.celestial, look.celestial);
+  celestial.add(
+    new THREE.Mesh(
+      new THREE.CircleGeometry(1.55, 32),
+      new THREE.MeshBasicMaterial({
+        color: orbColor,
+        transparent: true,
+        opacity: 0.16,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    ),
   );
-  celestial.add(aura);
   const orb = new THREE.Mesh(
     new THREE.CircleGeometry(0.76, 32),
     new THREE.MeshBasicMaterial({
       color: orbColor,
       transparent: true,
       opacity: 0.92,
-      depthWrite: false,
     }),
   );
   orb.position.z = 0.05;
@@ -359,7 +371,7 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(1.18, 0.035, 8, 48),
     new THREE.MeshBasicMaterial({
-      color: color(neutral.aurora, look.aurora),
+      color: blend(neutral.aurora, look.aurora),
       transparent: true,
       opacity: 0.7,
       depthWrite: false,
@@ -369,166 +381,589 @@ function fantasySky(look: MoodLook, paletteMix: number) {
   ring.position.z = 0.08;
   ring.rotation.z = -0.28;
   celestial.add(ring);
-  group.add(celestial);
   return { group, skyMaterial, stars, celestial, ring };
 }
 
-function floatingRoom(stage: number) {
-  const room = new THREE.Group();
-  const base = mesh(
-    new THREE.CylinderGeometry(3.65, 3.35, 0.42, 10),
-    C.woodDark,
+function cropPlant(kind: TopiaCropKind, progress: number) {
+  const group = new THREE.Group();
+  const growth = THREE.MathUtils.clamp(progress / 100, 0, 1);
+  const stemHeight = 0.18 + growth * 1.22;
+  const stem = mesh(
+    new THREE.CylinderGeometry(0.055, 0.075, stemHeight, 6),
+    0x439663,
   );
-  base.position.y = -0.36;
-  base.scale.z = 0.76;
-  room.add(base);
-  room.add(block(6.25, 0.2, 4.35, C.cream, 0, -0.08, 0));
-  room.add(
-    block(6.25, 3.25, 0.16, C.wall, 0, 1.53, -2.12),
-    block(0.16, 3.25, 4.25, C.wall, -3.04, 1.53, 0),
-  );
-  room.add(
-    block(6.35, 0.16, 0.2, C.wood, 0, 3.13, -2.03),
-    block(0.18, 3.3, 0.22, C.wood, -3.0, 1.56, -2.02),
-    block(0.18, 3.3, 0.22, C.wood, 3.0, 1.56, -2.02),
-  );
-
-  // A glowing sky window makes the cutaway room feel like a drifting cabin.
-  const window = glow(new THREE.PlaneGeometry(2.4, 1.35), C.sky);
-  window.position.set(1.05, 1.95, -2.025);
-  room.add(window);
-  room.add(
-    block(2.62, 0.1, 0.08, C.ink, 1.05, 2.66, -1.97),
-    block(2.62, 0.1, 0.08, C.ink, 1.05, 1.25, -1.97),
-    block(0.1, 1.5, 0.08, C.ink, -0.28, 1.95, -1.97),
-    block(0.1, 1.5, 0.08, C.ink, 2.38, 1.95, -1.97),
-    block(0.08, 1.42, 0.07, C.ink, 1.05, 1.95, -1.92),
-  );
-
-  // Bed, blanket and bedside crystal.
-  room.add(
-    block(2.2, 0.38, 1.35, C.woodDark, 1.7, 0.18, 0.86),
-    block(2.05, 0.25, 1.2, C.cream, 1.7, 0.49, 0.86),
-    block(1.12, 0.1, 1.22, C.blanket, 2.12, 0.67, 0.86),
-    block(0.55, 0.16, 0.78, C.lavender, 0.98, 0.66, 0.86),
-  );
-  room.add(
-    block(0.48, 0.45, 0.48, C.wood, 0.3, 0.22, 1.3),
-    crystal(0.3, 0.72, 1.3, C.yellow, 1.15),
-  );
-
-  // Star-map desk and shelves.
-  room.add(block(1.85, 0.16, 0.82, C.wood, -1.42, 1.02, -1.45));
-  [-2.18, -0.66].forEach((x) =>
-    room.add(
-      block(0.13, 0.93, 0.13, C.woodDark, x, 0.5, -1.66),
-      block(0.13, 0.93, 0.13, C.woodDark, x, 0.5, -1.23),
-    ),
-  );
-  const map = glow(new THREE.CircleGeometry(0.55, 6), C.blue);
-  map.rotation.x = -Math.PI / 2;
-  map.position.set(-1.42, 1.12, -1.44);
-  room.add(map);
-  room.add(
-    crystal(-2.12, 1.33, -1.42, C.coral, 0.8),
-    crystal(-0.76, 1.29, -1.42, C.sky, 0.72),
-  );
-  room.add(
-    block(0.72, 0.1, 0.48, C.woodDark, -1.43, 0.52, -0.45),
-    block(0.1, 0.52, 0.1, C.wood, -1.7, 0.25, -0.6),
-    block(0.1, 0.52, 0.1, C.wood, -1.16, 0.25, -0.6),
-  );
-
-  // Left-wall library and window garden.
-  room.add(block(0.35, 2.25, 1.35, C.wood, -2.78, 1.25, -0.88));
-  [-0.35, 0.25, 0.85].forEach((y) =>
-    room.add(block(0.42, 0.09, 1.24, C.woodDark, -2.57, 1.03 + y, -0.88)),
-  );
-  [C.coral, C.blue, C.yellow, C.mint].forEach((color, index) =>
-    room.add(
-      block(
-        0.19,
-        0.42,
-        0.22,
-        color,
-        -2.53,
-        0.43 + (index % 2) * 0.62,
-        -1.28 + index * 0.29,
-      ),
-    ),
-  );
-  room.add(plant(-2.55, 0.82), plant(2.55, -1.42));
-
-  // Hearth, rug, lantern and small magical details.
-  room.add(
-    block(1.05, 0.95, 0.48, C.woodDark, -2.35, 0.47, 1.62),
-    block(0.65, 0.57, 0.05, C.ink, -2.35, 0.43, 1.37),
-  );
-  const fire = glow(new THREE.ConeGeometry(0.23, 0.5, 5), C.yellow);
-  fire.position.set(-2.35, 0.42, 1.33);
-  room.add(fire);
-  const rug = mesh(new THREE.CircleGeometry(1.15, 12), C.lavender);
-  rug.rotation.x = -Math.PI / 2;
-  rug.position.set(-0.35, 0.035, 0.45);
-  rug.scale.z = 0.72;
-  room.add(rug);
-  room.add(block(0.08, 1.15, 0.08, C.woodDark, -0.2, 2.74, -0.3));
-  const lantern = glow(new THREE.IcosahedronGeometry(0.28, 1), C.yellow);
-  lantern.position.set(-0.2, 2.16, -0.3);
-  room.add(lantern);
-  const lampLight = new THREE.PointLight(0xffd978, 2.6, 5);
-  lampLight.position.copy(lantern.position);
-  room.add(lampLight);
-
-  // Airship hardware mounted outside the room.
-  room.add(
-    block(0.14, 2.25, 0.14, C.woodDark, 2.72, 1.03, 1.73),
-    block(1.18, 0.1, 0.1, C.wood, 2.18, 1.92, 1.73),
-  );
-  const pennant = mesh(new THREE.ConeGeometry(0.44, 1.05, 3), C.coral);
-  pennant.rotation.z = Math.PI / 2;
-  pennant.position.set(1.68, 1.91, 1.73);
-  room.add(pennant);
-  const hub = mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.36, 8), C.yellow);
-  hub.rotation.z = Math.PI / 2;
-  hub.position.set(3.3, 0.68, 0.3);
-  room.add(hub);
-  [0, Math.PI / 2].forEach((rotation) => {
-    const blade = block(0.12, 1.35, 0.25, C.blue, 3.5, 0.68, 0.3);
-    blade.rotation.x = rotation;
-    room.add(blade);
-  });
-
-  for (let index = 0; index < stage * 4; index++) {
-    const color = index % 3 === 0 ? C.coral : index % 2 ? C.sky : C.yellow;
-    room.add(
-      crystal(
-        -2.6 + ((index * 1.37) % 5.2),
-        0.2 + (index % 3) * 0.3,
-        -1.7 + ((index * 0.83) % 3.2),
-        color,
-        0.45,
-      ),
+  stem.position.y = 0.14 + stemHeight / 2;
+  group.add(stem);
+  for (let index = 0; index < Math.max(1, Math.ceil(growth * 4)); index++) {
+    const leaf = mesh(new THREE.IcosahedronGeometry(0.18, 1), fallback.mint);
+    leaf.scale.set(1, 0.42, 0.58);
+    leaf.position.set(
+      (index % 2 ? 1 : -1) * (0.11 + growth * 0.13),
+      0.3 + (index / 4) * stemHeight * 0.72,
+      index % 2 ? 0.05 : -0.05,
     );
+    leaf.rotation.z = (index % 2 ? -1 : 1) * 0.45;
+    group.add(leaf);
   }
-  room.add(
-    cloud(-3.4, -1.0, -1.1, 0.85),
-    cloud(3.4, -1.15, 0.5, 0.72),
-    cloud(0.5, -1.35, 2.2, 0.65),
-  );
-  return room;
+  if (growth > 0.16) {
+    const cropColors: Record<TopiaCropKind, number> = {
+      sunflower: fallback.yellow,
+      tomato: fallback.coral,
+      lavender: fallback.lavender,
+      pumpkin: 0xffa345,
+      herb: fallback.mint,
+    };
+    const fruit = glowing(
+      kind === "pumpkin"
+        ? new THREE.SphereGeometry(0.3 + growth * 0.12, 8, 6)
+        : kind === "lavender"
+          ? new THREE.ConeGeometry(0.18, 0.48, 7)
+          : new THREE.IcosahedronGeometry(0.2 + growth * 0.15, 1),
+      cropColors[kind],
+    );
+    fruit.position.y = 0.2 + stemHeight;
+    group.add(fruit);
+  }
+  return { group, anchorHeight: 0.42 + stemHeight };
+}
+
+function buildPrefab(
+  object: TopiaObjectConfig,
+  crops: Map<string, TopiaSceneCrop>,
+) {
+  const group = new THREE.Group();
+  let anchorHeight = 0;
+  switch (object.prefab) {
+    case "floating-island": {
+      const radius = parameter(object, "radius", 3.25);
+      const depth = parameter(object, "depth", 2.05);
+      const grass = mesh(
+        new THREE.CylinderGeometry(radius, radius * 0.9, 0.28, 10),
+        color(object, 0, 0x80c989),
+      );
+      grass.position.y = 0.02;
+      const rock = mesh(
+        new THREE.ConeGeometry(radius * 0.92, depth, 10),
+        color(object, 1, 0x75657f),
+      );
+      rock.position.y = -depth / 2 - 0.1;
+      const underside = mesh(
+        new THREE.ConeGeometry(radius * 0.52, depth * 0.82, 7),
+        color(object, 2, 0x4f536e),
+      );
+      underside.position.y = -depth * 0.92;
+      group.add(grass, rock, underside);
+      anchorHeight = 0.6;
+      break;
+    }
+    case "block":
+      group.add(
+        block(
+          parameter(object, "width", 1),
+          parameter(object, "height", 1),
+          parameter(object, "depth", 1),
+          color(object, 0, fallback.wall),
+        ),
+      );
+      break;
+    case "cone":
+      group.add(
+        mesh(
+          new THREE.ConeGeometry(
+            parameter(object, "radius", 1),
+            parameter(object, "height", 1),
+            Math.round(parameter(object, "segments", 6)),
+          ),
+          color(object, 0, fallback.blue),
+        ),
+      );
+      break;
+    case "cylinder":
+      group.add(
+        mesh(
+          new THREE.CylinderGeometry(
+            parameter(object, "radiusTop", 0.5),
+            parameter(object, "radiusBottom", 0.5),
+            parameter(object, "height", 1),
+            Math.round(parameter(object, "segments", 8)),
+          ),
+          color(object, 0, fallback.wall),
+        ),
+      );
+      break;
+    case "door": {
+      group.add(block(0.7, 1.3, 0.14, color(object, 0, fallback.woodDark)));
+      const knob = glowing(
+        new THREE.CircleGeometry(0.07, 14),
+        color(object, 1, fallback.yellow),
+      );
+      knob.position.set(0.21, 0, 0.09);
+      group.add(
+        knob,
+        block(1, 0.16, 0.58, color(object, 2, fallback.wood), 0, -0.75, 0.28),
+      );
+      break;
+    }
+    case "round-window": {
+      const radius = parameter(object, "radius", 0.46);
+      group.add(
+        glowing(
+          new THREE.CircleGeometry(radius, 18),
+          color(object, 0, fallback.sky),
+        ),
+      );
+      const rim = mesh(
+        new THREE.TorusGeometry(radius + 0.05, 0.065, 7, 20),
+        color(object, 1, fallback.wood),
+      );
+      rim.position.z = 0.035;
+      group.add(
+        rim,
+        block(
+          0.07,
+          radius * 2,
+          0.06,
+          color(object, 1, fallback.wood),
+          0,
+          0,
+          0.08,
+        ),
+        block(
+          radius * 2,
+          0.07,
+          0.06,
+          color(object, 1, fallback.wood),
+          0,
+          0,
+          0.08,
+        ),
+      );
+      break;
+    }
+    case "tower": {
+      const radius = parameter(object, "radius", 0.66);
+      const height = parameter(object, "height", 2.12);
+      const body = mesh(
+        new THREE.CylinderGeometry(radius * 0.94, radius, height, 8),
+        color(object, 0, fallback.cream),
+      );
+      body.position.y = height / 2;
+      const roof = mesh(
+        new THREE.ConeGeometry(radius * 1.42, height * 0.48, 8),
+        color(object, 1, fallback.coral),
+      );
+      roof.position.y = height + height * 0.24;
+      group.add(body, roof);
+      anchorHeight = height;
+      break;
+    }
+    case "sail": {
+      group.add(
+        block(
+          0.08,
+          2.2,
+          0.08,
+          color(object, 2, fallback.woodDark),
+          0,
+          -0.45,
+          0,
+        ),
+      );
+      const sail = mesh(
+        new THREE.ConeGeometry(0.62, 1.55, 3),
+        color(object, 0, fallback.mint),
+      );
+      sail.rotation.z = Math.PI / 2;
+      sail.position.set(-0.2, 0, 0);
+      const prism = glowing(
+        new THREE.OctahedronGeometry(0.27, 0),
+        color(object, 1, fallback.coral),
+      );
+      prism.position.y = 0.76;
+      group.add(sail, prism);
+      anchorHeight = 0.72;
+      break;
+    }
+    case "wind-chimes": {
+      const pieces = Math.max(2, Math.round(parameter(object, "pieces", 3)));
+      group.add(
+        block(0.78, 0.07, 0.07, color(object, 0, fallback.wood), 0, 0.52, 0),
+      );
+      for (let index = 0; index < pieces; index++) {
+        const x = (index - (pieces - 1) / 2) * 0.25;
+        group.add(
+          block(
+            0.025,
+            0.48 + index * 0.06,
+            0.025,
+            color(object, 3, fallback.ink),
+            x,
+            0.22,
+            0,
+          ),
+        );
+        const leaf = glowing(
+          new THREE.OctahedronGeometry(0.13 + index * 0.012, 0),
+          color(object, index % 2 ? 2 : 1, fallback.yellow),
+        );
+        leaf.position.set(x, -0.12 - index * 0.05, 0);
+        group.add(leaf);
+      }
+      anchorHeight = 0.42;
+      break;
+    }
+    case "observatory": {
+      const dome = mesh(
+        new THREE.SphereGeometry(0.48, 12, 7, 0, Math.PI * 2, 0, Math.PI / 2),
+        color(object, 0, fallback.lavender),
+      );
+      dome.rotation.x = -Math.PI / 2;
+      group.add(dome);
+      break;
+    }
+    case "crystal": {
+      const crystal = glowing(
+        new THREE.OctahedronGeometry(0.22, 0),
+        color(object, 0, fallback.coral),
+      );
+      crystal.scale.y = 1.6;
+      group.add(crystal);
+      anchorHeight = 0.3;
+      break;
+    }
+    case "cloud":
+      group.add(lowPolyCloud(color(object, 0, fallback.cloud)));
+      break;
+    case "room-shell": {
+      group.add(
+        mesh(
+          new THREE.CylinderGeometry(3.65, 3.35, 0.42, 10),
+          color(object, 3, fallback.woodDark),
+        ),
+        block(6.25, 0.2, 4.35, color(object, 0, fallback.cream), 0, 0.28, 0),
+        block(
+          6.25,
+          3.25,
+          0.16,
+          color(object, 1, fallback.wall),
+          0,
+          1.89,
+          -2.12,
+        ),
+        block(
+          0.16,
+          3.25,
+          4.25,
+          color(object, 1, fallback.wall),
+          -3.04,
+          1.89,
+          0,
+        ),
+      );
+      group.children[0].position.y = -0.08;
+      break;
+    }
+    case "sky-window": {
+      const pane = glowing(
+        new THREE.PlaneGeometry(2.4, 1.35),
+        color(object, 0, fallback.sky),
+      );
+      group.add(
+        pane,
+        block(2.62, 0.1, 0.08, color(object, 1, fallback.ink), 0, 0.71, 0.05),
+        block(2.62, 0.1, 0.08, color(object, 1, fallback.ink), 0, -0.71, 0.05),
+        block(0.1, 1.5, 0.08, color(object, 1, fallback.ink), -1.33, 0, 0.05),
+        block(0.1, 1.5, 0.08, color(object, 1, fallback.ink), 1.33, 0, 0.05),
+      );
+      break;
+    }
+    case "bed":
+      group.add(
+        block(2.2, 0.38, 1.35, color(object, 0, fallback.woodDark)),
+        block(2.05, 0.25, 1.2, color(object, 1, fallback.cream), 0, 0.31, 0),
+        block(1.12, 0.1, 1.22, color(object, 2, fallback.blue), 0.42, 0.49, 0),
+        block(
+          0.55,
+          0.16,
+          0.78,
+          color(object, 3, fallback.lavender),
+          -0.72,
+          0.48,
+          0,
+        ),
+      );
+      anchorHeight = 0.55;
+      break;
+    case "nightstand": {
+      group.add(block(0.48, 0.45, 0.48, color(object, 0, fallback.wood)));
+      const light = glowing(
+        new THREE.OctahedronGeometry(0.2, 0),
+        color(object, 1, fallback.yellow),
+      );
+      light.position.y = 0.5;
+      group.add(light);
+      break;
+    }
+    case "desk": {
+      group.add(
+        block(1.85, 0.16, 0.82, color(object, 0, fallback.wood)),
+        block(
+          0.13,
+          0.93,
+          0.13,
+          color(object, 1, fallback.woodDark),
+          -0.76,
+          -0.5,
+          -0.2,
+        ),
+        block(
+          0.13,
+          0.93,
+          0.13,
+          color(object, 1, fallback.woodDark),
+          0.76,
+          -0.5,
+          -0.2,
+        ),
+      );
+      const map = glowing(
+        new THREE.CircleGeometry(0.55, 6),
+        color(object, 2, fallback.blue),
+      );
+      map.rotation.x = -Math.PI / 2;
+      map.position.y = 0.1;
+      group.add(map);
+      anchorHeight = 0.4;
+      break;
+    }
+    case "chair":
+      group.add(
+        block(0.72, 0.1, 0.48, color(object, 0, fallback.woodDark), 0, 0.27, 0),
+        block(0.1, 0.52, 0.1, color(object, 1, fallback.wood), -0.27, 0, 0),
+        block(0.1, 0.52, 0.1, color(object, 1, fallback.wood), 0.27, 0, 0),
+      );
+      break;
+    case "shelf": {
+      group.add(block(0.35, 2.25, 1.35, color(object, 0, fallback.wood)));
+      [-0.58, 0, 0.58].forEach((y) =>
+        group.add(
+          block(
+            0.42,
+            0.09,
+            1.24,
+            color(object, 1, fallback.woodDark),
+            0.2,
+            y,
+            0,
+          ),
+        ),
+      );
+      [
+        color(object, 2, fallback.coral),
+        color(object, 3, fallback.blue),
+        fallback.yellow,
+        fallback.mint,
+      ].forEach((value, index) =>
+        group.add(
+          block(
+            0.19,
+            0.42,
+            0.22,
+            value,
+            0.24,
+            -0.7 + (index % 2) * 0.62,
+            -0.4 + index * 0.27,
+          ),
+        ),
+      );
+      anchorHeight = 0.35;
+      break;
+    }
+    case "plant":
+      group.add(plant(object));
+      anchorHeight = 0.75;
+      break;
+    case "hearth": {
+      group.add(
+        block(1.05, 0.95, 0.48, color(object, 0, fallback.woodDark)),
+        block(
+          0.65,
+          0.57,
+          0.05,
+          color(object, 1, fallback.ink),
+          0,
+          -0.04,
+          -0.26,
+        ),
+      );
+      const fire = glowing(
+        new THREE.ConeGeometry(0.23, 0.5, 5),
+        color(object, 2, fallback.yellow),
+      );
+      fire.position.set(0, -0.04, -0.3);
+      group.add(fire);
+      break;
+    }
+    case "rug": {
+      const rug = mesh(
+        new THREE.CircleGeometry(1, 12),
+        color(object, 0, fallback.lavender),
+      );
+      rug.rotation.x = -Math.PI / 2;
+      group.add(rug);
+      break;
+    }
+    case "lantern": {
+      group.add(
+        block(
+          0.08,
+          1.15,
+          0.08,
+          color(object, 1, fallback.woodDark),
+          0,
+          0.58,
+          0,
+        ),
+      );
+      const lantern = glowing(
+        new THREE.IcosahedronGeometry(0.28, 1),
+        color(object, 0, fallback.yellow),
+      );
+      group.add(
+        lantern,
+        new THREE.PointLight(color(object, 0, fallback.yellow), 2.6, 5),
+      );
+      break;
+    }
+    case "propeller": {
+      const hub = mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 0.36, 8),
+        color(object, 0, fallback.yellow),
+      );
+      hub.rotation.z = Math.PI / 2;
+      group.add(hub, block(0.12, 1.35, 0.25, color(object, 1, fallback.blue)));
+      const blade = block(0.12, 1.35, 0.25, color(object, 1, fallback.blue));
+      blade.rotation.x = Math.PI / 2;
+      group.add(blade);
+      break;
+    }
+    case "path":
+      group.add(
+        block(
+          parameter(object, "width", 4),
+          0.08,
+          parameter(object, "depth", 0.45),
+          color(object, 0, fallback.cream),
+        ),
+      );
+      break;
+    case "crop-plot": {
+      const crop = object.taskId ? crops.get(object.taskId) : undefined;
+      const soil = color(object, 0, 0x76513f);
+      const border =
+        crop?.progress === 100
+          ? fallback.yellow
+          : color(object, 1, fallback.wood);
+      group.add(
+        block(1.38, 0.16, 1.18, soil),
+        block(1.5, 0.12, 0.08, border, 0, 0.06, -0.64),
+        block(1.5, 0.12, 0.08, border, 0, 0.06, 0.64),
+        block(0.08, 0.12, 1.2, border, -0.75, 0.06, 0),
+        block(0.08, 0.12, 1.2, border, 0.75, 0.06, 0),
+      );
+      if (crop) {
+        const result = cropPlant(crop.crop, crop.progress);
+        result.group.position.y = 0.14;
+        group.add(result.group);
+        anchorHeight = result.anchorHeight;
+      }
+      break;
+    }
+    case "farm-shed": {
+      group.add(
+        block(1.25, 1.3, 0.9, color(object, 0, fallback.wall), 0, 0.65, 0),
+      );
+      const roof = mesh(
+        new THREE.ConeGeometry(0.98, 0.75, 4),
+        color(object, 1, fallback.coral),
+      );
+      roof.position.y = 1.62;
+      roof.rotation.y = Math.PI / 4;
+      group.add(roof);
+      break;
+    }
+    case "watering-orb": {
+      group.add(
+        glowing(
+          new THREE.SphereGeometry(0.27, 10, 7),
+          color(object, 0, fallback.sky),
+        ),
+      );
+      for (let index = 0; index < 6; index++) {
+        const drop = glowing(
+          new THREE.OctahedronGeometry(0.07, 0),
+          color(object, 0, fallback.sky),
+        );
+        drop.position.set(
+          -0.45 + (index % 3) * 0.35,
+          -0.6 + Math.floor(index / 3) * 0.36,
+          -0.35 + (index % 2) * 0.3,
+        );
+        group.add(drop);
+      }
+      break;
+    }
+  }
+  return { group, anchorHeight };
+}
+
+function buildConfiguredScene(
+  config: TopiaSceneConfig,
+  crops: TopiaSceneCrop[],
+) {
+  const world = new THREE.Group();
+  const cropById = new Map(crops.map((crop) => [crop.id, crop]));
+  for (const object of config.objects) {
+    const built = buildPrefab(object, cropById);
+    built.group.name = object.id;
+    built.group.position.fromArray(object.position);
+    if (object.rotation)
+      built.group.rotation.fromArray([...object.rotation, "XYZ"]);
+    if (object.scale) built.group.scale.fromArray(object.scale);
+    if (object.anchorId) {
+      const anchor = new THREE.Object3D();
+      anchor.position.y = built.anchorHeight;
+      anchor.userData.topiaAnchor = object.anchorId;
+      built.group.add(anchor);
+    }
+    if (object.animation) {
+      built.group.userData.animation = object.animation;
+      built.group.userData.baseY = built.group.position.y;
+      built.group.userData.baseRotationY = built.group.rotation.y;
+      built.group.userData.baseRotationZ = built.group.rotation.z;
+    }
+    world.add(built.group);
+  }
+  return world;
+}
+
+export interface TopiaSceneOptions {
+  location: TopiaLocation;
+  crops: TopiaSceneCrop[];
+  scene: TopiaSceneConfig;
 }
 
 export function mountTopiaScene(
   canvas: HTMLCanvasElement,
   mood: MoodKind = "neutral",
   intensity = 0,
+  options: TopiaSceneOptions,
 ) {
   const container = canvas.parentElement;
   if (!container) return () => undefined;
-  const look = moodLooks[mood] ?? moodLooks.neutral,
-    mix = THREE.MathUtils.clamp(intensity / 100, 0, 1),
-    paletteMix = mood === "neutral" ? 1 : 0.45 + mix * 0.55;
+  const look = moodLooks[mood] ?? moodLooks.neutral;
+  const mix = THREE.MathUtils.clamp(intensity / 100, 0, 1);
+  const paletteMix = mood === "neutral" ? 1 : 0.45 + mix * 0.55;
   let renderer: THREE.WebGLRenderer;
   try {
     renderer = new THREE.WebGLRenderer({
@@ -546,6 +981,7 @@ export function mountTopiaScene(
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = THREE.MathUtils.lerp(1.12, look.exposure, mix);
+
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(
     look.fog,
@@ -554,7 +990,6 @@ export function mountTopiaScene(
   const camera = new THREE.OrthographicCamera(-5, 5, 3, -3, 0.1, 100);
   const backdrop = fantasySky(look, paletteMix);
   scene.add(backdrop.group);
-  backdrop.group.remove(backdrop.celestial);
   backdrop.celestial.position.set(3.5, 1.55, -32);
   camera.add(backdrop.celestial);
   scene.add(camera);
@@ -573,18 +1008,15 @@ export function mountTopiaScene(
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
   scene.add(sun);
-  const stage = Number(
-      [...container.classList]
-        .find((value) => value.startsWith("stage-"))
-        ?.slice(6) ?? 1,
-    ),
-    world = floatingRoom(stage);
+
+  const world = buildConfiguredScene(options.scene, options.crops);
   scene.add(world);
-  const sparkleGeometry = new THREE.BufferGeometry(),
-    sparklePositions = new Float32Array(42 * 3);
+
+  const sparkleGeometry = new THREE.BufferGeometry();
+  const sparklePositions = new Float32Array(42 * 3);
   for (let index = 0; index < 42; index++) {
-    const angle = index * 2.39996,
-      radius = 3.7 + (index % 7) * 0.38;
+    const angle = index * 2.39996;
+    const radius = 3.7 + (index % 7) * 0.38;
     sparklePositions[index * 3] = Math.cos(angle) * radius;
     sparklePositions[index * 3 + 1] = -0.4 + (index % 9) * 0.56;
     sparklePositions[index * 3 + 2] = Math.sin(angle) * radius;
@@ -605,44 +1037,73 @@ export function mountTopiaScene(
     }),
   );
   scene.add(sparkles);
-  const driftingClouds = new THREE.Group();
-  driftingClouds.add(
-    cloud(-4.7, -1.1, -2.8, 0.62),
-    cloud(4.5, -0.75, -1.8, 0.5),
-    cloud(0.6, 3.8, -4.3, 0.42),
-  );
-  driftingClouds.traverse((object) => {
-    if (object instanceof THREE.Mesh) {
-      object.castShadow = false;
-      object.receiveShadow = false;
-      const material = object.material as THREE.MeshStandardMaterial;
-      material.transparent = true;
-      material.opacity = 0.34;
-      material.depthWrite = false;
-    }
-  });
-  scene.add(driftingClouds);
   const ambientGlow = new THREE.PointLight(look.glow, 1.1, 11);
   ambientGlow.position.set(0, 2.2, 1.5);
   scene.add(ambientGlow);
   container.classList.add("webgl-ready");
-  let frame = 0,
-    disposed = false,
-    targetYaw = 0.68,
-    currentYaw = 0.68,
-    targetPitch = 0.55,
-    currentPitch = 0.55;
+
+  const anchorBindings: Array<{
+    anchor: THREE.Object3D;
+    element: HTMLElement;
+  }> = [];
+  world.traverse((object) => {
+    const anchorId = object.userData.topiaAnchor as string | undefined;
+    if (!anchorId) return;
+    const element = container.querySelector<HTMLElement>(
+      `[data-topia-anchor="${anchorId}"]`,
+    );
+    if (element) {
+      element.dataset.topiaAnchorBound = "true";
+      anchorBindings.push({ anchor: object, element });
+    }
+  });
+  const projectedAnchor = new THREE.Vector3();
+  let labelsRevealed = false;
+  const syncAnchors = () => {
+    if (camera.zoom >= 1.18) labelsRevealed = true;
+    else if (camera.zoom <= 1.08) labelsRevealed = false;
+    scene.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    for (const { anchor, element } of anchorBindings) {
+      anchor.getWorldPosition(projectedAnchor).project(camera);
+      const visible =
+        projectedAnchor.z > -1 &&
+        projectedAnchor.z < 1 &&
+        Math.abs(projectedAnchor.x) < 1.12 &&
+        Math.abs(projectedAnchor.y) < 1.12;
+      element.style.left = `${(projectedAnchor.x * 0.5 + 0.5) * 100}%`;
+      element.style.top = `${(-projectedAnchor.y * 0.5 + 0.5) * 100}%`;
+      element.classList.toggle("topia-anchor-hidden", !visible);
+      if (element.classList.contains("topia-landmark")) {
+        element.classList.toggle(
+          "topia-anchor-visible",
+          visible && labelsRevealed,
+        );
+        element.classList.toggle(
+          "topia-anchor-collapsed",
+          visible && !labelsRevealed,
+        );
+      }
+    }
+  };
+
+  let frame = 0;
+  let disposed = false;
+  let targetYaw = options.scene.camera.yaw;
+  let currentYaw = targetYaw;
+  let targetPitch = options.scene.camera.pitch;
+  let currentPitch = targetPitch;
   const pointers = new Map<number, { x: number; y: number }>();
-  let lastX = 0,
-    lastY = 0,
-    pinchDistance = 0,
-    pinchZoom = 1;
+  let lastX = 0;
+  let lastY = 0;
+  let pinchDistance = 0;
+  let pinchZoom = 1;
   const resize = () => {
-    const width = container.clientWidth,
-      height = container.clientHeight;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
     renderer.setSize(width, height, false);
-    const aspect = width / Math.max(1, height),
-      view = 4.05;
+    const aspect = width / Math.max(1, height);
+    const view = 4.05;
     camera.left = -view * aspect;
     camera.right = view * aspect;
     camera.top = view;
@@ -670,8 +1131,7 @@ export function mountTopiaScene(
     }
   };
   const move = (event: PointerEvent) => {
-    const previous = pointers.get(event.pointerId);
-    if (!previous) return;
+    if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size === 1) {
       targetYaw -= (event.clientX - lastX) * 0.008;
@@ -713,13 +1173,14 @@ export function mountTopiaScene(
   canvas.addEventListener("pointerup", up);
   canvas.addEventListener("pointercancel", up);
   canvas.addEventListener("wheel", wheel, { passive: false });
+
   const animate = () => {
     if (disposed) return;
     const now = performance.now();
     currentYaw += (targetYaw - currentYaw) * 0.09;
     currentPitch += (targetPitch - currentPitch) * 0.09;
-    const radius = 9.5,
-      flat = radius * Math.cos(currentPitch);
+    const radius = 9.5;
+    const flat = radius * Math.cos(currentPitch);
     camera.position.set(
       Math.sin(currentYaw) * flat,
       1 + Math.sin(currentPitch) * radius,
@@ -731,18 +1192,26 @@ export function mountTopiaScene(
     backdrop.ring.rotation.z = -0.28 + now * 0.000035;
     backdrop.celestial.scale.setScalar(1 + Math.sin(now * 0.0007) * 0.035);
     world.position.y = Math.sin(now * 0.00055) * 0.05;
+    world.traverse((object) => {
+      if (object.userData.animation === "spin")
+        object.rotation.y = object.userData.baseRotationY + now * 0.00035;
+      if (object.userData.animation === "sway")
+        object.rotation.z =
+          object.userData.baseRotationZ + Math.sin(now * 0.0012) * 0.045;
+      if (object.userData.animation === "float")
+        object.position.y =
+          object.userData.baseY + Math.sin(now * 0.001 + object.id) * 0.12;
+    });
     sparkles.rotation.y = now * 0.000045;
     sparkles.position.y = Math.sin(now * 0.0007) * 0.08;
-    driftingClouds.position.x =
-      Math.sin(now * THREE.MathUtils.lerp(0.00012, look.cloudSpeed, mix)) *
-      0.65;
-    driftingClouds.position.y = Math.cos(now * 0.0002) * 0.08;
     ambientGlow.intensity =
       1.05 + Math.sin(now * (mood === "angry" ? 0.004 : 0.0011)) * 0.24;
+    syncAnchors();
     renderer.render(scene, camera);
     frame = requestAnimationFrame(animate);
   };
   animate();
+
   return () => {
     disposed = true;
     cancelAnimationFrame(frame);
@@ -752,13 +1221,21 @@ export function mountTopiaScene(
     canvas.removeEventListener("pointerup", up);
     canvas.removeEventListener("pointercancel", up);
     canvas.removeEventListener("wheel", wheel);
+    anchorBindings.forEach(({ element }) => {
+      delete element.dataset.topiaAnchorBound;
+      element.classList.remove(
+        "topia-anchor-hidden",
+        "topia-anchor-visible",
+        "topia-anchor-collapsed",
+      );
+    });
     scene.traverse((object) => {
       if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
         object.geometry.dispose();
         const materials = Array.isArray(object.material)
           ? object.material
           : [object.material];
-        materials.forEach((value) => value.dispose());
+        materials.forEach((item) => item.dispose());
       }
     });
     renderer.dispose();

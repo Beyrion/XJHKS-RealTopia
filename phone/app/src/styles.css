@@ -89,21 +89,71 @@ small { font-size: 13px!important; line-height: 1.4; }
 #topia-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; touch-action: none; cursor: grab; opacity: 0; transition: opacity .35s; }
 #topia-canvas:active { cursor: grabbing; }
 .world.webgl-ready #topia-canvas { opacity: 1; }
+.quest-focus-effect { position:absolute; inset:0; z-index:2; overflow:hidden; pointer-events:none; opacity:.72; }
+.quest-focus-effect i { position:absolute; left:calc(7% + var(--focus-index) * 9%); bottom:8%; width:7px; height:7px; border-radius:50%; background:#fff3a4; box-shadow:0 0 12px 4px rgba(255,226,103,.72); animation:quest-focus-rise calc(2.8s + var(--focus-index) * .13s) ease-in-out infinite; animation-delay:calc(var(--focus-index) * -.31s); }
+.quest-focus-effect.relationship i { width:3px; height:22px; border-radius:4px; background:#ffcad8; box-shadow:0 0 10px rgba(255,130,146,.68); animation-name:quest-focus-sway; transform-origin:50% 0; }
+.quest-focus-effect.health i { width:12px; height:12px; border:2px solid #b9ffe3; background:transparent; box-shadow:0 0 12px rgba(105,212,163,.7); animation-name:quest-focus-breathe; }
+.quest-focus-effect.home i { width:9px; height:15px; border-radius:90% 10% 90% 10%; background:#8be0a9; box-shadow:0 0 9px rgba(105,212,163,.72); animation-name:quest-focus-grow; }
+.quest-focus-effect.outdoor i { width:28px; height:3px; border-radius:50%; background:rgba(255,255,255,.72); box-shadow:none; animation-name:quest-focus-drift; }
+.quest-focus-effect.general i { background:#c9ceff; box-shadow:0 0 11px rgba(108,120,255,.7); }
+@keyframes quest-focus-rise { 0%,100% { transform:translateY(12px) scale(.65);opacity:.2 } 50% { transform:translateY(-95px) scale(1.15);opacity:1 } }
+@keyframes quest-focus-sway { 0%,100% { transform:translateY(6px) rotate(-10deg);opacity:.25 } 50% { transform:translateY(-52px) rotate(12deg);opacity:.9 } }
+@keyframes quest-focus-breathe { 0%,100% { transform:scale(.5);opacity:.15 } 50% { transform:scale(1.7);opacity:.9 } }
+@keyframes quest-focus-grow { 0%,100% { transform:translateY(8px) rotate(-15deg) scale(.6);opacity:.2 } 50% { transform:translateY(-70px) rotate(14deg) scale(1.1);opacity:.95 } }
+@keyframes quest-focus-drift { from { transform:translate(-45px,-10px);opacity:0 } 35% { opacity:.85 } to { transform:translate(90px,-75px);opacity:0 } }
 .world.webgl-ready > .moon, .world.webgl-ready > .cloud, .world.webgl-ready > .mountains, .world.webgl-ready > .lake, .world.webgl-ready > .cabin, .world.webgl-ready > .tree, .world.webgl-ready > .field, .world.webgl-ready > .hero { display: none; }
 .moon { position: absolute; left: 15%; top: 14%; width: 64px; height: 64px; border-radius: 50%; background: #fff8b7; box-shadow: 0 0 45px #fff9a5; }
 .cloud { position: absolute; left: 30%; top: 21%; width: 190px; height: 23px; border-radius: 50%; background: rgba(255,255,255,.64); filter: blur(5px); }
 .mountains { position: absolute; left: -5%; right: -5%; bottom: 6%; height: 53%; background: #66b98c; clip-path: polygon(0 46%,17% 19%,38% 34%,47% 9%,66% 31%,82% 4%,100% 35%,100% 100%,0 100%); }
 .lake { position: absolute; left: 14%; bottom: -13%; width: 64%; height: 36%; border-radius: 50%; background: #72d8e5; transform: rotate(-4deg); }
-.world-title { position: absolute; left: 24px; top: 22px; z-index: 6; padding: 11px 14px; border: 2px solid var(--ink); border-radius: 14px; background: rgba(255, 253, 248, .88); box-shadow: 3px 3px 0 var(--ink); }
-.world-title h1 { margin: 1px 0; font-size: 30px; letter-spacing: -.04em; }
-.world-title p { margin: 3px 0 0; color: var(--muted); font-size: 13px; font-weight: 700; }
-.landmark { position: absolute; z-index: 7; min-width: 190px; padding: 13px 15px; display: flex; gap: 12px; align-items: center; border: 2px solid var(--ink); border-radius: 17px; background: rgba(255,253,248,.94); box-shadow: 4px 4px 0 var(--ink); text-align: left; }
-.landmark > .ui-icon { width: 28px; height: 28px; padding: 4px; border-radius: 9px; background: var(--yellow); }
-.landmark b, .landmark small { display: block; }
-.landmark b { font-size: 15px; }
-.landmark small { margin-top: 3px; color: var(--muted); font-size: 12px; }
-.landmark.garden { left: 29%; bottom: 9%; }
-.landmark.lab { right: 5%; top: 31%; }
+.world-locations { position:absolute; left:18px; top:16px; z-index:9; display:flex; gap:5px; padding:5px; border:1.5px solid rgba(37,37,59,.72); border-radius:15px; background:rgba(255,253,248,.78); box-shadow:2px 3px 0 rgba(37,37,59,.72); backdrop-filter:blur(10px); }
+.world-locations button { width:38px; height:38px; padding:0; display:grid; place-items:center; border-radius:11px; background:transparent; font-size:23px; line-height:1; transition:background .18s,transform .18s; }
+.world-locations button:hover { transform:translateY(-1px); }
+.world-locations button.active { background:var(--yellow); box-shadow:inset 0 0 0 1.5px var(--ink); }
+.topia-landmark { position:absolute; z-index:8; max-width:160px; min-height:27px; padding:4px 7px 4px 5px; display:flex; align-items:center; gap:5px; border:1px solid rgba(37,37,59,.72); border-radius:9px; background:rgba(255,253,248,.87); box-shadow:1.5px 2px 0 rgba(37,37,59,.58); backdrop-filter:blur(6px); text-align:left; opacity:0; pointer-events:none; filter:blur(2px); transform:translate(-50%,-42%) scale(.88); transition:opacity .24s ease,filter .24s ease,background .18s ease,transform .28s cubic-bezier(.2,.8,.2,1); }
+.topia-landmark.topia-anchor-visible { opacity:1; pointer-events:auto; filter:blur(0); transform:translate(-50%,-50%) scale(1); }
+.topia-landmark.topia-anchor-collapsed { width:32px; height:32px; min-height:32px; padding:0; border:0; background:transparent; box-shadow:none; backdrop-filter:none; opacity:1; pointer-events:auto; filter:none; transform:translate(-50%,-50%) scale(1); }
+.topia-landmark.topia-anchor-collapsed > * { display:none; }
+.topia-landmark.topia-anchor-visible:hover,.topia-landmark.topia-anchor-visible:focus-visible { background:#fff; transform:translate(-50%,-54%) scale(1.02); }
+.topia-landmark > span { font-size:15px; line-height:1; }
+.topia-landmark b { min-width:0; overflow:hidden; color:var(--ink); font-size:11px; line-height:1.15; text-overflow:ellipsis; white-space:nowrap; }
+.topia-landmark small { padding-left:2px; color:var(--blue-dark); font-size:9px!important; font-weight:900; white-space:nowrap; }
+.location-garden .topia-landmark { max-width:135px; }
+.scene-portal { position:absolute; z-index:7; display:block; border:0; border-radius:18px; background:transparent; transform:translate(-50%,-50%); transition:opacity .14s; }
+.scene-portal::before,.topia-landmark.topia-anchor-collapsed::before { content:""; position:absolute; left:50%; top:50%; width:30px; height:30px; border:1.5px solid rgba(255,255,255,.78); border-radius:50%; background:rgba(255,226,126,.2); box-shadow:0 0 0 7px rgba(255,226,126,.1),0 0 18px 4px rgba(255,239,172,.48); pointer-events:none; transform:translate(-50%,-50%); animation:topia-click-glow 1.8s ease-in-out infinite; }
+.scene-portal::after,.topia-landmark.topia-anchor-collapsed::after { content:""; position:absolute; left:50%; top:50%; width:11px; height:11px; border:1px solid rgba(255,255,255,.88); border-radius:50%; background:rgba(255,248,204,.76); box-shadow:0 0 9px 3px rgba(255,245,187,.78); pointer-events:none; transform:translate(-50%,-50%); }
+.scene-portal:hover::before,.scene-portal:focus-visible::before,.topia-landmark.topia-anchor-collapsed:hover::before,.topia-landmark.topia-anchor-collapsed:focus-visible::before { border-color:#fff; background:rgba(255,221,95,.32); box-shadow:0 0 0 8px rgba(255,226,126,.15),0 0 22px 6px rgba(255,239,172,.7); }
+@keyframes topia-click-glow { 0%,100% { opacity:.58;transform:translate(-50%,-50%) scale(.88) } 50% { opacity:1;transform:translate(-50%,-50%) scale(1.08) } }
+.portal-door { left:54%; top:58%; width:58px; height:88px; }
+.portal-island { left:18%; top:32%; width:116px; height:88px; border-radius:50%; }
+.topia-anchor-hidden { opacity:0!important; pointer-events:none!important; }
+@media (prefers-reduced-motion:reduce) { .scene-portal::before,.topia-landmark.topia-anchor-collapsed::before { animation:none!important; } }
+.topia-drawer-backdrop { position:fixed; inset:86px 0 0; z-index:60; background:rgba(37,37,59,.22); backdrop-filter:blur(2px); }
+.topia-drawer { position:fixed; top:86px; right:0; bottom:0; z-index:61; width:min(480px,62vw); padding:22px 24px 28px; overflow:auto; border-left:2px solid var(--ink); background:linear-gradient(155deg,#fffdf8 0 72%,#eef0ff 100%); box-shadow:-8px 0 24px rgba(37,37,59,.2); }
+.topia-drawer-head { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; padding-bottom:16px; border-bottom:1.5px solid var(--line); }
+.topia-drawer-symbol { width:48px; height:48px; display:grid; place-items:center; border:1.5px solid var(--ink); border-radius:15px; background:var(--yellow); box-shadow:2px 2px 0 var(--ink); font-size:27px; }
+.topia-drawer-head small { color:var(--blue-dark); font-size:11px!important; font-weight:900; letter-spacing:.08em; }
+.topia-drawer-head h2 { margin:2px 0 0; font-size:23px; line-height:1.15; }
+.topia-drawer-head > button { width:37px; height:37px; display:grid; place-items:center; border:1.5px solid var(--ink); border-radius:11px; background:#fff; }
+.topia-drawer-story { margin:16px 0 20px; color:#5e6176; font-size:13px; line-height:1.7; }
+.topia-relations h3 { margin:17px 0 8px; font-size:14px; }
+.topia-relation { display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; align-items:center; padding:10px; border:1px solid var(--line); border-radius:12px; background:rgba(255,255,255,.72); }
+.topia-relation + .topia-relation { margin-top:7px; }
+.topia-relation-icon { width:33px; height:33px; display:grid; place-items:center; border-radius:10px; background:#e8eaff; color:var(--blue-dark); }
+.topia-relation-icon.memory { background:#fff1b8; }
+.topia-relation b,.topia-relation small { display:block; }
+.topia-relation b { overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.topia-relation small { margin-top:3px; color:var(--muted); }
+.topia-task-relation { grid-template-columns:auto minmax(0,1fr) auto; }
+.topia-task-relation strong { color:var(--blue-dark); font:900 11px ui-monospace,monospace; }
+.topia-task-relation i { display:block; height:4px; margin-top:7px; overflow:hidden; border-radius:5px; background:#e4e5ef; }
+.topia-task-relation em { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--blue),var(--mint)); }
+.topia-related-people { display:flex; flex-wrap:wrap; gap:8px; }
+.topia-related-people > span { min-width:145px; padding:8px 10px; display:grid; grid-template-columns:auto 1fr; column-gap:8px; align-items:center; border:1px solid var(--line); border-radius:12px; background:#fff; }
+.topia-related-people i { grid-row:1/3; width:32px; height:32px; display:grid; place-items:center; border-radius:50%; background:#dff4e9; color:#167a59; font-style:normal; font-weight:900; }
+.topia-related-people b { font-size:12px; }
+.topia-related-people small { color:var(--muted); }
+.topia-empty-relation { margin:0; padding:10px; border-radius:10px; background:rgba(89,104,255,.06); color:var(--muted); font-size:11px; }
 .today-column { min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); gap: 10px; }
 .today { min-height: 0; height: 100%; padding: 26px; border-radius: 24px; overflow: auto; background: linear-gradient(155deg, #fffdf8 0 64%, #fff4bd 100%); }
 .today-head { display: flex; justify-content: space-between; align-items: center; }
@@ -135,6 +185,10 @@ small { font-size: 13px!important; line-height: 1.4; }
 .today-item b, .linked b { font-size: 15px; }
 .today-item small, .linked small { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .today-item > .ui-icon, .linked > .ui-icon { color: var(--muted); }
+.active-focus-card { position:relative; margin-top:3px; padding-inline:8px; border:1.5px solid var(--ink); border-radius:13px; background:rgba(255,255,255,.68); box-shadow:2px 2px 0 rgba(37,37,59,.2); overflow:hidden; }
+.active-focus-card:after { content:""; position:absolute; left:0; bottom:0; width:var(--focus-progress,0%); height:3px; background:linear-gradient(90deg,var(--blue),var(--cyan),var(--yellow)); animation:active-focus-glow 1.8s ease-in-out infinite; transition:width .45s ease; }
+.focus-category-symbol { font-size:21px; line-height:1; }
+@keyframes active-focus-glow { 50% { filter:brightness(1.3);opacity:.7 } }
 .streak { display: flex; justify-content: space-between; margin-top: 24px; }
 .streak span { display: flex; flex-direction: column; gap: 8px; align-items: center; color: var(--muted); font: 800 13px ui-monospace, monospace; }
 .streak i { width: 15px; height: 15px; border: 2px solid #b8baca; border-radius: 50%; }
@@ -189,7 +243,7 @@ small { font-size: 13px!important; line-height: 1.4; }
 .mood-result blockquote { margin:0 0 18px; padding:13px 16px; border-radius:13px; background:#f0f2ff; color:var(--blue-dark); line-height:1.55; }
 .mood-error .buttons { justify-content:center; }
 
-@media (prefers-reduced-motion:reduce) { .mood-weather i,.mood-wave i,.mood-listening > .ui-icon,.mood-analyzing > span { animation:none!important; } }
+@media (prefers-reduced-motion:reduce) { .mood-weather i,.mood-wave i,.mood-listening > .ui-icon,.mood-analyzing > span,.quest-focus-effect i,.active-focus-card:after { animation:none!important; }.topia-landmark { transition:none!important; } }
 @media (max-height:500px) { .mood-dialog { width:min(680px,calc(100vw - 24px)); }.mood-dialog > header { padding:9px 15px; }.mood-dialog > header h2 { font-size:17px; }.mood-intro,.mood-listening,.mood-analyzing,.mood-result,.mood-error { min-height:205px; padding:12px 22px 15px; }.mood-orb,.mood-result-icon,.mood-error > span { width:46px;height:46px; }.mood-orb .ui-icon,.mood-result-icon .ui-icon,.mood-error > span .ui-icon { width:23px;height:23px; }.mood-intro h3,.mood-listening h3,.mood-analyzing h3,.mood-result h3,.mood-error h3 { margin-top:6px;font-size:17px; }.mood-intro p,.mood-listening p,.mood-analyzing p,.mood-result p,.mood-error p { margin:3px 0 8px; }.mood-privacy { margin-top:8px!important; }.mood-indicator { right:10px;top:8px;width:38px;height:38px;font-size:29px; } }
 
 /* Quests */
@@ -440,14 +494,7 @@ small { font-size: 13px!important; line-height: 1.4; }
   .today h2 { margin-top: 15px; font-size: 28px; }
   .today > p { font-size: 14px; line-height: 1.5; }
   .life { margin-top: 15px; padding: 13px 0; }
-  .world-title { left: 14px; top: 14px; max-width: 205px; padding: 9px 11px; }
-  .world-title h1 { font-size: 25px; }
-  .world-title p { font-size: 11px; line-height: 1.35; }
-  .landmark { width: 46%; min-width: 0; padding: 10px 11px; gap: 8px; }
-  .landmark > .ui-icon { width: 25px; height: 25px; }
-  .landmark b { font-size: 14px; }
-  .landmark.garden { left: 2.5%; bottom: 7%; }
-  .landmark.lab { right: 2.5%; top: auto; bottom: 7%; }
+  .world-locations { left:10px;top:9px; }
   .quests { grid-template-columns: 330px 1fr; }
   .q-detail { padding-inline: 24px; }
   .q-detail > h1 { font-size: 34px; }
@@ -503,14 +550,23 @@ small { font-size: 13px!important; line-height: 1.4; }
 
   .topia { grid-template-columns: minmax(0,1fr) 255px; gap: 8px; padding: 8px; }
   .world { border-radius: 18px; box-shadow: 4px 4px 0 rgba(37,37,59,.14); }
-  .world-title { left: 10px; top: 10px; max-width: 170px; padding: 6px 8px; border-radius: 10px; box-shadow: 2px 2px 0 var(--ink); }
-  .world-title h1 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
-  .world-title p { margin-top: 2px; font-size: 9px; }
-  .landmark { width: 43%; padding: 7px 8px; gap: 6px; border-radius: 11px; box-shadow: 2px 2px 0 var(--ink); }
-  .landmark > .ui-icon { width: 21px; height: 21px; padding: 3px; border-radius: 7px; }
-  .landmark b { font-size: 12px; }
-  .landmark.garden { left: 2.5%; bottom: 4%; }
-  .landmark.lab { right: 2.5%; top: auto; bottom: 4%; }
+  .world-locations { left:8px;top:7px;gap:3px;padding:3px;border-radius:11px; }
+  .world-locations button { width:29px;height:29px;border-radius:8px;font-size:18px; }
+  .topia-landmark { max-width:118px;min-height:22px;padding:3px 5px 3px 4px;gap:3px;border-radius:7px; }
+  .topia-landmark > span { font-size:12px; }
+  .topia-landmark b { font-size:9px; }
+  .topia-landmark small { display:none; }
+  .location-garden .topia-landmark { max-width:100px; }
+  .topia-drawer-backdrop { top:58px; }
+  .topia-drawer { top:58px;width:min(410px,58vw);padding:14px 16px 18px; }
+  .topia-drawer-head { padding-bottom:10px; }
+  .topia-drawer-symbol { width:38px;height:38px;border-radius:11px;font-size:21px; }
+  .topia-drawer-head h2 { font-size:18px; }
+  .topia-drawer-story { margin:10px 0 12px;font-size:11px;line-height:1.5; }
+  .topia-relations h3 { margin:10px 0 5px;font-size:12px; }
+  .topia-relation { padding:6px 8px;gap:7px; }
+  .topia-relation-icon { width:27px;height:27px; }
+  .topia-relation b { font-size:10px; }
   .today-column { gap: 7px; }
   .today { padding: 13px 14px; border-radius: 17px; }
   .today-head b { font-size: 14px; }
@@ -679,7 +735,8 @@ small { font-size: 13px!important; line-height: 1.4; }
   .q-list-head .page-head { padding-right: 2px; }
   .q-list-head .chips { gap: 3px; padding-bottom: 0; }
 
-  .world-title h1 { font-size: 17px; }
+  .topia-drawer-backdrop { top:54px; }
+  .topia-drawer { top:54px; }
   .today-head b { font-size: 13px; }
   .today { padding-block: 10px; }
   .today h2 { margin-top: 5px; font-size: 18px; }

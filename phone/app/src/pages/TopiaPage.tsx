@@ -1,6 +1,8 @@
+import { type CSSProperties, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MoodDialog } from "../components/topia/MoodDialog";
 import { MoodWeather } from "../components/topia/MoodWeather";
+import { TopiaLandmarkDrawer } from "../components/topia/TopiaLandmarkDrawer";
 import { TopiaScene } from "../components/topia/TopiaScene";
 import { Icon } from "../components/ui/Icon";
 import { moodEmoji, moodProfiles } from "../data/appData";
@@ -9,26 +11,90 @@ import {
   type QuickVoiceKind,
   useQuickVoiceRecording,
 } from "../hooks/useQuickVoiceRecording";
+import type {
+  TopiaLandmark,
+  TopiaLocation,
+  TopiaWorldPayload,
+} from "../models";
+import { topiaWorldService } from "../services/topiaWorld";
 import { useAppStore } from "../store/AppStore";
+import {
+  calculateVitality,
+  inferQuestCategory,
+  questCategoryMeta,
+  recommendedQuest,
+} from "../utils/gameRules";
+
+const locations: Array<{
+  id: TopiaLocation;
+  emoji: string;
+  label: string;
+}> = [
+  { id: "exterior", emoji: "☁️", label: "屋外" },
+  { id: "interior", emoji: "🏠", label: "房间内" },
+  { id: "garden", emoji: "🌱", label: "菜地" },
+];
 
 export default function TopiaPage() {
   const navigate = useNavigate();
-  const { quests, memories, currentMood } = useAppStore();
+  const {
+    quests,
+    memories,
+    people,
+    currentMood,
+    activeQuestId,
+    gameEvents,
+    notify,
+  } = useAppStore();
+  const [location, setLocation] = useState<TopiaLocation>("exterior");
+  const [selectedLandmark, setSelectedLandmark] =
+    useState<TopiaLandmark | null>(null);
+  const [topiaPayload, setTopiaPayload] = useState<TopiaWorldPayload | null>(
+    null,
+  );
   const moodCheckIn = useMoodCheckIn();
   const quickVoice = useQuickVoiceRecording();
-  const vitality = Math.min(
-    99,
-    48 +
-      Math.round(
-        quests.reduce((sum, item) => sum + item.progress, 0) /
-          Math.max(1, quests.length) /
-          2,
-      ) +
-      Math.min(20, memories.length),
-  );
+  useEffect(() => {
+    let active = true;
+    void topiaWorldService
+      .load({ quests, people, memories })
+      .then((payload) => {
+        if (active) setTopiaPayload(payload);
+      })
+      .catch((error) => {
+        if (active)
+          notify(
+            `个人世界加载失败：${error instanceof Error ? error.message : String(error)}`,
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [memories, notify, people, quests]);
+  useEffect(() => {
+    const update = (event: Event) => {
+      const next = (event as CustomEvent<TopiaWorldPayload>).detail;
+      if (next) setTopiaPayload(next);
+    };
+    window.addEventListener("realtopia:topia-world", update);
+    return () => window.removeEventListener("realtopia:topia-world", update);
+  }, []);
+  const vitality = calculateVitality(quests, memories, gameEvents);
   const stage = vitality >= 80 ? 3 : vitality >= 60 ? 2 : 1;
-  const focus = quests.find((item) => item.progress < 100) ?? quests[0];
+  const focus = recommendedQuest(quests, activeQuestId);
+  const focusCategory =
+    focus?.category ?? (focus ? inferQuestCategory(focus) : "general");
+  const focusMeta = questCategoryMeta[focusCategory];
+  const todayLabel = new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+  }).format(new Date());
   const profile = moodProfiles[currentMood.mood];
+  const sceneLandmarks = topiaPayload?.world.scenes[location].landmarks ?? [];
+  const openLocation = (nextLocation: TopiaLocation) => {
+    setSelectedLandmark(null);
+    setLocation(nextLocation);
+  };
   const quickAction = (kind: QuickVoiceKind) => {
     if (quickVoice.kind === kind && quickVoice.phase === "listening") {
       void quickVoice.stop();
@@ -41,28 +107,88 @@ export default function TopiaPage() {
     return quickVoice.phase === "listening" ? "Square" : "LoaderCircle";
   };
 
+  if (!topiaPayload) {
+    return <div className="topia topia-loading" aria-busy="true" />;
+  }
+
+  const { world: topiaWorld, crops } = topiaPayload;
+
   return (
     <div className="topia">
-      <TopiaScene mood={currentMood} stage={stage}>
+      <TopiaScene
+        mood={currentMood}
+        stage={stage}
+        location={location}
+        crops={crops}
+        world={topiaWorld}
+        focusCategory={focusCategory}
+      >
         <MoodWeather mood={currentMood.mood} />
-        <button className="landmark garden">
-          <Icon name="Leaf" />
-          <span>
-            <b>窗边花圃</b>
-            <small>生长 {vitality}%</small>
-          </span>
-        </button>
-        <button className="landmark lab">
-          <Icon name="Telescope" />
-          <span>
-            <b>星图桌</b>
-            <small>{stage === 3 ? "微光已点亮" : "正在布置"}</small>
-          </span>
-        </button>
-        <div className="world-title">
-          <h1>云上漂流屋</h1>
-          <p>{memories.length} 段记忆正在装点房间</p>
+        {focus && (
+          <div
+            className={`quest-focus-effect ${focusCategory}`}
+            aria-hidden="true"
+          >
+            {Array.from({ length: 10 }, (_, index) => (
+              <i
+                key={index}
+                style={{ "--focus-index": index } as CSSProperties}
+              />
+            ))}
+          </div>
+        )}
+        <div className="world-locations" aria-label="Topia 地点">
+          {locations.map((item) => (
+            <button
+              className={location === item.id ? "active" : ""}
+              data-topia-location={item.id}
+              key={item.id}
+              aria-label={item.label}
+              aria-pressed={location === item.id}
+              title={item.label}
+              onClick={() => openLocation(item.id)}
+            >
+              {item.emoji}
+            </button>
+          ))}
         </div>
+        {location === "exterior" && (
+          <>
+            <button
+              className="scene-portal portal-door"
+              data-topia-portal="interior"
+              data-topia-anchor="portal-interior"
+              aria-label="从小房门进入房间内"
+              title="进入房间"
+              onClick={() => openLocation("interior")}
+            />
+            <button
+              className="scene-portal portal-island"
+              data-topia-portal="garden"
+              data-topia-anchor="portal-garden"
+              aria-label="前往后方浮空菜地"
+              title="前往菜地"
+              onClick={() => openLocation("garden")}
+            />
+          </>
+        )}
+        {sceneLandmarks.map((landmark) => (
+          <button
+            className={`topia-landmark topia-landmark-${landmark.id}`}
+            data-topia-landmark={landmark.id}
+            data-topia-anchor={landmark.anchorId}
+            key={landmark.id}
+            aria-label={landmark.label}
+            style={landmark.fallbackPlacement}
+            onClick={() => setSelectedLandmark(landmark)}
+          >
+            <span aria-hidden="true">{landmark.emoji}</span>
+            <b>{landmark.label}</b>
+            {location === "garden" && (
+              <small>{landmark.eyebrow.replace("任务作物 · ", "")}</small>
+            )}
+          </button>
+        ))}
         <button
           className="mood-indicator"
           id="world-mood"
@@ -123,7 +249,7 @@ export default function TopiaPage() {
         <aside className="today panel">
           <div className="today-head">
             <b>今天</b>
-            <small>8月9日</small>
+            <small>{todayLabel}</small>
           </div>
           <h2>当前旅程</h2>
           <div className="life">
@@ -134,20 +260,32 @@ export default function TopiaPage() {
               <em style={{ width: `${vitality}%` }} />
             </i>
           </div>
-          <button
-            className="today-item"
-            data-tab="quests"
-            onClick={() => navigate("/quests")}
-          >
-            <span className="item-icon gold">
-              <Icon name="CircleAlert" />
-            </span>
-            <span>
-              <b>{focus.title}</b>
-              <small>{focus.meta}</small>
-            </span>
-            <Icon name="ChevronRight" />
-          </button>
+          {focus && (
+            <button
+              className={`today-item active-focus-card focus-${focusCategory}`}
+              data-tab="quests"
+              data-active-quest={focus.id}
+              style={
+                { "--focus-progress": `${focus.progress}%` } as CSSProperties
+              }
+              onClick={() =>
+                navigate("/quests", { state: { questId: focus.id } })
+              }
+            >
+              <span className="item-icon gold">
+                <span className="focus-category-symbol" aria-hidden="true">
+                  {focusMeta.emoji}
+                </span>
+              </span>
+              <span>
+                <b>{focus.title}</b>
+                <small>
+                  {focusMeta.label} · {focus.progress}% · {focusMeta.effect}
+                </small>
+              </span>
+              <Icon name="ChevronRight" />
+            </button>
+          )}
           <button
             className="today-item"
             id="today-mood"
@@ -176,6 +314,15 @@ export default function TopiaPage() {
         onFinishListening={() => void moodCheckIn.finishListening()}
         onClose={moodCheckIn.close}
       />
+      {selectedLandmark && (
+        <TopiaLandmarkDrawer
+          landmark={selectedLandmark}
+          memories={memories}
+          quests={quests}
+          people={people}
+          onClose={() => setSelectedLandmark(null)}
+        />
+      )}
     </div>
   );
 }

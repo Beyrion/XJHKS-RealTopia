@@ -1,0 +1,1016 @@
+{
+  "schemaVersion": 1,
+  "id": "mock-echo-sail-home",
+  "ownerId": "mock-user",
+  "revision": 1,
+  "generatedAt": "2026-08-10T00:00:00.000Z",
+  "source": "mock",
+  "profile": {
+    "homeName": "回声风帆屋",
+    "archetype": "收集故事的漂流观测者",
+    "traits": [
+      "好奇",
+      "念旧",
+      "喜欢植物",
+      "持续创造"
+    ],
+    "experiences": [
+      "老街雨夜",
+      "大学旧温室",
+      "第一次眼镜端 E2E 测试"
+    ],
+    "accentColors": [
+      7108863,
+      16745106,
+      6935715
+    ]
+  },
+  "scenes": {
+    "exterior": {
+      "camera": {
+        "yaw": 0.46,
+        "pitch": 0.52
+      },
+      "objects": [
+        {
+          "id": "home-island",
+          "prefab": "floating-island",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            0.78
+          ],
+          "colors": [
+            8440201,
+            7693695,
+            5198702
+          ],
+          "params": {
+            "radius": 3.25,
+            "depth": 2.05
+          }
+        },
+        {
+          "id": "house-body",
+          "prefab": "block",
+          "position": [
+            0.4,
+            1.4,
+            0.05
+          ],
+          "colors": [
+            16312520
+          ],
+          "params": {
+            "width": 3.2,
+            "height": 2.2,
+            "depth": 2.22
+          }
+        },
+        {
+          "id": "lower-beam",
+          "prefab": "block",
+          "position": [
+            0.4,
+            0.43,
+            1.21
+          ],
+          "colors": [
+            12024146
+          ],
+          "params": {
+            "width": 3.42,
+            "height": 0.12,
+            "depth": 0.12
+          }
+        },
+        {
+          "id": "upper-beam",
+          "prefab": "block",
+          "position": [
+            0.4,
+            2.36,
+            1.21
+          ],
+          "colors": [
+            12024146
+          ],
+          "params": {
+            "width": 3.42,
+            "height": 0.12,
+            "depth": 0.12
+          }
+        },
+        {
+          "id": "house-roof",
+          "prefab": "cone",
+          "position": [
+            0.25,
+            2.97,
+            0.05
+          ],
+          "rotation": [
+            0,
+            0.785,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            0.82
+          ],
+          "colors": [
+            7108863
+          ],
+          "params": {
+            "radius": 2.45,
+            "height": 1.42,
+            "segments": 4
+          }
+        },
+        {
+          "id": "memory-tower",
+          "prefab": "tower",
+          "position": [
+            -1.47,
+            0.24,
+            -0.17
+          ],
+          "colors": [
+            16774102,
+            16745106,
+            16766814
+          ],
+          "params": {
+            "radius": 0.66,
+            "height": 2.12
+          }
+        },
+        {
+          "id": "front-door",
+          "prefab": "door",
+          "position": [
+            1.17,
+            1.04,
+            1.23
+          ],
+          "colors": [
+            7753834,
+            16766814,
+            12024146
+          ],
+          "anchorId": "portal-interior"
+        },
+        {
+          "id": "story-window",
+          "prefab": "round-window",
+          "position": [
+            -0.17,
+            1.67,
+            1.23
+          ],
+          "colors": [
+            9298417,
+            12024146
+          ],
+          "params": {
+            "radius": 0.46
+          }
+        },
+        {
+          "id": "personality-sail",
+          "prefab": "sail",
+          "position": [
+            2.08,
+            2.92,
+            -0.37
+          ],
+          "colors": [
+            6935715,
+            16745106,
+            7753834
+          ],
+          "anchorId": "prism-sail",
+          "animation": "sway"
+        },
+        {
+          "id": "experience-chimes",
+          "prefab": "wind-chimes",
+          "position": [
+            -0.67,
+            1.62,
+            1.35
+          ],
+          "colors": [
+            12024146,
+            16766814,
+            16745106,
+            3883368
+          ],
+          "params": {
+            "pieces": 3
+          },
+          "anchorId": "wind-chimes",
+          "animation": "sway"
+        },
+        {
+          "id": "small-observatory",
+          "prefab": "observatory",
+          "position": [
+            1.5,
+            2.62,
+            -0.65
+          ],
+          "colors": [
+            13223167,
+            9298417
+          ]
+        },
+        {
+          "id": "chimney",
+          "prefab": "block",
+          "position": [
+            1.2,
+            3.27,
+            -0.4
+          ],
+          "colors": [
+            7753834
+          ],
+          "params": {
+            "width": 0.42,
+            "height": 1.18,
+            "depth": 0.42
+          }
+        },
+        {
+          "id": "memory-crystal-a",
+          "prefab": "crystal",
+          "position": [
+            -2,
+            0.45,
+            -0.48
+          ],
+          "colors": [
+            16745106
+          ],
+          "scale": [
+            0.7,
+            0.7,
+            0.7
+          ],
+          "animation": "float"
+        },
+        {
+          "id": "memory-crystal-b",
+          "prefab": "crystal",
+          "position": [
+            2.2,
+            0.52,
+            -0.12
+          ],
+          "colors": [
+            6935715
+          ],
+          "scale": [
+            0.62,
+            0.62,
+            0.62
+          ],
+          "animation": "float"
+        },
+        {
+          "id": "farm-preview",
+          "prefab": "floating-island",
+          "position": [
+            -3.35,
+            1.15,
+            -2.25
+          ],
+          "scale": [
+            0.48,
+            0.48,
+            0.4
+          ],
+          "colors": [
+            7391625,
+            7693695,
+            5198702
+          ],
+          "params": {
+            "radius": 3.25,
+            "depth": 2.05
+          },
+          "anchorId": "portal-garden",
+          "animation": "float"
+        },
+        {
+          "id": "farm-preview-plant-a",
+          "prefab": "plant",
+          "position": [
+            -3.62,
+            1.35,
+            -2.25
+          ],
+          "colors": [
+            16745106,
+            6935715
+          ],
+          "scale": [
+            0.72,
+            0.72,
+            0.72
+          ]
+        },
+        {
+          "id": "farm-preview-plant-b",
+          "prefab": "plant",
+          "position": [
+            -3.04,
+            1.35,
+            -2.15
+          ],
+          "colors": [
+            16766814,
+            6935715
+          ],
+          "scale": [
+            0.72,
+            0.72,
+            0.72
+          ]
+        },
+        {
+          "id": "exterior-cloud-left",
+          "prefab": "cloud",
+          "position": [
+            -3.5,
+            -1.18,
+            0.4
+          ],
+          "scale": [
+            0.85,
+            0.85,
+            0.85
+          ],
+          "colors": [
+            16251903
+          ]
+        },
+        {
+          "id": "exterior-cloud-right",
+          "prefab": "cloud",
+          "position": [
+            3.35,
+            -1.05,
+            -0.4
+          ],
+          "scale": [
+            0.7,
+            0.7,
+            0.7
+          ],
+          "colors": [
+            16251903
+          ]
+        }
+      ],
+      "landmarks": [
+        {
+          "id": "wind-chimes",
+          "anchorId": "wind-chimes",
+          "location": "exterior",
+          "emoji": "🎐",
+          "label": "旅途风铃",
+          "eyebrow": "经历塑形",
+          "description": "从青苔书店的雨夜里带回来的声音。每当一段新的经历被记住，风铃就会多出一枚不同形状的叶片。",
+          "fallbackPlacement": {
+            "left": "24%",
+            "top": "35%"
+          },
+          "memoryIds": [
+            "seed-bookstore"
+          ],
+          "taskIds": [
+            "book"
+          ],
+          "personIds": [
+            "zhou"
+          ]
+        },
+        {
+          "id": "prism-sail",
+          "anchorId": "prism-sail",
+          "location": "exterior",
+          "emoji": "🔮",
+          "label": "性格棱帆",
+          "eyebrow": "个性构件",
+          "description": "好奇、念旧与创造欲折射成了屋顶上的棱帆。它会随新记忆改变颜色与轮廓。",
+          "fallbackPlacement": {
+            "left": "58%",
+            "top": "18%"
+          },
+          "memoryIds": [
+            "seed-e2e"
+          ],
+          "taskIds": [
+            "app"
+          ],
+          "personIds": []
+        }
+      ]
+    },
+    "interior": {
+      "camera": {
+        "yaw": 0.68,
+        "pitch": 0.55
+      },
+      "objects": [
+        {
+          "id": "room-shell",
+          "prefab": "room-shell",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "colors": [
+            16774102,
+            16312520,
+            12024146,
+            7753834
+          ]
+        },
+        {
+          "id": "room-window",
+          "prefab": "sky-window",
+          "position": [
+            1.05,
+            1.95,
+            -2.02
+          ],
+          "colors": [
+            9298417,
+            3883368
+          ]
+        },
+        {
+          "id": "bed",
+          "prefab": "bed",
+          "position": [
+            1.7,
+            0.18,
+            0.86
+          ],
+          "colors": [
+            7753834,
+            16774102,
+            7108863,
+            13223167
+          ]
+        },
+        {
+          "id": "nightstand",
+          "prefab": "nightstand",
+          "position": [
+            0.3,
+            0.22,
+            1.3
+          ],
+          "colors": [
+            12024146,
+            16766814
+          ]
+        },
+        {
+          "id": "star-map-desk-object",
+          "prefab": "desk",
+          "position": [
+            -1.42,
+            1.02,
+            -1.45
+          ],
+          "colors": [
+            12024146,
+            7753834,
+            7108863,
+            16745106
+          ],
+          "anchorId": "star-map-desk"
+        },
+        {
+          "id": "desk-chair",
+          "prefab": "chair",
+          "position": [
+            -1.43,
+            0.25,
+            -0.48
+          ],
+          "colors": [
+            7753834,
+            12024146
+          ]
+        },
+        {
+          "id": "album-shelf-object",
+          "prefab": "shelf",
+          "position": [
+            -2.72,
+            1.25,
+            -0.88
+          ],
+          "colors": [
+            12024146,
+            7753834,
+            16745106,
+            7108863
+          ],
+          "anchorId": "album-shelf"
+        },
+        {
+          "id": "window-garden-object",
+          "prefab": "plant",
+          "position": [
+            2.55,
+            0.08,
+            -1.42
+          ],
+          "colors": [
+            16745106,
+            6935715
+          ],
+          "scale": [
+            1.25,
+            1.25,
+            1.25
+          ],
+          "anchorId": "window-garden"
+        },
+        {
+          "id": "hearth",
+          "prefab": "hearth",
+          "position": [
+            -2.35,
+            0.47,
+            1.62
+          ],
+          "colors": [
+            7753834,
+            3883368,
+            16766814
+          ]
+        },
+        {
+          "id": "room-rug",
+          "prefab": "rug",
+          "position": [
+            -0.35,
+            0.04,
+            0.45
+          ],
+          "colors": [
+            13223167
+          ],
+          "scale": [
+            1.15,
+            1,
+            0.82
+          ]
+        },
+        {
+          "id": "room-lantern",
+          "prefab": "lantern",
+          "position": [
+            -0.2,
+            2.16,
+            -0.3
+          ],
+          "colors": [
+            16766814,
+            7753834
+          ],
+          "animation": "float"
+        },
+        {
+          "id": "room-propeller",
+          "prefab": "propeller",
+          "position": [
+            3.3,
+            0.68,
+            0.3
+          ],
+          "colors": [
+            16766814,
+            7108863,
+            7753834
+          ],
+          "animation": "spin"
+        },
+        {
+          "id": "interior-cloud-a",
+          "prefab": "cloud",
+          "position": [
+            -3.4,
+            -1,
+            -1.1
+          ],
+          "scale": [
+            0.85,
+            0.85,
+            0.85
+          ],
+          "colors": [
+            16251903
+          ]
+        },
+        {
+          "id": "interior-cloud-b",
+          "prefab": "cloud",
+          "position": [
+            3.4,
+            -1.15,
+            0.5
+          ],
+          "scale": [
+            0.72,
+            0.72,
+            0.72
+          ],
+          "colors": [
+            16251903
+          ]
+        }
+      ],
+      "landmarks": [
+        {
+          "id": "window-garden",
+          "anchorId": "window-garden",
+          "location": "interior",
+          "emoji": "🌿",
+          "label": "窗边花圃",
+          "eyebrow": "共同计划",
+          "description": "你和林澄约好从薄荷与迷迭香开始，让闲置的阳台重新随季节生长。",
+          "fallbackPlacement": {
+            "left": "70%",
+            "top": "35%"
+          },
+          "memoryIds": [
+            "seed-garden"
+          ],
+          "taskIds": [
+            "garden"
+          ],
+          "personIds": [
+            "lin"
+          ]
+        },
+        {
+          "id": "star-map-desk",
+          "anchorId": "star-map-desk",
+          "location": "interior",
+          "emoji": "🌌",
+          "label": "星图桌",
+          "eyebrow": "创造轨迹",
+          "description": "第一次眼镜端 E2E 测试被画成了桌上的星轨，每完成一个原型节点就亮起一颗星。",
+          "fallbackPlacement": {
+            "left": "25%",
+            "top": "39%"
+          },
+          "memoryIds": [
+            "seed-e2e"
+          ],
+          "taskIds": [
+            "app"
+          ],
+          "personIds": []
+        },
+        {
+          "id": "album-shelf",
+          "anchorId": "album-shelf",
+          "location": "interior",
+          "emoji": "📚",
+          "label": "旧相册书架",
+          "eyebrow": "家庭记忆",
+          "description": "照片依年份慢慢归位，尚未问清的故事仍留着一小片暖黄色空格。",
+          "fallbackPlacement": {
+            "left": "13%",
+            "top": "55%"
+          },
+          "memoryIds": [],
+          "taskIds": [
+            "album"
+          ],
+          "personIds": [
+            "mom"
+          ]
+        }
+      ]
+    },
+    "garden": {
+      "camera": {
+        "yaw": 0.46,
+        "pitch": 0.68
+      },
+      "objects": [
+        {
+          "id": "garden-island",
+          "prefab": "floating-island",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            0.76
+          ],
+          "colors": [
+            7784835,
+            7693695,
+            5198702
+          ],
+          "params": {
+            "radius": 4.25,
+            "depth": 2.1
+          }
+        },
+        {
+          "id": "garden-path-horizontal",
+          "prefab": "path",
+          "position": [
+            0,
+            0.25,
+            0
+          ],
+          "colors": [
+            16774102
+          ],
+          "params": {
+            "width": 7.35,
+            "depth": 0.45
+          }
+        },
+        {
+          "id": "plot-garden",
+          "prefab": "crop-plot",
+          "position": [
+            -2.45,
+            0.3,
+            -1.12
+          ],
+          "colors": [
+            7754047,
+            12024146
+          ],
+          "params": {
+            "crop": "sunflower"
+          },
+          "taskId": "garden",
+          "anchorId": "crop-garden"
+        },
+        {
+          "id": "plot-album",
+          "prefab": "crop-plot",
+          "position": [
+            0,
+            0.3,
+            -1.12
+          ],
+          "colors": [
+            7754047,
+            12024146
+          ],
+          "params": {
+            "crop": "tomato"
+          },
+          "taskId": "album",
+          "anchorId": "crop-album"
+        },
+        {
+          "id": "plot-app",
+          "prefab": "crop-plot",
+          "position": [
+            2.45,
+            0.3,
+            -1.12
+          ],
+          "colors": [
+            7754047,
+            12024146
+          ],
+          "params": {
+            "crop": "lavender"
+          },
+          "taskId": "app",
+          "anchorId": "crop-app"
+        },
+        {
+          "id": "plot-book",
+          "prefab": "crop-plot",
+          "position": [
+            -1.3,
+            0.3,
+            1.15
+          ],
+          "colors": [
+            7754047,
+            12024146
+          ],
+          "params": {
+            "crop": "pumpkin"
+          },
+          "taskId": "book",
+          "anchorId": "crop-book"
+        },
+        {
+          "id": "plot-dentist",
+          "prefab": "crop-plot",
+          "position": [
+            1.3,
+            0.3,
+            1.15
+          ],
+          "colors": [
+            7754047,
+            12024146
+          ],
+          "params": {
+            "crop": "herb"
+          },
+          "taskId": "dentist",
+          "anchorId": "crop-dentist"
+        },
+        {
+          "id": "farm-shed",
+          "prefab": "farm-shed",
+          "position": [
+            -3.15,
+            0.1,
+            -2.05
+          ],
+          "colors": [
+            16312520,
+            16745106
+          ]
+        },
+        {
+          "id": "watering-spirit",
+          "prefab": "watering-orb",
+          "position": [
+            3.35,
+            1.35,
+            1.72
+          ],
+          "colors": [
+            9298417
+          ],
+          "animation": "float"
+        },
+        {
+          "id": "garden-cloud-a",
+          "prefab": "cloud",
+          "position": [
+            -4.25,
+            -1.1,
+            -0.4
+          ],
+          "scale": [
+            0.85,
+            0.85,
+            0.85
+          ],
+          "colors": [
+            16251903
+          ]
+        },
+        {
+          "id": "garden-cloud-b",
+          "prefab": "cloud",
+          "position": [
+            4.2,
+            -1.2,
+            0.2
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "colors": [
+            16251903
+          ]
+        }
+      ],
+      "landmarks": [
+        {
+          "id": "crop-garden",
+          "anchorId": "crop-garden",
+          "location": "garden",
+          "emoji": "🌻",
+          "label": "让阳台重新生长",
+          "eyebrow": "任务作物",
+          "description": "这株向日葵会随阳台花园任务继续生长。",
+          "fallbackPlacement": {
+            "left": "25%",
+            "top": "57%"
+          },
+          "memoryIds": [
+            "seed-garden"
+          ],
+          "taskIds": [
+            "garden"
+          ],
+          "personIds": [
+            "lin"
+          ]
+        },
+        {
+          "id": "crop-album",
+          "anchorId": "crop-album",
+          "location": "garden",
+          "emoji": "🍅",
+          "label": "整理母亲的旧相册",
+          "eyebrow": "任务作物",
+          "description": "番茄会随着旧相册归档逐渐结果。",
+          "fallbackPlacement": {
+            "left": "47%",
+            "top": "57%"
+          },
+          "memoryIds": [],
+          "taskIds": [
+            "album"
+          ],
+          "personIds": [
+            "mom"
+          ]
+        },
+        {
+          "id": "crop-app",
+          "anchorId": "crop-app",
+          "location": "garden",
+          "emoji": "🪻",
+          "label": "完成 RealTopia 原型",
+          "eyebrow": "任务作物",
+          "description": "薰衣草会随着 RealTopia 原型推进继续开花。",
+          "fallbackPlacement": {
+            "left": "69%",
+            "top": "57%"
+          },
+          "memoryIds": [
+            "seed-e2e"
+          ],
+          "taskIds": [
+            "app"
+          ],
+          "personIds": []
+        },
+        {
+          "id": "crop-book",
+          "anchorId": "crop-book",
+          "location": "garden",
+          "emoji": "🎃",
+          "label": "把书还给周野",
+          "eyebrow": "任务作物",
+          "description": "南瓜会在归还书本的约定完成时成熟。",
+          "fallbackPlacement": {
+            "left": "36%",
+            "top": "34%"
+          },
+          "memoryIds": [
+            "seed-bookstore"
+          ],
+          "taskIds": [
+            "book"
+          ],
+          "personIds": [
+            "zhou"
+          ]
+        },
+        {
+          "id": "crop-dentist",
+          "anchorId": "crop-dentist",
+          "location": "garden",
+          "emoji": "🌿",
+          "label": "预约牙医复诊",
+          "eyebrow": "任务作物",
+          "description": "药草代表照顾自己的小任务。",
+          "fallbackPlacement": {
+            "left": "59%",
+            "top": "34%"
+          },
+          "memoryIds": [],
+          "taskIds": [
+            "dentist"
+          ],
+          "personIds": []
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,5 @@
 mod face;
+mod topia;
 
 #[cfg(mobile)]
 use face::apply_gallery;
@@ -1488,7 +1489,11 @@ pub fn run() {
             remove_person,
             model_download_status,
             start_asr_download,
-            open_model_repository
+            open_model_repository,
+            topia::load_topia_world,
+            topia::save_topia_world,
+            topia::reset_topia_world,
+            topia::generate_topia_world
         ]);
     #[cfg(mobile)]
     let builder = builder
