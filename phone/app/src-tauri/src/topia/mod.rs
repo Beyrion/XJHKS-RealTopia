@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 #[cfg(mobile)]
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,6 +20,8 @@ const MOCK_WORLD: &str = include_str!("mock_world.json");
 const PRESET_CATALOG: &str = include_str!("preset_catalog.json");
 const PRESET_WORLD_PREFIX: &str = "preset-";
 const PRESET_CATALOG_REVISION: u64 = 5;
+// Cloud work runs unlocked; short state commits and thumbnail writes serialize.
+static STUDIO_WRITE_LOCK: Mutex<()> = Mutex::new(());
 const TOPIA_CLOUD_TIMEOUT_MS: u32 = 180_000;
 const TOPIA_STAGE_REPAIR_ATTEMPTS: usize = 1;
 
@@ -446,6 +448,8 @@ struct TopiaStudioState {
     onboarding_completed: Option<bool>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     thumbnails: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    deleted_preset_ids: HashSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1299,6 +1303,9 @@ fn fallback_scene(
     if location == TopiaLocation::Exterior {
         harness::diversify_fallback_exterior(&mut scene, concept);
     }
+    if location == TopiaLocation::Interior {
+        harness::enforce_residential_room(&mut scene, concept);
+    }
     validate_scene(&scene, location)?;
     Ok(scene)
 }
@@ -1645,6 +1652,9 @@ fn merge_assets(world: &mut TopiaWorldConfig, assets: &TopiaAssetLayer) {
                 .filter(|item| !landmark_ids.contains(item.id.as_str()))
                 .cloned(),
         );
+        if location == TopiaLocation::Garden {
+            harness::fit_crop_slots(scene);
+        }
     }
 }
 
@@ -1750,6 +1760,7 @@ fn initial_studio() -> Result<TopiaStudioState, String> {
         last_context_digest: None,
         onboarding_completed: Some(false),
         thumbnails: HashMap::new(),
+        deleted_preset_ids: HashSet::new(),
     })
 }
 
@@ -1760,11 +1771,10 @@ fn ensure_default_world(state: &mut TopiaStudioState) -> Result<(), String> {
         .iter()
         .find(|world| world.id == active_world_id)
         .is_some_and(|world| world.source == "mock");
-    let presets = preset_worlds()?;
-    let fallback_id = presets
-        .first()
-        .map(|world| world.id.clone())
-        .ok_or_else(|| "Topia preset catalog is empty".to_string())?;
+    let presets = preset_worlds()?
+        .into_iter()
+        .filter(|world| !state.deleted_preset_ids.contains(&world.id))
+        .collect::<Vec<_>>();
     let active_is_current_preset = presets.iter().any(|world| world.id == active_world_id);
 
     for preset in &presets {
@@ -1785,7 +1795,11 @@ fn ensure_default_world(state: &mut TopiaStudioState) -> Result<(), String> {
     if (active_was_mock && !active_is_current_preset)
         || !state.worlds.iter().any(|world| world.id == active_world_id)
     {
-        state.active_world_id = fallback_id;
+        state.active_world_id = state
+            .worlds
+            .first()
+            .map(|world| world.id.clone())
+            .ok_or_else(|| "Topia studio has no remaining world".to_string())?;
     }
     Ok(())
 }
@@ -1852,6 +1866,7 @@ fn load_studio(app: &tauri::AppHandle) -> Result<TopiaStudioState, String> {
                 last_context_digest: None,
                 onboarding_completed: Some(true),
                 thumbnails: HashMap::new(),
+                deleted_preset_ids: HashSet::new(),
             };
             ensure_default_world(&mut state)?;
             return Ok(state);
@@ -1875,7 +1890,10 @@ fn persist_studio(app: &tauri::AppHandle, state: &TopiaStudioState) -> Result<()
         validate_world(&composed)?;
     }
     let value = serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?;
-    std::fs::write(world_path(app)?, value).map_err(|error| error.to_string())
+    let path = world_path(app)?;
+    let temporary = path.with_extension("json.pending");
+    std::fs::write(&temporary, value).map_err(|error| error.to_string())?;
+    std::fs::rename(temporary, path).map_err(|error| error.to_string())
 }
 
 fn context_digest(context: &TopiaRuntimeContext) -> Result<u64, String> {
@@ -2162,12 +2180,18 @@ fn complete_validated_stage<T, F>(
     original_prompt: &str,
     system: &str,
     validator: F,
+    deadline: Instant,
 ) -> Result<(T, crate::CloudModelResult), String>
 where
     F: Fn(&str) -> Result<T, String>,
 {
     let mut request_prompt = original_prompt.to_string();
     for attempt in 0..=TOPIA_STAGE_REPAIR_ATTEMPTS {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(u32::MAX as u128) as u32;
+        let timeout = harness::request_budget(stage, remaining)?;
         let request_stage = if attempt == 0 {
             stage.to_string()
         } else {
@@ -2184,9 +2208,14 @@ where
                     prompt::REPAIR_SYSTEM_PROMPT
                 }),
                 json: true,
-                timeout_ms: TOPIA_CLOUD_TIMEOUT_MS,
+                timeout_ms: timeout,
                 max_completion_tokens: Some(harness::completion_budget(stage)),
                 fast: true,
+                temperature: Some(if mode == "create" || stage.starts_with("souvenir") {
+                    0.95
+                } else {
+                    0.45
+                }),
             },
         )?;
         match validator(&response.text) {
@@ -2260,6 +2289,7 @@ fn complete_scene_stage(
                 timeout_ms: TOPIA_CLOUD_TIMEOUT_MS,
                 max_completion_tokens: Some(harness::completion_budget(stage)),
                 fast: true,
+                temperature: Some(0.45),
             },
         )?;
         let error = match inspect_scene(&response.text, location) {
@@ -2355,13 +2385,40 @@ pub fn save_topia_world(
     mut world: TopiaWorldConfig,
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
+    render_feedback: Option<TopiaRenderFeedback>,
 ) -> Result<TopiaWorldPayload, String> {
+    let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     migrate_world(&mut world);
     filter_relations(&mut world, &context);
     validate_world(&world)?;
     let mut state = load_studio(&app)?;
-    let assets = split_assets(&mut world);
-    extend_portable_assets(&mut state.assets, &assets);
+    if render_feedback.is_some()
+        && !state
+            .worlds
+            .iter()
+            .any(|w| w.id == world.id && w.revision == world.revision)
+    {
+        return payload(&state, &context);
+    }
+    let mut assets = split_assets(&mut world);
+    extend_portable_assets(&mut assets, &state.assets);
+    state.assets = assets;
+    if let Some(report) = render_feedback {
+        crate::diagnostics::log(
+            &app,
+            "topia",
+            "render-feedback",
+            &format!(
+                "grounded={} repositioned={} unsupported={} overlaps={} views={} elapsed_ms={}",
+                report.grounded,
+                report.repositioned,
+                report.unsupported,
+                report.overlaps,
+                report.rendered_views,
+                report.elapsed_ms
+            ),
+        );
+    }
     state.active_world_id = world.id.clone();
     if let Some(existing) = state.worlds.iter_mut().find(|item| item.id == world.id) {
         *existing = world;
@@ -2372,11 +2429,23 @@ pub fn save_topia_world(
     payload(&state, &context)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopiaRenderFeedback {
+    grounded: u32,
+    repositioned: u32,
+    unsupported: u32,
+    overlaps: u32,
+    rendered_views: u32,
+    elapsed_ms: u32,
+}
+
 #[tauri::command]
 pub fn reset_topia_world(
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
+    let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     let path = world_path(&app)?;
     if path.exists() {
         std::fs::remove_file(path).map_err(|error| error.to_string())?;
@@ -2401,6 +2470,7 @@ pub fn switch_topia_world(
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
+    let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     let mut state = load_studio(&app)?;
     if !state.worlds.iter().any(|world| world.id == world_id) {
         return Err("Topia 不存在".into());
@@ -2410,11 +2480,54 @@ pub fn switch_topia_world(
     payload(&state, &context)
 }
 
+fn remove_studio_world(state: &mut TopiaStudioState, world_id: &str) -> Result<(), String> {
+    let index = state
+        .worlds
+        .iter()
+        .position(|world| world.id == world_id)
+        .ok_or_else(|| "Topia 不存在".to_string())?;
+    if state.worlds.len() == 1 {
+        return Err("至少需要保留一个 Topia".into());
+    }
+    let removed = state.worlds.remove(index);
+    if removed.source == "mock" && removed.id.starts_with(PRESET_WORLD_PREFIX) {
+        state.deleted_preset_ids.insert(removed.id);
+    }
+    state.thumbnails.remove(world_id);
+    if state.active_world_id == world_id {
+        state.active_world_id = state
+            .worlds
+            .iter()
+            .max_by_key(|world| chrono::DateTime::parse_from_rfc3339(&world.generated_at).ok())
+            .expect("one world remains after deletion")
+            .id
+            .clone();
+        state.last_context_digest = None;
+        state.last_maintained_at = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_topia_world(
+    world_id: String,
+    context: TopiaRuntimeContext,
+    app: tauri::AppHandle,
+) -> Result<TopiaWorldPayload, String> {
+    let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut state = load_studio(&app)?;
+    remove_studio_world(&mut state, &world_id)?;
+    let next = payload(&state, &context)?;
+    persist_studio(&app, &state)?;
+    Ok(next)
+}
+
 #[tauri::command]
 pub fn complete_topia_onboarding(
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
+    let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     let mut state = load_studio(&app)?;
     if state.onboarding_completed == Some(false) {
         state.active_world_id = random_preset_world_id(&state)?;
@@ -2430,6 +2543,7 @@ pub fn save_topia_thumbnail(
     thumbnail: String,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     if thumbnail.len() > 240_000
         || !thumbnail.starts_with("data:image/jpeg;base64,")
         || !thumbnail
@@ -2451,19 +2565,97 @@ fn generate_topia_world_blocking(
     input: TopiaGenerationInput,
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
-    emit_progress(&app, "create", "concept", 8, "正在读取你的意象");
+    emit_progress(
+        &app,
+        "create",
+        "design",
+        4,
+        "正在把你的选择变成具体空间与建筑关键词",
+    );
     let render_style = choose_render_style(&input)?;
     let concept_prompt = prompt::build_concept(&input, &render_style)?;
+    #[cfg(mobile)]
+    let deadline =
+        Instant::now() + std::time::Duration::from_millis(harness::GENERATION_BUDGET_MS as u64);
+    #[cfg(mobile)]
+    let mut state = load_studio(&app)?;
+    #[cfg(mobile)]
+    let recent: Vec<_> = state
+        .worlds
+        .iter()
+        .rev()
+        .filter(|w| !w.id.starts_with(PRESET_WORLD_PREFIX))
+        .take(3)
+        .cloned()
+        .collect();
+    #[cfg(mobile)]
+    let recent_geometry = serde_json::to_string(
+        &recent
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                "exterior": harness::spatial_summary(&w.scenes.exterior),
+                "interior": harness::spatial_summary(&w.scenes.interior),
+                "garden": harness::spatial_summary(&w.scenes.garden),
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| e.to_string())?;
+    #[cfg(mobile)]
+    let design_prompt = prompt::build_design_brief(
+        &input,
+        &recent_geometry,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64,
+    )?;
+    #[cfg(mobile)]
+    let design = match complete_validated_stage(
+        &app,
+        "create",
+        "design-brief",
+        4,
+        "正在完善具体设计",
+        &design_prompt,
+        prompt::DESIGN_SYSTEM_PROMPT,
+        harness::parse_design_brief,
+        deadline,
+    ) {
+        Ok((brief, _)) => brief.to_string(),
+        Err(error) => {
+            crate::diagnostics::log(
+                &app,
+                "topia",
+                "local-fallback",
+                &harness::fallback_summary("design-brief", &error),
+            );
+            // Keep the user's choices and anti-repetition constraints even when translation fails.
+            design_prompt
+        }
+    };
+    #[cfg(mobile)]
+    let concept_prompt =
+        format!("<concrete_design_brief>{design}</concrete_design_brief>\n{concept_prompt}");
+    emit_progress(
+        &app,
+        "create",
+        "concept",
+        12,
+        "正在确定空间主题、结构与材质",
+    );
     #[cfg(mobile)]
     let concept_result = complete_validated_stage(
         &app,
         "create",
         "concept",
-        8,
+        12,
         "正在修正世界概念",
         &concept_prompt,
         prompt::CONCEPT_SYSTEM_PROMPT,
         parse_concept,
+        deadline,
     );
     #[cfg(not(mobile))]
     {
@@ -2472,7 +2664,6 @@ fn generate_topia_world_blocking(
     }
     #[cfg(mobile)]
     {
-        let mut state = load_studio(&app)?;
         let (parsed_concept, concept_text, mut provider, mut model) = match concept_result {
             Ok((parsed, response)) => (parsed, response.text, response.provider, response.model),
             Err(error) => {
@@ -2494,98 +2685,106 @@ fn generate_topia_world_blocking(
             }
         };
 
-        emit_progress(&app, "create", "exterior", 22, "正在搭建屋外与浮空房屋");
-        let exterior_prompt =
-            prompt::build_scene_blueprint(&input, &concept_text, &render_style, "exterior")?;
-        let (exterior, exterior_response) = match complete_validated_stage(
+        let concept_text =
+            format!("<concrete_design_brief>{design}</concrete_design_brief>\n{concept_text}");
+
+        emit_progress(
             &app,
             "create",
-            "exterior-blueprint",
+            "blueprints",
             22,
-            "正在修正屋外场景",
-            &exterior_prompt,
-            prompt::BLUEPRINT_SYSTEM_PROMPT,
-            |value| harness::compile_blueprint(value, TopiaLocation::Exterior, &parsed_concept),
-        ) {
-            Ok((scene, response)) => (scene, Some(response)),
-            Err(error) => {
-                crate::diagnostics::log(
-                    &app,
-                    "topia",
-                    "local-fallback",
-                    &harness::fallback_summary("exterior", &error),
-                );
-                emit_progress(&app, "create", "exterior", 22, "正在本地编译屋外场景");
-                (
-                    fallback_scene(TopiaLocation::Exterior, &parsed_concept)?,
-                    None,
-                )
+            "正在并行设计空岛、房间与菜地的几何布局",
+        );
+        let results = std::thread::scope(|scope| {
+            let jobs = [
+                (TopiaLocation::Exterior, "exterior"),
+                (TopiaLocation::Interior, "interior"),
+                (TopiaLocation::Garden, "garden"),
+            ]
+            .map(|(location, name)| {
+                let app = &app;
+                let input = &input;
+                let concept_text = &concept_text;
+                let render_style = &render_style;
+                let parsed_concept = &parsed_concept;
+                let recent = &recent;
+                scope.spawn(move || {
+                    let blueprint_prompt =
+                        prompt::build_scene_blueprint(input, concept_text, render_style, name)?;
+                    let prior: Vec<_> = recent
+                        .iter()
+                        .map(|world| match location {
+                            TopiaLocation::Exterior => world.scenes.exterior.clone(),
+                            TopiaLocation::Interior => world.scenes.interior.clone(),
+                            TopiaLocation::Garden => world.scenes.garden.clone(),
+                        })
+                        .collect();
+                    match complete_validated_stage(
+                        app,
+                        "create",
+                        &format!("{name}-blueprint"),
+                        22,
+                        "正在修正结构与布局",
+                        &blueprint_prompt,
+                        prompt::BLUEPRINT_SYSTEM_PROMPT,
+                        |value| {
+                            harness::compile_novel_blueprint(
+                                value,
+                                location,
+                                parsed_concept,
+                                &prior,
+                            )
+                        },
+                        deadline,
+                    ) {
+                        Ok((scene, response)) => {
+                            let normalized =
+                                harness::blueprint_position_normalizations(&response.text);
+                            if normalized > 0 {
+                                crate::diagnostics::log(
+                                    app,
+                                    "topia",
+                                    "normalization",
+                                    &format!("stage={name} rule=position-xz count={normalized}"),
+                                );
+                            }
+                            crate::diagnostics::log(
+                                app,
+                                "topia",
+                                "geometry-compiled",
+                                &format!("stage={name} objects={} novel=true", scene.objects.len()),
+                            );
+                            Ok((scene, Some(response)))
+                        }
+                        Err(error) => {
+                            crate::diagnostics::log(
+                                app,
+                                "topia",
+                                "local-fallback",
+                                &harness::fallback_summary(name, &error),
+                            );
+                            Ok((fallback_scene(location, parsed_concept)?, None))
+                        }
+                    }
+                })
+            });
+            jobs.into_iter()
+                .map(|job| {
+                    job.join()
+                        .map_err(|_| "Topia blueprint worker failed".to_string())?
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        for (_, response) in &results {
+            if let Some(response) = response {
+                provider = response.provider.clone();
+                model = response.model.clone();
             }
-        };
-        if let Some(response) = exterior_response {
-            provider = response.provider;
-            model = response.model;
         }
-
-        emit_progress(&app, "create", "interior", 40, "正在布置室内房间");
-        let interior_prompt =
-            prompt::build_scene_blueprint(&input, &concept_text, &render_style, "interior")?;
-        let interior = match complete_validated_stage(
-            &app,
-            "create",
-            "interior-blueprint",
-            40,
-            "正在修正室内场景",
-            &interior_prompt,
-            prompt::BLUEPRINT_SYSTEM_PROMPT,
-            |value| harness::compile_blueprint(value, TopiaLocation::Interior, &parsed_concept),
-        ) {
-            Ok((scene, response)) => {
-                provider = response.provider;
-                model = response.model;
-                scene
-            }
-            Err(error) => {
-                crate::diagnostics::log(
-                    &app,
-                    "topia",
-                    "local-fallback",
-                    &harness::fallback_summary("interior", &error),
-                );
-                emit_progress(&app, "create", "interior", 40, "正在本地编译室内场景");
-                fallback_scene(TopiaLocation::Interior, &parsed_concept)?
-            }
-        };
-
-        emit_progress(&app, "create", "garden", 56, "正在培育菜地与作物岛");
-        let garden_prompt =
-            prompt::build_scene_blueprint(&input, &concept_text, &render_style, "garden")?;
-        let garden = match complete_validated_stage(
-            &app,
-            "create",
-            "garden-blueprint",
-            56,
-            "正在修正菜地场景",
-            &garden_prompt,
-            prompt::BLUEPRINT_SYSTEM_PROMPT,
-            |value| harness::compile_blueprint(value, TopiaLocation::Garden, &parsed_concept),
-        ) {
-            Ok((scene, response)) => {
-                provider = response.provider;
-                model = response.model;
-                scene
-            }
-            Err(error) => {
-                crate::diagnostics::log(
-                    &app,
-                    "topia",
-                    "local-fallback",
-                    &harness::fallback_summary("garden", &error),
-                );
-                emit_progress(&app, "create", "garden", 56, "正在本地编译菜地场景");
-                fallback_scene(TopiaLocation::Garden, &parsed_concept)?
-            }
-        };
+        let mut scenes = results.into_iter();
+        let exterior = scenes.next().expect("exterior worker").0;
+        let interior = scenes.next().expect("interior worker").0;
+        let garden = scenes.next().expect("garden worker").0;
 
         emit_progress(&app, "create", "assembly", 70, "正在合并并校验三处场景");
         let mut candidate = assemble_generated_world(
@@ -2600,6 +2799,46 @@ fn generate_topia_world_blocking(
         )?;
         migrate_world(&mut candidate);
         filter_relations(&mut candidate, &input.context);
+        emit_progress(&app, "create", "detail-plan", 72, "正在雕琢空间细节");
+        let detail_prompt = prompt::build_detail_plan(&candidate, &design, None)?;
+        if let Ok((mut plan, _)) = complete_validated_stage(
+            &app,
+            "create",
+            "detail-plan",
+            72,
+            "正在整理细节",
+            &detail_prompt,
+            prompt::DETAIL_SYSTEM_PROMPT,
+            harness::parse_detail_plan,
+            deadline,
+        ) {
+            emit_progress(&app, "create", "detail-review", 75, "正在复核空间细节");
+            let second_prompt =
+                prompt::build_detail_plan(&candidate, &design, Some(&plan.to_string()))?;
+            if let Ok((reviewed, _)) = complete_validated_stage(
+                &app,
+                "create",
+                "detail-review",
+                75,
+                "正在复核细节",
+                &second_prompt,
+                prompt::DETAIL_SYSTEM_PROMPT,
+                harness::parse_detail_plan,
+                deadline,
+            ) {
+                plan = reviewed;
+            }
+            harness::apply_detail_plan(&mut candidate, &plan)?;
+            crate::diagnostics::log(
+                &app,
+                "topia",
+                "detail-compiled",
+                &format!(
+                    "additions={}",
+                    plan["details"].as_array().map(Vec::len).unwrap_or(0)
+                ),
+            );
+        }
         emit_progress(&app, "create", "review", 76, "正在自动验收场景");
         if let Err(error) = validate_world(&candidate) {
             crate::diagnostics::log(&app, "topia", "local-reassembly", &format!("error={error}"));
@@ -2619,6 +2858,8 @@ fn generate_topia_world_blocking(
         }
         emit_progress(&app, "create", "revision", 92, "场景已通过自动验收");
         emit_progress(&app, "create", "assets", 97, "正在保存资产与世界");
+        let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+        let mut state = load_studio(&app)?;
         let (world, mut generated_assets) =
             finalize_generated_world(candidate, &input, provider, model)?;
         extend_portable_assets(&mut generated_assets, &state.assets);
@@ -2632,6 +2873,20 @@ fn generate_topia_world_blocking(
             state.worlds.push(world);
         }
         persist_studio(&app, &state)?;
+        crate::diagnostics::log(
+            &app,
+            "topia",
+            "harness-budget",
+            &format!(
+                "elapsed_ms={} limit_ms={}",
+                harness::GENERATION_BUDGET_MS.saturating_sub(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis() as u32
+                ),
+                harness::GENERATION_BUDGET_MS
+            ),
+        );
         emit_progress(&app, "create", "complete", 100, "新的 Topia 已经抵达");
         payload(&state, &input.context)
     }
@@ -2683,8 +2938,9 @@ fn iterate_topia_world_blocking(
         12,
         "正在修正 Topia 迭代结果",
         &user_prompt,
-        prompt::WORLD_SYSTEM_PROMPT,
-        parse_world,
+        prompt::ITERATION_SYSTEM_PROMPT,
+        |value| harness::apply_iteration(value, &current, &input),
+        Instant::now() + std::time::Duration::from_millis(harness::GENERATION_BUDGET_MS as u64),
     )?;
     #[cfg(not(mobile))]
     {
@@ -2693,19 +2949,26 @@ fn iterate_topia_world_blocking(
     }
     #[cfg(mobile)]
     {
+        // A history deletion or switch may occur while the cloud request is pending.
+        // Re-read persisted state so that finishing an iteration cannot restore deleted worlds.
+        let _commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+        state = load_studio(&app)?;
+        if !state
+            .worlds
+            .iter()
+            .any(|world| world.id == current.id && world.revision == current.revision)
+        {
+            return payload(&state, &input.context);
+        }
         emit_progress(&app, "iterate", "assets", 72, "正在让新故事长成纪念品");
         let (mut world, mut assets) =
             finalize_generated_world(parsed, &input, response.provider, response.model)?;
-        world.id = state.active_world_id.clone();
+        world.id = current.id.clone();
         extend_portable_assets(&mut assets, &state.assets);
         state.assets = assets;
         state.last_context_digest = Some(context_digest(&input.context)?);
         state.last_maintained_at = Some(Utc::now().to_rfc3339());
-        if let Some(existing) = state
-            .worlds
-            .iter_mut()
-            .find(|item| item.id == state.active_world_id)
-        {
+        if let Some(existing) = state.worlds.iter_mut().find(|item| item.id == current.id) {
             *existing = world;
         }
         persist_studio(&app, &state)?;
@@ -2724,10 +2987,47 @@ pub async fn iterate_topia_world(
         .map_err(|error| format!("Topia 迭代后台任务失败: {error}"))?
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SouvenirDesignInput {
+    title: String,
+    body: String,
+    #[serde(default)]
+    steps: Vec<String>,
+    person_name: Option<String>,
+    #[serde(default)]
+    recent_kinds: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn design_topia_souvenir(
+    input: SouvenirDesignInput,
+    app: tauri::AppHandle,
+) -> Result<Value, String> {
+    #[cfg(mobile)]
+    return tauri::async_runtime::spawn_blocking(move || {
+        if !valid_text(&input.title,180) || input.body.chars().count()>2000 || input.steps.len()>12 {return Err("souvenir context is too large".into());}
+        let context = serde_json::json!({"title":input.title,"body":input.body,"steps":input.steps.into_iter().take(6).collect::<Vec<_>>(),"personName":input.person_name,"recentKinds":input.recent_kinds.into_iter().take(8).collect::<Vec<_>>()});
+        let system = "Design a meaningful, detailed miniature souvenir from a completed real task. Return compact JSON only; no executable code, links, runtime IDs, full scenes or invented personal events.";
+        let prompt = format!(r##"<completed_task>{context}</completed_task>
+Transform the particular effort, collaboration and outcome into a concrete crafted object, not a generic category reward. Avoid repeating recent model kinds. Return {{"name":"short Chinese","description":"40-90 Chinese chars with specific symbolism","emoji":"one emoji","modelKind":"moon-rabbit-doll|constellation-badge|firefly-bottle|winged-book|star-compass|sprout-lantern|cloud-whale|planet-teacup|echo-shell|clockwork-bird|aurora-key|dream-camera|flaming-pan-sculpture|mnn-engine-core","colors":[three #RRGGBB strings],"material":"wood|porcelain|paper|metal|glass","ornaments":[1-3 of star|gem|leaf|ring|ribbon],"preferredLocation":"exterior|interior|garden"}}. The base model plus materials, palette and geometry ornaments must form one coherent meaningful miniature. Maximum 150 words."##);
+        let deadline=Instant::now()+std::time::Duration::from_millis(12_000);
+        let (first,_) = complete_validated_stage(&app,"iterate","souvenir-design",12,"正在塑造纪念品",&prompt,system,harness::parse_souvenir_design,deadline)?;
+        let review = format!("{prompt}\n<first_design>{first}</first_design>\nSECOND PASS: improve concrete symbolism, craft, color coherence and the geometric ornaments. Preserve factual meaning; return a complete corrected design in the same compact schema.");
+        match complete_validated_stage(&app,"iterate","souvenir-review",36,"正在打磨纪念品",&review,system,harness::parse_souvenir_design,deadline) {Ok((refined,_))=>Ok(refined),Err(_)=>Ok(first)}
+    }).await.map_err(|e|e.to_string())?;
+    #[cfg(not(mobile))]
+    {
+        let _ = (input, app);
+        Err("Souvenir cloud design is only available in the Android app".into())
+    }
+}
+
 fn maintain_topia_world_blocking(
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
 ) -> Result<Option<TopiaWorldPayload>, String> {
+    let commit = STUDIO_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
     let mut state = load_studio(&app)?;
     let digest = context_digest(&context)?;
     #[cfg(mobile)]
@@ -2743,6 +3043,7 @@ fn maintain_topia_world_blocking(
         }
         // Scheduling policy remains in Rust; the same iteration command owns generation.
         drop(state);
+        drop(commit);
         return iterate_topia_world_blocking(context, app).map(Some);
     }
     #[cfg(not(mobile))]
@@ -2871,6 +3172,7 @@ mod tests {
             last_context_digest: None,
             onboarding_completed: Some(true),
             thumbnails: HashMap::new(),
+            deleted_preset_ids: HashSet::new(),
         };
         let resolved = payload(&state, &context).expect("payload should resolve");
         assert_eq!(resolved.crops.len(), 1);
@@ -3268,16 +3570,16 @@ mod tests {
                     .expect("preset interior should declare a room shape")
             })
             .collect::<HashSet<_>>();
-        assert_eq!(interior_shapes.len(), worlds.len());
+        assert_eq!(interior_shapes.len(), 2);
         assert_eq!(
             interior_shapes
                 .iter()
                 .filter(|shape| shape.contains("loft"))
                 .count(),
-            2
+            1
         );
-        assert!(interior_shapes.contains("courtyard-ring"));
-        assert!(!interior_shapes.contains("rectangular"));
+        assert!(interior_shapes.contains("terraced-loft"));
+        assert!(interior_shapes.contains("rectangular"));
         assert!(worlds.iter().any(|world| world
             .scenes
             .exterior
@@ -3380,6 +3682,77 @@ mod tests {
         let selected_id = state.active_world_id.clone();
         ensure_default_world(&mut state).expect("catalog reconciliation should succeed");
         assert_eq!(state.active_world_id, selected_id);
+    }
+
+    #[test]
+    fn deleting_active_world_preserves_assets_and_removes_thumbnail() {
+        let mut state = initial_studio().expect("studio should load");
+        let mut custom = state.worlds[0].clone();
+        custom.id = "user-world".into();
+        custom.source = "cloud".into();
+        custom.generated_at = "2026-10-02T10:00:00+08:00".into();
+        state.active_world_id = custom.id.clone();
+        state.worlds.push(custom);
+        state
+            .thumbnails
+            .insert("user-world".into(), "thumbnail".into());
+        let assets = serde_json::to_value(&state.assets).unwrap();
+        let expected = state.worlds[5].id.clone();
+        remove_studio_world(&mut state, "user-world").expect("active world can be deleted");
+        assert_eq!(state.active_world_id, expected);
+        assert!(!state.thumbnails.contains_key("user-world"));
+        assert!(!state.worlds.iter().any(|world| world.id == "user-world"));
+        assert_eq!(serde_json::to_value(&state.assets).unwrap(), assets);
+        payload(&state, &TopiaRuntimeContext::default()).expect("remaining world should render");
+    }
+
+    #[test]
+    fn deleted_presets_stay_deleted_after_reload_and_catalog_refresh() {
+        let mut state = initial_studio().expect("studio should load");
+        let active = state.active_world_id.clone();
+        let removed = state.worlds[1].id.clone();
+        remove_studio_world(&mut state, &removed).expect("inactive preset can be deleted");
+        assert_eq!(state.active_world_id, active);
+        let serialized = serde_json::to_string(&state).unwrap();
+        let mut restored: TopiaStudioState = serde_json::from_str(&serialized).unwrap();
+        ensure_default_world(&mut restored).expect("catalog refresh should succeed");
+        assert!(!restored.worlds.iter().any(|world| world.id == removed));
+        assert_eq!(restored.active_world_id, active);
+
+        let ids = restored
+            .worlds
+            .iter()
+            .map(|world| world.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids.into_iter().filter(|id| id != &active) {
+            remove_studio_world(&mut restored, &id).unwrap();
+        }
+        assert!(remove_studio_world(&mut restored, &active).is_err());
+        assert!(remove_studio_world(&mut restored, "missing").is_err());
+        ensure_default_world(&mut restored).unwrap();
+        assert_eq!(restored.worlds.len(), 1);
+        assert_eq!(restored.active_world_id, active);
+    }
+
+    #[test]
+    fn deleting_all_presets_keeps_a_custom_world_available() {
+        let mut state = initial_studio().unwrap();
+        let mut custom = state.worlds[0].clone();
+        custom.id = "user-world".into();
+        custom.source = "cloud".into();
+        state.worlds.push(custom);
+        let ids = state
+            .worlds
+            .iter()
+            .filter(|world| world.source == "mock")
+            .map(|world| world.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            remove_studio_world(&mut state, &id).unwrap();
+        }
+        ensure_default_world(&mut state).unwrap();
+        assert_eq!(state.worlds.len(), 1);
+        assert_eq!(state.active_world_id, "user-world");
     }
 
     #[test]

@@ -8,6 +8,7 @@ import type {
   TopiaSceneCrop,
   TopiaSkyConfig,
   TopiaRenderStyleConfig,
+  TopiaWorldConfig,
 } from "../models";
 
 
@@ -1049,7 +1050,60 @@ function detailedSouvenir(object: TopiaObjectConfig) {
       break;
   }
 
+  const ornaments =
+    typeof object.params?.souvenirOrnaments === "string"
+      ? object.params.souvenirOrnaments.split(",").slice(0, 3)
+      : [];
+  ornaments.forEach((ornament, index) => {
+    const x = (index - 1) * 0.19;
+    if (ornament === "ring") {
+      const ring = mesh(new THREE.TorusGeometry(0.11, 0.022, 7, 20), accent);
+      ring.position.set(x, 1.08, 0.07);
+      group.add(ring);
+    } else if (ornament === "ribbon") {
+      group.add(block(0.34, 0.05, 0.08, accent, x, 0.22, 0.34));
+      for (const side of [-1, 1]) {
+        const loop = mesh(new THREE.TorusGeometry(0.065, 0.018, 6, 16), accent);
+        loop.position.set(x + side * 0.08, 0.26, 0.34);
+        loop.scale.x = 1.3;
+        group.add(loop);
+      }
+    } else {
+      const decoration = mesh(
+        ornament === "star"
+          ? new THREE.ConeGeometry(0.11, 0.035, 5)
+          : ornament === "leaf"
+            ? new THREE.SphereGeometry(0.09, 10, 6)
+            : new THREE.OctahedronGeometry(0.1, 0),
+        accent,
+      );
+      decoration.position.set(x, ornament === "leaf" ? 0.32 : 1.08, 0.3);
+      if (ornament === "leaf") decoration.scale.set(0.55, 1.4, 0.35);
+      if (ornament === "star") decoration.rotation.x = Math.PI / 2;
+      group.add(decoration);
+    }
+  });
+  const craft = object.params?.souvenirMaterial;
+  if (typeof craft === "string")
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      for (const material of Array.isArray(child.material)
+        ? child.material
+        : [child.material])
+        if (material instanceof THREE.MeshStandardMaterial) {
+          material.roughness =
+            craft === "metal"
+              ? 0.32
+              : craft === "porcelain"
+                ? 0.25
+                : craft === "glass"
+                  ? 0.12
+                  : 0.88;
+          material.metalness = craft === "metal" ? 0.48 : 0;
+        }
+    });
   group.userData.souvenirKind = kind;
+  group.userData.souvenirOrnaments = ornaments.length;
   return { group, anchorHeight: 1.08 };
 }
 
@@ -1091,6 +1145,17 @@ function exteriorGroundDetails(config: TopiaSceneConfig, seed: number) {
   const grassColor = color(island, 0, fallback.mint);
   const rockColor = color(island, 1, fallback.woodDark);
   const mineralColor = color(island, 2, fallback.lavender);
+  const crescent = stringParameter(island, "shape", "oval") === "crescent";
+  const supportedPoint = (x: number, z: number) => {
+    const nx = (x - centerX) / radiusX,
+      nz = (z - centerZ) / radiusZ;
+    return (
+      nx * nx + nz * nz < 0.94 * 0.94 &&
+      (!crescent ||
+        Math.abs(nz) > 0.717 ||
+        nx <= 0.168 + 0.528 * (nz / 0.717) ** 2)
+    );
+  };
 
   const rim = mesh(
     new THREE.TorusGeometry(radiusX * 0.91, 0.045, 5, 48),
@@ -1100,7 +1165,8 @@ function exteriorGroundDetails(config: TopiaSceneConfig, seed: number) {
   rim.rotation.x = Math.PI / 2;
   rim.scale.z = radiusZ / Math.max(radiusX, 0.01);
   rim.castShadow = false;
-  details.add(rim);
+  if (!crescent) details.add(rim);
+  else rim.geometry.dispose();
 
   const door = config.objects.find((object) => object.prefab === "door");
   const doorAngle = door
@@ -1134,7 +1200,14 @@ function exteriorGroundDetails(config: TopiaSceneConfig, seed: number) {
       centerZ + Math.sin(angle) * radiusZ * radial,
     );
     tuft.rotation.y = -angle;
-    details.add(tuft);
+    if (supportedPoint(tuft.position.x, tuft.position.z)) details.add(tuft);
+    else
+      tuft.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
   }
 
   const pebbleCount = Math.min(12, 7 + Math.floor(config.objects.length / 5));
@@ -1153,7 +1226,12 @@ function exteriorGroundDetails(config: TopiaSceneConfig, seed: number) {
     );
     pebble.scale.set(1.25, 0.65, 0.9);
     pebble.rotation.y = angle;
-    details.add(pebble);
+    if (supportedPoint(pebble.position.x, pebble.position.z))
+      details.add(pebble);
+    else {
+      pebble.geometry.dispose();
+      (pebble.material as THREE.Material).dispose();
+    }
   }
 
   if (door) {
@@ -1176,7 +1254,11 @@ function exteriorGroundDetails(config: TopiaSceneConfig, seed: number) {
       );
       step.rotation.y = doorAngle + index * 0.22;
       step.scale.x = 1 + (index % 2) * 0.18;
-      details.add(step);
+      if (supportedPoint(step.position.x, step.position.z)) details.add(step);
+      else {
+        step.geometry.dispose();
+        (step.material as THREE.Material).dispose();
+      }
     }
   }
 
@@ -1727,6 +1809,7 @@ function floatingIsland(object: TopiaObjectConfig) {
   const rockColor = color(object, 1, 0x75657f);
   const mineralColor = color(object, 2, 0x4f536e);
   const style = activeRenderStyle?.kind ?? "storybook-ink";
+  const outline = stringParameter(object, "shape", "oval");
   const surfaceSegments =
     style === "paper-craft"
       ? 7
@@ -1738,10 +1821,37 @@ function floatingIsland(object: TopiaObjectConfig) {
             ? 16
             : 24;
 
-  const grass = mesh(
-    new THREE.CylinderGeometry(radius, radius * 0.93, 0.26, surfaceSegments),
-    grassColor,
+  let surfaceGeometry: THREE.BufferGeometry = new THREE.CylinderGeometry(
+    radius,
+    radius * 0.93,
+    0.26,
+    outline === "hexagonal" ? 6 : surfaceSegments,
   );
+  if (outline === "crescent") {
+    const shape = new THREE.Shape();
+    shape.moveTo(Math.cos(0.8) * radius, Math.sin(0.8) * radius);
+    shape.absarc(0, 0, radius, 0.8, Math.PI * 2 - 0.8, false);
+    shape.quadraticCurveTo(
+      -radius * 0.36,
+      0,
+      Math.cos(0.8) * radius,
+      Math.sin(0.8) * radius,
+    );
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      depth: 0.26,
+      bevelEnabled: true,
+      bevelThickness: 0.025,
+      bevelSize: 0.04,
+      bevelSegments: 2,
+      curveSegments: 20,
+    });
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, -0.13, 0);
+    surfaceGeometry.dispose();
+    surfaceGeometry = geometry;
+  }
+  const grass = mesh(surfaceGeometry, grassColor);
+  grass.userData.topiaSupport = true;
   grass.position.y = 0.04;
   const earthRim = mesh(
     new THREE.CylinderGeometry(
@@ -1753,7 +1863,9 @@ function floatingIsland(object: TopiaObjectConfig) {
     tint(rockColor, 0.09),
   );
   earthRim.position.y = -0.17;
-  group.add(grass, earthRim);
+  group.add(grass);
+  if (outline !== "crescent") group.add(earthRim);
+  else earthRim.geometry.dispose();
 
   if (style === "plush-toy") {
     const cushion = mesh(
@@ -1868,7 +1980,8 @@ function floatingIsland(object: TopiaObjectConfig) {
   contour.position.y = 0.18;
   contour.rotation.x = Math.PI / 2;
   contour.castShadow = false;
-  group.add(contour);
+  if (outline !== "crescent") group.add(contour);
+  else contour.geometry.dispose();
   group.userData.topiaIslandUnderside = style;
   return group;
 }
@@ -1877,6 +1990,98 @@ function buildPrefab(
   object: TopiaObjectConfig,
   crops: Map<string, TopiaSceneCrop>,
 ) {
+  if (typeof object.params?.detailKind === "string") {
+    const group = new THREE.Group();
+    const wood = color(object, 1, fallback.wood),
+      light = color(object, 0, fallback.cream),
+      accent = color(object, 2, fallback.mint);
+    switch (object.params.detailKind) {
+      case "display-cabinet": {
+        group.add(block(2.2, 0.65, 0.7, wood, 0, 0.375, 0));
+        const top = block(2.3, 0.1, 0.8, light, 0, 0.75, 0);
+        top.userData.topiaDisplaySurface = true;
+        group.add(top);
+        for (const x of [-0.55, 0.55]) {
+          group.add(block(1.02, 0.52, 0.025, light, x, 0.38, 0.365));
+          group.add(block(0.16, 0.025, 0.045, accent, x, 0.43, 0.39));
+        }
+        for (const x of [-0.95, 0.95])
+          for (const z of [-0.25, 0.25])
+            group.add(block(0.1, 0.1, 0.1, wood, x, 0.05, z));
+        break;
+      }
+      case "pergola":
+        for (const x of [-0.7, 0.7])
+          for (const z of [-0.55, 0.55])
+            group.add(
+              block(0.08, 1.8, 0.08, wood, x, 0.9, z),
+              block(0.18, 0.08, 0.18, light, x, 0.04, z),
+            );
+        for (let i = 0; i < 7; i++)
+          group.add(block(0.07, 0.08, 1.35, wood, -0.7 + i * 0.233, 1.85, 0));
+        group.add(
+          block(1.55, 0.12, 0.08, wood, 0, 1.78, -0.55),
+          block(1.55, 0.12, 0.08, wood, 0, 1.78, 0.55),
+        );
+        break;
+      case "planter-box":
+        group.add(
+          block(1.15, 0.28, 0.6, wood, 0, 0.14, 0),
+          block(1, 0.06, 0.48, 0x5e4937, 0, 0.3, 0),
+        );
+        for (let i = 0; i < 5; i++) {
+          const sprout = plant({ ...object, params: {} });
+          sprout.scale.setScalar(0.32);
+          sprout.position.set(-0.4 + i * 0.2, 0.32, 0);
+          group.add(sprout);
+        }
+        for (let i = 0; i < 5; i++)
+          group.add(
+            block(0.025, 0.23, 0.03, light, -0.48 + i * 0.24, 0.16, 0.31),
+          );
+        break;
+      case "stone-path":
+        for (let i = 0; i < 6; i++) {
+          const stone = mesh(
+            new THREE.CylinderGeometry(0.18, 0.2, 0.06, 6),
+            light,
+          );
+          stone.scale.z = 0.7;
+          stone.position.set(-0.75 + i * 0.3, 0.03, Math.sin(i) * 0.1);
+          group.add(stone);
+        }
+        break;
+      case "balustrade":
+        for (let i = 0; i < 5; i++)
+          group.add(
+            block(0.055, 0.58, 0.055, wood, -0.7 + i * 0.35, 0.29, 0),
+            block(0.12, 0.07, 0.12, light, -0.7 + i * 0.35, 0.035, 0),
+          );
+        group.add(block(1.55, 0.06, 0.08, wood, 0, 0.6, 0));
+        break;
+      default:
+        group.add(
+          block(1.1, 0.1, 0.45, wood, 0, 0.06, 0),
+          block(1.1, 0.1, 0.45, wood, 0, 0.65, 0),
+          block(0.07, 0.7, 0.45, wood, -0.52, 0.35, 0),
+          block(0.07, 0.7, 0.45, wood, 0.52, 0.35, 0),
+        );
+        for (let i = 0; i < 7; i++)
+          group.add(
+            block(
+              0.1,
+              0.33 + 0.04 * (i % 3),
+              0.28,
+              i % 2 ? accent : light,
+              -0.38 + i * 0.125,
+              0.32,
+              0,
+            ),
+          );
+        group.add(block(0.8, 0.2, 0.42, light, 0, 0.8, 0));
+    }
+    return { group, anchorHeight: 0.6 };
+  }
   if (object.layer === "souvenir") return detailedSouvenir(object);
   const group = new THREE.Group();
   let anchorHeight = 0;
@@ -2061,6 +2266,20 @@ function buildPrefab(
     }
     case "wind-chimes": {
       const pieces = Math.max(2, Math.round(parameter(object, "pieces", 3)));
+      // A hanging object needs an actual stand, not an invisible sky anchor.
+      group.add(
+        block(
+          0.08,
+          1.35,
+          0.08,
+          color(object, 0, fallback.wood),
+          0.45,
+          -0.12,
+          0,
+        ),
+        block(0.35, 0.1, 0.35, color(object, 0, fallback.wood), 0.45, -0.8, 0),
+        block(0.2, 0.07, 0.07, color(object, 0, fallback.wood), 0.42, 0.52, 0),
+      );
       group.add(
         block(0.78, 0.07, 0.07, color(object, 0, fallback.wood), 0, 0.52, 0),
       );
@@ -2357,6 +2576,34 @@ function buildPrefab(
       roof.position.y = 1.62;
       roof.rotation.y = Math.PI / 4;
       group.add(roof);
+      const trim = color(object, 1, fallback.wood);
+      group.add(
+        block(0.45, 0.83, 0.045, trim, 0.1, 0.42, 0.472),
+        block(0.075, 0.87, 0.09, fallback.cream, -0.17, 0.45, 0.49),
+        block(0.075, 0.87, 0.09, fallback.cream, 0.37, 0.45, 0.49),
+        block(0.61, 0.075, 0.09, fallback.cream, 0.1, 0.91, 0.49),
+        block(0.68, 0.09, 0.32, trim, 0.1, 0.035, 0.57),
+        block(0.035, 0.065, 0.03, fallback.yellow, 0.24, 0.47, 0.51),
+      );
+      for (let i = 0; i < 5; i++) {
+        group.add(
+          block(0.018, 1.25, 0.025, trim, -0.53 + i * 0.24, 0.65, -0.46),
+        );
+        group.add(
+          block(0.025, 1.25, 0.018, trim, -0.64, 0.65, -0.36 + i * 0.18),
+        );
+      }
+      const window = buildPrefab(
+        {
+          ...object,
+          prefab: "round-window",
+          params: { radius: 0.16 },
+          colors: [fallback.blue, fallback.cream],
+        },
+        crops,
+      ).group;
+      window.position.set(-0.31, 0.96, 0.5);
+      group.add(window);
       break;
     }
     case "watering-orb": {
@@ -2381,6 +2628,40 @@ function buildPrefab(
       break;
     }
   }
+  if (object.id.startsWith("designed-mass-") && object.prefab === "block") {
+    const width = parameter(object, "width", 1),
+      height = parameter(object, "height", 1),
+      depth = parameter(object, "depth", 1);
+    const trim = color(object, 1, fallback.wood),
+      warm = tint(color(object, 0, fallback.wall), 0.12);
+    // Fine craft detail stays attached to the load-bearing mass: plinth,
+    // cornice, framed glazing and mullions, not loose floating embellishments.
+    group.add(
+      block(width + 0.1, 0.08, depth + 0.1, trim, 0, -height / 2 + 0.04, 0),
+      block(width + 0.1, 0.065, depth + 0.1, warm, 0, height / 2 - 0.03, 0),
+    );
+    const count = Math.max(1, Math.min(4, Math.floor(width / 0.65)));
+    for (let i = 0; i < count; i++) {
+      const x = ((i - (count - 1) / 2) * width) / (count + 1),
+        z = depth / 2 + 0.024;
+      const ww = Math.min(0.48, (width / (count + 1)) * 0.75),
+        wh = Math.min(0.72, height * 0.42);
+      group.add(
+        block(ww + 0.07, wh + 0.07, 0.04, trim, x, 0, z),
+        block(
+          ww,
+          wh,
+          0.02,
+          tint(color(object, 1, fallback.sky), 0.1),
+          x,
+          0,
+          z + 0.025,
+        ),
+        block(0.025, wh, 0.025, warm, x, 0, z + 0.045),
+        block(ww, 0.025, 0.025, warm, x, 0, z + 0.045),
+      );
+    }
+  }
   return { group, anchorHeight };
 }
 
@@ -2392,6 +2673,28 @@ function buildConfiguredScene(
   const cropById = new Map(crops.map((crop) => [crop.id, crop]));
   for (const object of config.objects) {
     const built = buildPrefab(object, cropById);
+    if (
+      object.id.startsWith("designed-mass-") &&
+      ["cloud", "crystal", "tower"].includes(object.prefab)
+    ) {
+      // The blueprint's size is a physical bounding size, not an arbitrary
+      // multiplier of a prefab whose natural dimensions the model cannot know.
+      const bounds = new THREE.Box3().setFromObject(built.group);
+      const size = bounds.getSize(new THREE.Vector3());
+      const center = bounds.getCenter(new THREE.Vector3());
+      const content = built.group;
+      content.scale.set(
+        1 / Math.max(size.x, 0.01),
+        1 / Math.max(size.y, 0.01),
+        1 / Math.max(size.z, 0.01),
+      );
+      content.position.copy(center.multiply(content.scale).negate());
+      built.group = new THREE.Group();
+      built.group.add(content);
+    }
+    const anchorBounds = object.anchorId
+      ? new THREE.Box3().setFromObject(built.group)
+      : null;
     built.group.name = object.id;
     built.group.position.fromArray(object.position);
     if (object.rotation)
@@ -2399,7 +2702,11 @@ function buildConfiguredScene(
     if (object.scale) built.group.scale.fromArray(object.scale);
     if (object.anchorId) {
       const anchor = new THREE.Object3D();
-      anchor.position.y = built.anchorHeight;
+      anchorBounds!.getCenter(anchor.position);
+      if (object.prefab === "floating-island")
+        anchor.position.y = anchorBounds!.max.y;
+      anchor.userData.markerRadius =
+        anchorBounds!.getSize(new THREE.Vector3()).length() / 2;
       anchor.userData.topiaAnchor = object.anchorId;
       built.group.add(anchor);
     }
@@ -2432,7 +2739,355 @@ function buildConfiguredScene(
     }
     world.add(built.group);
   }
+  world.userData.renderFeedback = constrainRenderedObjects(world, config);
   return world;
+}
+
+export interface TopiaRenderFeedback {
+  grounded: number;
+  repositioned: number;
+  unsupported: number;
+  overlaps: number;
+  renderedViews: number;
+  elapsedMs: number;
+}
+
+const groundedPrefabs = new Set([
+  "bed",
+  "desk",
+  "chair",
+  "shelf",
+  "nightstand",
+  "plant",
+  "hearth",
+  "rug",
+  "lantern",
+  "tower",
+  "observatory",
+  "crystal",
+  "farm-shed",
+  "crop-plot",
+  "path",
+  "sail",
+  "wind-chimes",
+  "propeller",
+]);
+
+/** Actual mesh-space constraints, also run after every history switch/asset transfer. */
+function constrainRenderedObjects(
+  world: THREE.Group,
+  config: TopiaSceneConfig,
+) {
+  const feedback = {
+    grounded: 0,
+    repositioned: 0,
+    unsupported: 0,
+    overlaps: 0,
+  };
+  world.updateMatrixWorld(true);
+  const supports: THREE.Mesh[] = [];
+  const displaySupports: THREE.Mesh[] = [];
+  for (const root of world.children) {
+    const object = config.objects.find((o) => o.id === root.name)!;
+    const isRoom = object.prefab === "room-shell";
+    const isPad =
+      object.id.startsWith("garden-bed-pad-") ||
+      object.id.startsWith("islet-bridge-");
+    root.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const box = new THREE.Box3().setFromObject(child);
+      const size = box.getSize(new THREE.Vector3());
+      if (child.userData.topiaDisplaySurface) {
+        child.userData.topiaSupportOwner = root.name;
+        displaySupports.push(child);
+      }
+      if (
+        child.userData.topiaSupport ||
+        isPad ||
+        (isRoom &&
+          size.y < 0.55 &&
+          size.x > 0.65 &&
+          size.z > 0.35 &&
+          box.max.y > 0.1)
+      ) {
+        child.userData.topiaSupportOwner = root.name;
+        supports.push(child);
+      }
+    });
+  }
+  const ray = new THREE.Raycaster();
+  const normalMatrix = new THREE.Matrix3();
+  let excludedSupportRoot = "";
+  let foundationMode = false;
+  let displayMode = false;
+  const groundAt = (x: number, z: number) => {
+    ray.set(new THREE.Vector3(x, 8, z), new THREE.Vector3(0, -1, 0));
+    return ray
+      .intersectObjects(
+        (displayMode ? displaySupports : supports).filter(
+          (s) =>
+            s.userData.topiaSupportOwner !== excludedSupportRoot &&
+            (!foundationMode ||
+              !String(s.userData.topiaSupportOwner).startsWith(
+                "garden-bed-pad-",
+              )),
+        ),
+        false,
+      )
+      .find(
+        (hit) =>
+          hit.face &&
+          hit.face.normal
+            .clone()
+            .applyMatrix3(normalMatrix.getNormalMatrix(hit.object.matrixWorld))
+            .y > 0.55,
+      )?.point.y;
+  };
+  const placed: THREE.Box3[] = [];
+  const movable = world.children
+    .filter((root) => {
+      const o = config.objects.find((o) => o.id === root.name)!;
+      return (
+        groundedPrefabs.has(o.prefab) ||
+        o.layer === "souvenir" ||
+        o.id.startsWith("garden-bed-pad-") ||
+        o.id.startsWith("crafted-detail-") ||
+        o.id.startsWith("designed-mass-")
+      );
+    })
+    .sort((a, b) => {
+      if (
+        a.name.startsWith("garden-bed-pad-") !==
+        b.name.startsWith("garden-bed-pad-")
+      )
+        return a.name.startsWith("garden-bed-pad-") ? -1 : 1;
+      if (
+        a.name.startsWith("designed-mass-") ||
+        b.name.startsWith("designed-mass-")
+      ) {
+        if (!a.name.startsWith("designed-mass-")) return 1;
+        if (!b.name.startsWith("designed-mass-")) return -1;
+        return (
+          Number(a.name.split("-").slice(-1)[0]) -
+          Number(b.name.split("-").slice(-1)[0])
+        );
+      }
+      const oa = config.objects.find((o) => o.id === a.name)!;
+      const ob = config.objects.find((o) => o.id === b.name)!;
+      // Place the room's functional furniture and cabinet before small exhibits.
+      const priority = (o: TopiaObjectConfig) =>
+        o.params?.displayNiche ? 2 : o.params?.roomFunction ? 0 : 1;
+      if (priority(oa) !== priority(ob)) return priority(oa) - priority(ob);
+      const sa = new THREE.Box3().setFromObject(a).getSize(new THREE.Vector3());
+      const sb = new THREE.Box3().setFromObject(b).getSize(new THREE.Vector3());
+      return sb.x * sb.z - sa.x * sa.z;
+    });
+  for (const root of movable) {
+    const object = config.objects.find((o) => o.id === root.name)!;
+    excludedSupportRoot = root.name;
+    foundationMode = root.name.startsWith("garden-bed-pad-");
+    displayMode = object.params?.displayNiche === true;
+    const original = root.position.clone();
+    const originalScale = root.scale.clone();
+    const supportId = object.params?.supportObject;
+    const parent =
+      typeof supportId === "string"
+        ? world.getObjectByName(supportId)
+        : undefined;
+    if (parent) {
+      const base = new THREE.Box3().setFromObject(parent),
+        own = new THREE.Box3().setFromObject(root);
+      root.position.x = THREE.MathUtils.clamp(
+        root.position.x,
+        base.min.x + 0.08,
+        base.max.x - 0.08,
+      );
+      root.position.z = THREE.MathUtils.clamp(
+        root.position.z,
+        base.min.z + 0.08,
+        base.max.z - 0.08,
+      );
+      root.position.y += base.max.y + 0.008 - own.min.y;
+      root.updateMatrixWorld(true);
+      if (Math.abs(root.position.y - original.y) > 0.025) feedback.grounded++;
+      continue;
+    }
+    const collidable =
+      !["rug", "path"].includes(object.prefab) &&
+      !object.id.startsWith("designed-mass-");
+    let supported = false,
+      clear = false;
+    for (let attempt = 0; attempt < 640; attempt++) {
+      if (attempt > 0 && attempt % 128 === 0) {
+        // A portable asset must fit the new usable footprint; bounded resizing
+        // is preferable to leaving its corners over a void or on another asset.
+        root.scale
+          .multiplyScalar(0.82)
+          .max(new THREE.Vector3(0.12, 0.12, 0.12));
+      }
+      if (attempt > 0) {
+        if (displayMode && displaySupports.length) {
+          const surface = new THREE.Box3().setFromObject(displaySupports[0]);
+          const center = surface.getCenter(new THREE.Vector3());
+          const size = surface.getSize(new THREE.Vector3());
+          const offset = [-0.32, 0, 0.32][attempt % 3];
+          root.position.x = center.x + (size.x > size.z ? offset * size.x : 0);
+          root.position.z = center.z + (size.z >= size.x ? offset * size.z : 0);
+        } else {
+          const angle = attempt * 2.399963 + movable.indexOf(root) * 0.61;
+          const radius = 0.35 + (attempt % 11) * 0.3;
+          root.position.x = Math.cos(angle) * radius;
+          root.position.z = Math.sin(angle) * radius * 0.72;
+        }
+        root.updateMatrixWorld(true);
+      }
+      const box = new THREE.Box3().setFromObject(root);
+      // Use the rendered footprint, not the object's origin; rotated/scaled
+      // furniture must be wholly supported, including on lofts/crescent islands.
+      const heights = [
+        [box.min.x + 0.03, box.min.z + 0.03],
+        [box.min.x + 0.03, box.max.z - 0.03],
+        [box.max.x - 0.03, box.min.z + 0.03],
+        [box.max.x - 0.03, box.max.z - 0.03],
+        [root.position.x, root.position.z],
+      ].map(([x, z]) => groundAt(x, z));
+      supported =
+        heights.every((h) => h !== undefined) &&
+        Math.max(...(heights as number[])) -
+          Math.min(...(heights as number[])) <
+          0.16;
+      if (!supported) continue;
+      const height = Math.max(...(heights as number[]));
+      root.position.y += height + 0.012 - box.min.y;
+      root.updateMatrixWorld(true);
+      const settled = new THREE.Box3().setFromObject(root);
+      const inset = settled.clone().expandByScalar(-0.035);
+      clear = !collidable || placed.every((p) => !p.intersectsBox(inset));
+      if (clear) break;
+    }
+    if (!supported || !clear) {
+      // Preserve the object if packing cannot find a free footprint, and report
+      // the unresolved constraint instead of silently declaring it successful.
+      root.position.copy(original);
+      root.scale.copy(originalScale);
+      root.updateMatrixWorld(true);
+      const y = groundAt(original.x, original.z);
+      const box = new THREE.Box3().setFromObject(root);
+      if (y !== undefined) root.position.y += y + 0.012 - box.min.y;
+      if (!supported) {
+        feedback.unsupported++;
+        (world.userData.constraintIssues ??= []).push({
+          id: root.name,
+          kind: "support",
+        });
+      }
+      if (collidable && !clear) {
+        feedback.overlaps++;
+        (world.userData.constraintIssues ??= []).push({
+          id: root.name,
+          kind: "overlap",
+        });
+      }
+      root.updateMatrixWorld(true);
+    }
+    if (Math.abs(root.position.y - original.y) > 0.025) feedback.grounded++;
+    if (
+      Math.hypot(root.position.x - original.x, root.position.z - original.z) >
+      0.025
+    )
+      feedback.repositioned++;
+    if (root.userData.animation === "float") delete root.userData.animation;
+    if (collidable) placed.push(new THREE.Box3().setFromObject(root));
+  }
+  return feedback;
+}
+
+/** Bounded local render/repair pass; no images or private context leave the phone. */
+export function reviewTopiaWorld(
+  input: TopiaWorldConfig,
+  crops: TopiaSceneCrop[],
+) {
+  const started = performance.now();
+  const world = structuredClone(input);
+  const feedback: TopiaRenderFeedback = {
+    grounded: 0,
+    repositioned: 0,
+    unsupported: 0,
+    overlaps: 0,
+    renderedViews: 0,
+    elapsedMs: 0,
+  };
+  const previousStyle = activeRenderStyle,
+    previousTexture = activeStyleTexture;
+  const issues: Array<{ location: string; id: string; kind: string }> = [];
+  activeRenderStyle = world.renderStyle;
+  activeStyleTexture = styleTexture(world.renderStyle);
+  let renderer: THREE.WebGLRenderer | undefined;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(320, 180);
+  } catch {
+    /* Mesh constraints still work without a GPU. */
+  }
+  for (const location of ["exterior", "interior", "garden"] as const) {
+    const group = buildConfiguredScene(world.scenes[location], crops);
+    const report = group.userData.renderFeedback;
+    issues.push(
+      ...(group.userData.constraintIssues ?? []).map(
+        (issue: { id: string; kind: string }) => ({ ...issue, location }),
+      ),
+    );
+    for (const key of [
+      "grounded",
+      "repositioned",
+      "unsupported",
+      "overlaps",
+    ] as const)
+      feedback[key] += report[key];
+    for (const object of world.scenes[location].objects) {
+      const root = group.getObjectByName(object.id)!;
+      object.position = root.position.toArray() as [number, number, number];
+      object.scale = root.scale.toArray() as [number, number, number];
+      if (groundedPrefabs.has(object.prefab) && object.animation === "float")
+        delete object.animation;
+    }
+    if (renderer) {
+      const scene = new THREE.Scene();
+      scene.add(group, new THREE.HemisphereLight(0xffffff, 0x667766, 3));
+      const bounds = new THREE.Box3().setFromObject(group);
+      const center = bounds.getCenter(new THREE.Vector3());
+      const view = Math.max(
+        4,
+        bounds.getSize(new THREE.Vector3()).length() / 2,
+      );
+      const camera = new THREE.OrthographicCamera(
+        (-view * 16) / 9,
+        (view * 16) / 9,
+        view,
+        -view,
+        0.1,
+        80,
+      );
+      camera.position.copy(center).add(new THREE.Vector3(6, 5, 8));
+      camera.lookAt(center);
+      renderer.render(scene, camera);
+      feedback.renderedViews++;
+    }
+    group.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        const materials = Array.isArray(o.material) ? o.material : [o.material];
+        materials.forEach((m) => m.dispose());
+      }
+    });
+  }
+  renderer?.dispose();
+  renderer?.forceContextLoss();
+  activeStyleTexture?.dispose();
+  activeRenderStyle = previousStyle;
+  activeStyleTexture = previousTexture;
+  feedback.elapsedMs = Math.round(performance.now() - started);
+  return { world, feedback, issues };
 }
 
 export interface TopiaSceneOptions {
@@ -2693,6 +3348,14 @@ export function mountTopiaScene(
   scene.add(sun);
 
   const world = buildConfiguredScene(options.scene, options.crops);
+  canvas.dataset.topiaUnsupported = String(
+    world.userData.renderFeedback.unsupported,
+  );
+  canvas.dataset.topiaOverlaps = String(world.userData.renderFeedback.overlaps);
+  canvas.dataset.topiaGrounded = String(world.userData.renderFeedback.grounded);
+  canvas.dataset.topiaRepositioned = String(
+    world.userData.renderFeedback.repositioned,
+  );
   const souvenirModels: THREE.Object3D[] = [];
   world.traverse((object) => {
     if (typeof object.userData.souvenirKind === "string")
@@ -2721,6 +3384,13 @@ export function mountTopiaScene(
     );
   }
   scene.add(world);
+  const framingBounds = new THREE.Box3();
+  for (const root of world.children) {
+    const object = options.scene.objects.find((o) => o.id === root.name);
+    if (object?.prefab === "cloud" && !object.params?.structural) continue;
+    framingBounds.expandByObject(root);
+  }
+  const framingCenter = framingBounds.getCenter(new THREE.Vector3());
 
   const sparkleGeometry = new THREE.BufferGeometry();
   const sparklePositions = new Float32Array(42 * 3);
@@ -2774,70 +3444,70 @@ export function mountTopiaScene(
     }
   });
   const projectedAnchor = new THREE.Vector3();
+  const anchorScale = new THREE.Vector3();
   let labelsRevealed = false;
   const syncAnchors = () => {
-    if (camera.zoom >= 1.18) labelsRevealed = true;
-    else if (camera.zoom <= 1.08) labelsRevealed = false;
+    if (camera.zoom >= 2.2) labelsRevealed = true;
+    else if (camera.zoom <= 1.95) labelsRevealed = false;
+    canvas.dataset.topiaZoom = camera.zoom.toFixed(2);
     scene.updateMatrixWorld(true);
     camera.updateMatrixWorld(true);
-    const placedCollapsedAnchors: Array<{ x: number; y: number }> = [];
-    for (const [
-      bindingIndex,
-      { anchor, element },
-    ] of anchorBindings.entries()) {
+    const labelRects: Array<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }> = [];
+    for (const { anchor, element } of anchorBindings) {
       anchor.getWorldPosition(projectedAnchor).project(camera);
       const visible =
         projectedAnchor.z > -1 &&
         projectedAnchor.z < 1 &&
-        Math.abs(projectedAnchor.x) < 1.12 &&
-        Math.abs(projectedAnchor.y) < 1.12;
+        Math.abs(projectedAnchor.x) < 1 &&
+        Math.abs(projectedAnchor.y) < 1;
       const projectedX =
         (projectedAnchor.x * 0.5 + 0.5) * container.clientWidth;
       const projectedY =
         (-projectedAnchor.y * 0.5 + 0.5) * container.clientHeight;
-      let screenX = projectedX;
-      let screenY = projectedY;
-      if (
+      const screenX = projectedX;
+      const screenY = projectedY;
+      anchor.getWorldScale(anchorScale);
+      const diameter = THREE.MathUtils.clamp(
+        ((Number(anchor.userData.markerRadius) *
+          Math.max(anchorScale.x, anchorScale.y, anchorScale.z) *
+          container.clientHeight *
+          camera.zoom) /
+          (camera.top - camera.bottom)) *
+          1.1,
+        12,
+        24,
+      );
+      element.style.setProperty("--topia-marker-size", `${diameter}px`);
+      const isLandmark = element.classList.contains("topia-landmark");
+      const width = Math.min(
+        190,
+        Math.max(110, element.textContent!.length * 7),
+      );
+      const height = 46;
+      const showLabel =
+        labelsRevealed &&
         visible &&
-        !labelsRevealed &&
-        element.classList.contains("topia-landmark")
-      ) {
-        const minimumDistance = 38;
-        for (let attempt = 0; attempt < 8; attempt += 1) {
-          const overlaps = placedCollapsedAnchors.some(
-            (placed) =>
-              Math.hypot(screenX - placed.x, screenY - placed.y) <
-              minimumDistance,
-          );
-          if (!overlaps) break;
-          const angle = bindingIndex * 2.39996 + attempt * 1.0472;
-          const offset = 22 + attempt * 7;
-          screenX = projectedX + Math.cos(angle) * offset;
-          screenY = projectedY + Math.sin(angle) * offset;
-        }
-        screenX = THREE.MathUtils.clamp(
-          screenX,
-          18,
-          Math.max(18, container.clientWidth - 18),
+        labelRects.length < (camera.zoom >= 3.4 ? 5 : 3) &&
+        !labelRects.some(
+          (r) =>
+            Math.abs(r.x - screenX) < (r.width + width) / 2 + 8 &&
+            Math.abs(r.y - screenY) < (r.height + height) / 2 + 8,
         );
-        screenY = THREE.MathUtils.clamp(
-          screenY,
-          18,
-          Math.max(18, container.clientHeight - 18),
-        );
-        placedCollapsedAnchors.push({ x: screenX, y: screenY });
-      }
+      if (isLandmark && showLabel)
+        labelRects.push({ x: screenX, y: screenY, width, height });
       element.style.left = `${screenX}px`;
       element.style.top = `${screenY}px`;
       element.classList.toggle("topia-anchor-hidden", !visible);
       if (element.classList.contains("topia-landmark")) {
-        element.classList.toggle(
-          "topia-anchor-visible",
-          visible && labelsRevealed,
-        );
+        element.classList.toggle("topia-anchor-visible", visible && showLabel);
         element.classList.toggle(
           "topia-anchor-collapsed",
-          visible && !labelsRevealed,
+          visible && !showLabel,
         );
       }
     }
@@ -2860,13 +3530,13 @@ export function mountTopiaScene(
   let lastY = 0;
   let pinchDistance = 0;
   let pinchZoom = 1;
-  camera.zoom = options.location === "exterior" ? 1.12 : 1;
+  camera.zoom = 1;
   const resize = () => {
     const width = container.clientWidth;
     const height = container.clientHeight;
     renderer.setSize(width, height, false);
     const aspect = width / Math.max(1, height);
-    const view =
+    let view =
       options.location === "exterior"
         ? 3.98
         : isLoftInterior
@@ -2874,6 +3544,30 @@ export function mountTopiaScene(
           : interiorShape === "courtyard-ring"
             ? 4.2
             : 4.05;
+    const flat = 9.5 * Math.cos(currentPitch);
+    camera.position
+      .copy(framingCenter)
+      .add(
+        new THREE.Vector3(
+          Math.sin(currentYaw) * flat,
+          Math.sin(currentPitch) * 9.5,
+          Math.cos(currentYaw) * flat,
+        ),
+      );
+    camera.lookAt(framingCenter);
+    camera.updateMatrixWorld(true);
+    for (const x of [framingBounds.min.x, framingBounds.max.x])
+      for (const y of [framingBounds.min.y, framingBounds.max.y])
+        for (const z of [framingBounds.min.z, framingBounds.max.z]) {
+          const p = new THREE.Vector3(x, y, z).applyMatrix4(
+            camera.matrixWorldInverse,
+          );
+          view = Math.max(
+            view,
+            Math.abs(p.y) * 1.12,
+            (Math.abs(p.x) / Math.max(aspect, 0.1)) * 1.12,
+          );
+        }
     camera.left = -view * aspect;
     camera.right = view * aspect;
     camera.top = view;
@@ -2916,7 +3610,7 @@ export function mountTopiaScene(
       camera.zoom = THREE.MathUtils.clamp(
         (pinchZoom * distance()) / pinchDistance,
         0.78,
-        2.4,
+        5.5,
       );
       camera.updateProjectionMatrix();
     }
@@ -2932,9 +3626,9 @@ export function mountTopiaScene(
   const wheel = (event: WheelEvent) => {
     event.preventDefault();
     camera.zoom = THREE.MathUtils.clamp(
-      camera.zoom - event.deltaY * 0.00085,
+      camera.zoom * Math.exp(-event.deltaY * 0.0013),
       0.78,
-      2.4,
+      5.5,
     );
     camera.updateProjectionMatrix();
   };
@@ -2952,11 +3646,11 @@ export function mountTopiaScene(
     const radius = 9.5;
     const flat = radius * Math.cos(currentPitch);
     camera.position.set(
-      Math.sin(currentYaw) * flat,
-      1 + Math.sin(currentPitch) * radius,
-      Math.cos(currentYaw) * flat,
+      framingCenter.x + Math.sin(currentYaw) * flat,
+      framingCenter.y + Math.sin(currentPitch) * radius,
+      framingCenter.z + Math.cos(currentYaw) * flat,
     );
-    camera.lookAt(0, isLoftInterior ? 1.48 : 1, 0);
+    camera.lookAt(framingCenter);
     backdrop.skyMaterial.uniforms.uTime.value = now * 0.001;
     backdrop.stars.rotation.y =
       now *

@@ -7,6 +7,8 @@ import type {
   TopiaLocation,
   TopiaObjectConfig,
   TopiaPrefab,
+  TopiaSceneConfig,
+  TopiaVector3,
   TopiaWorldConfig,
 } from "../models";
 import { inferQuestCategory } from "./gameRules";
@@ -152,13 +154,111 @@ function findExistingPlacement(world: TopiaWorldConfig, souvenir: Souvenir) {
       const object = scene.objects.find(
         (candidate) => candidate.anchorId === landmark.anchorId,
       );
-      if (!object || object.prefab === "crop-plot") continue;
+      // A task relation on a desk/bed does not turn that furniture into a trophy.
+      if (
+        !object ||
+        object.layer !== "souvenir" ||
+        object.prefab === "crop-plot"
+      )
+        continue;
       return {
         location,
         landmarkIndex: index,
         objectIndex: scene.objects.indexOf(object),
         landmark,
       };
+    }
+  }
+  return null;
+}
+
+function availablePlacement(
+  scene: TopiaSceneConfig,
+  location: TopiaLocation,
+  scale: number,
+  currentObject?: TopiaObjectConfig,
+  maxRows = 3,
+) {
+  const yaw = scene.camera.yaw;
+  const pitch =
+    location === "interior"
+      ? scene.camera.pitch
+      : Math.min(scene.camera.pitch, 0.42);
+  const project = (position: TopiaVector3, objectScale: number) => {
+    const [x, y, z] = position;
+    const depth = x * Math.sin(yaw) + z * Math.cos(yaw);
+    return [
+      x * Math.cos(yaw) - z * Math.sin(yaw),
+      (y + 0.54 * objectScale) * Math.cos(pitch) - depth * Math.sin(pitch),
+    ];
+  };
+  const occupied = scene.objects
+    .filter((object) => object.layer === "souvenir" && object !== currentObject)
+    .map((object) => ({
+      position: object.position,
+      scale: Math.max(...(object.scale ?? [1, 1, 1])),
+    }));
+  if (location === "interior" && occupied.length >= 3) return null;
+  const isFree = (position: TopiaVector3) => {
+    return occupied.every((other) => {
+      const clearance = 0.7 * (scale + other.scale) + 0.2;
+      return (
+        Math.hypot(
+          position[0] - other.position[0],
+          position[2] - other.position[2],
+        ) >= clearance
+      );
+    });
+  };
+  const slotFor = (position: TopiaVector3) => {
+    const [x, y] = project(position, scale);
+    return {
+      position,
+      fallback: {
+        left: `${Math.max(8, Math.min(92, 50 + x * 10))}%`,
+        top: `${Math.max(8, Math.min(92, 60 - y * 10))}%`,
+      },
+    };
+  };
+  if (currentObject && isFree(currentObject.position))
+    return slotFor(currentObject.position);
+  if (location === "interior") {
+    const cabinet = scene.objects.find(
+      (o) => o.params?.detailKind === "display-cabinet",
+    );
+    if (!cabinet) return null;
+    const angle = cabinet.rotation?.[1] ?? 0;
+    for (const offset of [-0.75, 0, 0.75]) {
+      const p: TopiaVector3 = [
+        cabinet.position[0] + offset * Math.cos(angle),
+        cabinet.position[1] + 0.8,
+        cabinet.position[2] - offset * Math.sin(angle),
+      ];
+      if (isFree(p)) return slotFor(p);
+    }
+    return null;
+  }
+  const freeSlot = placementSlots[location].find((slot) =>
+    isFree(slot.position),
+  );
+  if (freeSlot)
+    return slotFor([freeSlot.position[0], 0.2, freeSlot.position[2]]);
+
+  // Expand on the floor, never upward into camera-facing shelves in mid-air.
+  // The mesh-space pass subsequently resolves the actual surface and footprint.
+  const spacing = Math.max(
+    1.5,
+    1.4 * Math.max(scale, ...occupied.map((item) => item.scale)) + 0.3,
+  );
+  for (let row = 0; row < maxRows; row += 1) {
+    for (let column = -2; column <= 2; column += 1) {
+      const x = column * spacing;
+      const position: TopiaVector3 = [
+        x,
+        0.2,
+        (row === 0 ? 0 : Math.ceil(row / 2) * (row % 2 ? -1 : 1)) * spacing,
+      ];
+      if (isFree(position)) return slotFor(position);
     }
   }
   return null;
@@ -193,8 +293,6 @@ export function attachSouvenirsToTopia(
   world: TopiaWorldConfig,
   souvenirs: Souvenir[],
 ): { world: TopiaWorldConfig; placements: TopiaSouvenirPlacement[] } {
-  if (!souvenirs.length) return { world, placements: [] };
-
   const scenes = {
     exterior: {
       ...world.scenes.exterior,
@@ -213,28 +311,116 @@ export function attachSouvenirsToTopia(
     },
   };
   const composedWorld = { ...world, scenes };
+  // Curate the presentation, never the saved collection: preserve overflow IDs
+  // and relations, but show them outdoors instead of carpeting the living room.
+  const interior = scenes.interior;
+  let cabinet = interior.objects.find(
+    (o) => o.params?.detailKind === "display-cabinet",
+  );
+  if (!cabinet) {
+    const shellScale = interior.objects.find((o) => o.prefab === "room-shell")
+      ?.scale ?? [1, 1, 1];
+    cabinet = {
+      id: "room-display-cabinet",
+      prefab: "shelf",
+      layer: "structure",
+      position: [-2.5 * shellScale[0], 0.2, -0.85 * shellScale[2]],
+      rotation: [0, Math.PI / 2, 0],
+      colors: world.profile.accentColors,
+      params: { detailKind: "display-cabinet", roomFunction: "display" },
+    };
+    interior.objects.push(cabinet);
+  }
+  let exhibitCount = 0,
+    overflowCount = 0;
+  for (const original of [...interior.objects]) {
+    const souvenir = original.layer === "souvenir";
+    const outdoorAccent =
+      original.layer === "decoration" &&
+      ["observatory", "sky-window", "cloud", "path"].includes(original.prefab);
+    if (!outdoorAccent && (!souvenir || exhibitCount < 3)) {
+      if (souvenir) {
+        const offset = [-0.75, 0, 0.75][exhibitCount++];
+        const angle = cabinet.rotation?.[1] ?? 0;
+        interior.objects[interior.objects.indexOf(original)] = {
+          ...original,
+          position: [
+            cabinet.position[0] + offset * Math.cos(angle),
+            cabinet.position[1] + 0.8,
+            cabinet.position[2] - offset * Math.sin(angle),
+          ],
+          scale: [0.36, 0.36, 0.36],
+          params: { ...original.params, displayNiche: true },
+        };
+      }
+      continue;
+    }
+    interior.objects.splice(interior.objects.indexOf(original), 1);
+    const angle = overflowCount++ * 2.399963;
+    if (!scenes.exterior.objects.some((o) => o.id === original.id))
+      scenes.exterior.objects.push({
+        ...original,
+        position: [Math.cos(angle) * 3.6, 0.2, Math.sin(angle) * 2.6],
+        params: { ...original.params, displayNiche: false },
+      });
+    const moving = interior.landmarks.filter(
+      (l) => l.anchorId === original.anchorId,
+    );
+    interior.landmarks = interior.landmarks.filter(
+      (l) => l.anchorId !== original.anchorId,
+    );
+    for (const landmark of moving)
+      if (
+        !scenes.exterior.landmarks.some((l) => l.anchorId === landmark.anchorId)
+      )
+        scenes.exterior.landmarks.push({ ...landmark, location: "exterior" });
+  }
   const placements: TopiaSouvenirPlacement[] = [];
-  const occupiedLocations: Record<TopiaLocation, number> = {
-    exterior: 0,
-    interior: 0,
-    garden: 0,
-  };
-
-  for (const [souvenirIndex, souvenir] of souvenirs.slice(0, 24).entries()) {
-    const existing = findExistingPlacement(composedWorld, souvenir);
+  const claimedAnchors = new Set<string>();
+  const collection = souvenirs.slice(0, 24).map((souvenir, souvenirIndex) => {
+    const match = findExistingPlacement(composedWorld, souvenir);
+    const existing =
+      match && !claimedAnchors.has(match.landmark.anchorId) ? match : null;
+    if (existing) claimedAnchors.add(existing.landmark.anchorId);
+    return { souvenir, souvenirIndex, existing };
+  });
+  // Reserve generated anchors first, including ones that collide with each other.
+  collection.sort(
+    (a, b) => Number(Boolean(b.existing)) - Number(Boolean(a.existing)),
+  );
+  for (const { souvenir, souvenirIndex, existing } of collection) {
+    const requestedScale = souvenir.presentation?.scale ?? 0.78;
+    let scale =
+      existing?.location === "interior"
+        ? Math.min(requestedScale, 0.36)
+        : requestedScale;
     if (existing) {
-      const landmark = decorateLandmark(existing.landmark, souvenir);
-      scenes[existing.location].landmarks[existing.landmarkIndex] = landmark;
       const currentObject =
         scenes[existing.location].objects[existing.objectIndex];
-      const scale = souvenir.presentation?.scale ?? 0.78;
+      const slot = availablePlacement(
+        scenes[existing.location],
+        existing.location,
+        scale,
+        currentObject,
+        Infinity,
+      )!;
+      const landmark = {
+        ...decorateLandmark(existing.landmark, souvenir),
+        fallbackPlacement: slot.fallback,
+      };
+      scenes[existing.location].landmarks[existing.landmarkIndex] = landmark;
       scenes[existing.location].objects[existing.objectIndex] = {
         ...currentObject,
         layer: "souvenir",
+        position: slot.position,
         scale: [scale, scale, scale],
+        colors: souvenir.presentation?.colors ?? currentObject.colors,
         params: {
           ...currentObject.params,
           souvenirKind: souvenirModelKind(souvenir),
+          souvenirMaterial: souvenir.presentation?.material ?? "porcelain",
+          souvenirOrnaments: souvenir.presentation?.ornaments?.join(",") ?? "",
+          displayNiche: existing.location === "interior",
         },
         animation: "sparkle",
       };
@@ -242,13 +428,41 @@ export function attachSouvenirsToTopia(
       continue;
     }
 
-    const location =
+    let location =
       souvenir.presentation?.preferredLocation ??
       locations[souvenirIndex % locations.length];
-    const slotIndex =
-      occupiedLocations[location] % placementSlots[location].length;
-    occupiedLocations[location] += 1;
-    const slot = placementSlots[location][slotIndex];
+    if (location === "interior") scale = Math.min(requestedScale, 0.36);
+    let slot = availablePlacement(scenes[location], location, scale);
+    // A full display spills into another scene before extending beyond the view.
+    if (!slot) {
+      for (const alternative of locations.filter((item) => item !== location)) {
+        const candidateScale =
+          alternative === "interior"
+            ? Math.min(requestedScale, 0.36)
+            : requestedScale;
+        slot = availablePlacement(
+          scenes[alternative],
+          alternative,
+          candidateScale,
+        );
+        if (slot) {
+          location = alternative;
+          scale = candidateScale;
+          break;
+        }
+      }
+    }
+    if (!slot && location === "interior") {
+      location = "exterior";
+      scale = requestedScale;
+    }
+    slot ??= availablePlacement(
+      scenes[location],
+      location,
+      scale,
+      undefined,
+      Infinity,
+    )!;
     const hash = stableHash(souvenir.id);
     const token = hash.toString(36);
     const anchorId = `portable-souvenir-anchor-${token}`;
@@ -258,17 +472,18 @@ export function attachSouvenirsToTopia(
       prefab: souvenirPrefab(souvenir),
       layer: "souvenir",
       position: slot.position,
-      scale: [
-        souvenir.presentation?.scale ?? 0.78,
-        souvenir.presentation?.scale ?? 0.78,
-        souvenir.presentation?.scale ?? 0.78,
-      ],
-      colors: [
+      scale: [scale, scale, scale],
+      colors: souvenir.presentation?.colors ?? [
         0xffc857 ^ (hash & 0x1f1f1f),
         0x89d9d0 ^ ((hash >>> 3) & 0x0f0f0f),
         0xff8fad ^ ((hash >>> 7) & 0x0f0f0f),
       ],
-      params: { souvenirKind: souvenirModelKind(souvenir) },
+      params: {
+        souvenirKind: souvenirModelKind(souvenir),
+        souvenirMaterial: souvenir.presentation?.material ?? "porcelain",
+        souvenirOrnaments: souvenir.presentation?.ornaments?.join(",") ?? "",
+        displayNiche: location === "interior",
+      },
       anchorId,
       taskId: souvenir.questId,
       memoryIds: [memoryId],

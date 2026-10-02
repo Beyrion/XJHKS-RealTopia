@@ -46,6 +46,7 @@ import {
 } from "../utils/sceneObservation";
 import { proposeWorldEvent } from "../utils/worldEventPlanner";
 import { souvenirForQuest } from "../utils/souvenir";
+import { refineSouvenir } from "../services/souvenirDesign";
 
 const SCENE_OBSERVATION_INTERVAL_MS = 60_000;
 const SCENE_OBSERVATION_FAST_RETRY_MS = 1_000;
@@ -172,6 +173,7 @@ interface AppStoreValue {
   acceptWorldEvent: (eventId: string) => void;
   ignoreWorldEvent: (eventId: string) => void;
   dismissSouvenir: () => void;
+  markSouvenirViewed: (souvenirId: string) => void;
   applyConversationInteractions: (
     interactions: ExtractedInteractionEvent[],
     sourceKey: string,
@@ -397,6 +399,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     setCurrentMood(next);
     storage.saveMood(next);
   }, []);
+
+  const markSouvenirViewed = useCallback(
+    (souvenirId: string) => {
+      updateSouvenirs((items) =>
+        items.map((item) =>
+          item.id === souvenirId && !item.viewedAt
+            ? { ...item, viewedAt: new Date().toISOString() }
+            : item,
+        ),
+      );
+    },
+    [updateSouvenirs],
+  );
 
   const updateGlassSettings = useCallback((next: Updater<GlassSettings>) => {
     setGlassSettings((current) => {
@@ -754,9 +769,28 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const person = peopleRef.current.find(
           (item) => item.id === (quest.assignerPersonId ?? quest.personId),
         );
-        const souvenir = souvenirForQuest(quest, person);
+        const souvenir: Souvenir = {
+          ...souvenirForQuest(quest, person),
+          designState: "pending",
+        };
         updateSouvenirs((items) => [souvenir, ...items]);
         setNewSouvenir(souvenir);
+        void refineSouvenir(souvenir, quest, person, souvenirsRef.current).then(
+          (refined) => {
+            updateSouvenirs((items) =>
+              items.map((item) =>
+                item.id === refined.id
+                  ? { ...refined, viewedAt: item.viewedAt }
+                  : item,
+              ),
+            );
+            setNewSouvenir((current) =>
+              current?.id === refined.id
+                ? { ...refined, viewedAt: current.viewedAt }
+                : current,
+            );
+          },
+        );
         appendGameEvent({
           type: "souvenir_unlocked",
           questId,
@@ -2022,6 +2056,30 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, [processRecording]);
 
   useEffect(() => {
+    let cancelled = false;
+    // Resume interrupted designs without granting a second copy of the reward.
+    void (async () => {
+      for (const souvenir of souvenirsRef.current.filter(
+        (item) => item.designState === "pending",
+      )) {
+        if (cancelled) break;
+        const quest = questsRef.current.find((item) => item.id === souvenir.questId);
+        if (!quest) continue;
+        const person = peopleRef.current.find((item) => item.id === souvenir.personId);
+        const refined = await refineSouvenir(souvenir, quest, person, souvenirsRef.current);
+        if (cancelled) break;
+        updateSouvenirs((items) => items.map((item) =>
+          item.id === refined.id && item.designState === "pending"
+            ? { ...refined, viewedAt: item.viewedAt }
+            : item,
+        ));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [updateSouvenirs]);
+
+
+  useEffect(() => {
     void modelHub.refreshSecureConfig().catch(() => undefined);
     void refreshSession();
     void refreshModelDownload(true);
@@ -2099,6 +2157,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       acceptWorldEvent,
       ignoreWorldEvent,
       dismissSouvenir: () => setNewSouvenir(null),
+      markSouvenirViewed,
       applyConversationInteractions,
     }),
     [
@@ -2121,6 +2180,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       souvenirs,
       newSouvenir,
       logs,
+      markSouvenirViewed,
       memories,
       notify,
       people,

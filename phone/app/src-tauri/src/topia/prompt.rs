@@ -1,6 +1,25 @@
 use super::{TopiaAssetLayer, TopiaGenerationInput, TopiaRenderStyleConfig, TopiaWorldConfig};
 
-pub const PROMPT_VERSION: &str = "topia-architectural-blueprint-v2";
+pub const PROMPT_VERSION: &str = "topia-residential-harness-v5";
+
+pub const DESIGN_SYSTEM_PROMPT: &str = "Translate abstract choices into a concrete architectural design brief. Return compact JSON only. Specify buildable shapes, real functional objects, spatial connections, materials and a coordinated palette. Do not merely repeat poetic imagery or change colors.";
+
+pub fn build_design_brief(
+    input: &TopiaGenerationInput,
+    recent: &str,
+    variation: u64,
+) -> Result<String, String> {
+    let profile = serde_json::to_string(&input.profile).map_err(|e| e.to_string())?;
+    Ok(format!(
+        r#"<four_page_choices>{profile}</four_page_choices>
+<recent_geometry_do_not_repeat>{recent}</recent_geometry_do_not_repeat>
+<variation>{variation}</variation>
+Translate all four pages: personality and change preference -> circulation and social/private zones; sensations and spatial breathing -> voids, island outline, vertical rhythm; secret imagery -> specific joints, folded/arched/branched massing and meaningful objects; material preference -> surfaces and fine craft details. Use associations, not literal copies of selected nouns. Make at least THREE geometric differences from recent worlds, one per location. A different palette is NOT a difference. Avoid repeating a circular island, back-wall desk, right-side bed and three straight crop beds.
+The interior MUST remain a real inhabited room: continuous floor, enclosing walls, a door, a window, a bed, an actual usable desk with its chair, storage and clear walking space. Never design a trophy plaza, showroom or a flat grid of souvenirs. Memories are at most three small exhibits on one wall-side display cabinet, subordinate to everyday furniture.
+Return {{"keywords":[4-8 concrete design terms],"habitatForm":"one supported habitat","architectureStyle":"one supported style","layout":"one supported layout","exterior":"island outline, 3-6 concrete connected masses, entry, bridges and voids","interior":"residential rectangular room or supported loft; sleeping/work/storage zones and clear circulation","garden":"crop bed topology and paths, terracing with retaining supports","materials":[2-3 materials],"palette":[3 colors],"details":[3 buildable craft details]}}.
+Habitats: cloud-house, courtyard-compound, cantilever-villa, reef-grotto, tower-village, stilt-lodge, temple-terrace, wandering-capsule. Styles: cloud-organic, cycladic-white, chinese-thatch, chinese-red-wall, jiangnan-white-wall, american-modern, coral-fantasy, ancient-greek. Layouts: clustered, courtyard, vertical, cantilevered, terraced, ring, linear, scattered. Maximum 220 words. JSON only."#
+    ))
+}
 
 pub const CONCEPT_SYSTEM_PROMPT: &str = r#"You are the visual director for RealTopia, a personal fantasy space. Return one JSON object only. Invent boldly and reject the assumption that a home must be a cottage: the habitat itself may be a cloud, courtyard, reef, temple, tower village, stilt lodge, modern cantilever or wandering capsule. Keep the dominant silhouette instantly readable, warm and suitable for a low-poly mobile scene."#;
 
@@ -19,7 +38,7 @@ Return exactly one valid Scene JSON object and no markdown or explanation. Do no
 Only use the prefab allowlist and exact relation IDs supplied by the user prompt. Keep object transforms mobile-friendly and all anchors unique within the scene.
 Selected imagery is an abstract associative signal, never an object shopping list. Preserve portable personal assets relevant to this scene. Architecture must change dominant massing rather than dressing the same cottage. When cloud, crystal or plant geometry is structural, use layer structure with params.structural=true. Never return code, URLs, shaders, HTML, executable content, violence, accidental faces or photorealism."#;
 
-pub const BLUEPRINT_SYSTEM_PROMPT: &str = r#"You are the architectural creative director for one RealTopia scene. Return one small SceneBlueprint JSON object only. Choose a bold habitat form, architectural language and spatial layout that visibly alter the load-bearing silhouette; color-only variation is a failure. A cloud may itself be inhabited. Ancient, vernacular, modern and impossible fantasy architecture are equally valid. Describe mood and a few supported decorative features, but do not generate runtime objects, portals, relations, memories or landmarks. The Rust compiler owns geometry and safety. Selected imagery is an abstract associative signal, never an object shopping list."#;
+pub const BLUEPRINT_SYSTEM_PROMPT: &str = r#"You are the architectural creative director for one RealTopia scene. Return one compact SceneBlueprint JSON object only. Design actual mass sizes, supported vertical connections, functional zones and garden topology; color-only variation is a failure. Do not return the runtime scene DSL, IDs, portals or private relation objects. The model owns the geometric design; Rust compiles and validates physical safety. Selected imagery is an associative signal, not a shopping list."#;
 
 pub const REVIEW_SYSTEM_PROMPT: &str = r#"You are RealTopia's strict art director and schema reviewer. Review the candidate against every supplied constraint. Return exactly one compact JSON object with approved, issues, and repairInstructions. Do not rewrite the world and do not return markdown."#;
 
@@ -45,9 +64,9 @@ Create a distinctive art direction. The selections are abstract associative sign
 Make architecture a primary act of imagination, not a generic shell. Select one exact habitatForm, architectureStyle and layout from the compiler allowlists in the response schema. Vary structural massing radically across generations. A cloud-house must be made from inhabited cloud volumes; a courtyard must read as enclosing wings and a gate; a cantilever villa needs offset horizontal slabs; a reef grotto needs branching mineral massing. Tower villages, stilt lodges, temple terraces and wandering capsules must each have unmistakable silhouettes. Do not default to a cottage plus themed props.
 
 Treat the backend-selected rendering style as the visual medium/filter for the whole world. Keep its identity coherent across architecture, rooms and portable decoration while retaining low-poly mobile feasibility. Return:
-{{"title":"Chinese name","archetype":"short Chinese fantasy concept","story":"80-160 Chinese chars","habitatForm":"cloud-house|courtyard-compound|cantilever-villa|reef-grotto|tower-village|stilt-lodge|temple-terrace|wandering-capsule","architectureStyle":"cloud-organic|cycladic-white|chinese-thatch|chinese-red-wall|jiangnan-white-wall|american-modern|coral-fantasy|ancient-greek","layout":"clustered|courtyard|vertical|cantilevered|terraced|ring|linear|scattered","architecture":"dominant silhouette and load-bearing spatial rules","materials":["..."],"motifs":["..."],"imageryTranslation":[{{"source":"selected phrase","abstractTraits":["spatial/material/emotional association"],"forbiddenLiteralObjects":["literal noun to avoid"]}}],"palette":[three colors],"sky":{{"theme":"distinct fantasy identity","motifs":["aurora-ribbon|paper-birds|jellyfish-lights|floating-petals|star-dust|crystal-moons|cloud-whales"],"celestialShape":"ringed-orb|crescent|twin-moons|prism|lantern-sun","decorationDensity":0.0-1.0,"drift":0.0-1.0,"top":"color","mid":"color","low":"color","aurora":"color","celestial":"color","stars":"color","fog":"color","magic":0.0-1.0}}}}
+{{"title":"Chinese name","archetype":"short Chinese fantasy concept","story":"under 60 Chinese chars","habitatForm":"cloud-house|courtyard-compound|cantilever-villa|reef-grotto|tower-village|stilt-lodge|temple-terrace|wandering-capsule","architectureStyle":"cloud-organic|cycladic-white|chinese-thatch|chinese-red-wall|jiangnan-white-wall|american-modern|coral-fantasy|ancient-greek","layout":"clustered|courtyard|vertical|cantilevered|terraced|ring|linear|scattered","palette":[three colors],"sky":{{"theme":"distinct fantasy identity","motifs":["aurora-ribbon|paper-birds|jellyfish-lights|floating-petals|star-dust|crystal-moons|cloud-whales"],"celestialShape":"ringed-orb|crescent|twin-moons|prism|lantern-sun","decorationDensity":0.0-1.0,"drift":0.0-1.0,"top":"color","mid":"color","low":"color","aurora":"color","celestial":"color","stars":"color","fog":"color","magic":0.0-1.0}}}}
 Colors may be 24-bit integers, #RRGGBB strings or [r,g,b] arrays; the backend normalizes them. Optional descriptive fields may be concise or omitted. Focus on a useful creative direction rather than satisfying unnecessary detail.
-Make it personal, surprising and coherent. Return JSON only."#
+Follow any concrete_design_brief: resolve it into actual structural choices rather than another poetic concept. Keep story under 60 Chinese chars. Make it personal, surprising and coherent. Return JSON only."#
     ))
 }
 
@@ -96,17 +115,58 @@ pub fn build_scene_blueprint(
 ) -> Result<String, String> {
     let imagery = serde_json::to_string(&input.profile).map_err(|error| error.to_string())?;
     let style = serde_json::to_string(render_style).map_err(|error| error.to_string())?;
+    let geometry = match location {
+        "exterior" => {
+            r#""islandShape":"crescent","islandAspect":1.2,"islandDepth":1.4,"massing":[{"kind":"block","position":[-1,0],"size":[1.6,1.5,1.2],"rotation":0},{"kind":"block","position":[1,0],"size":[1.2,2,1],"rotation":0},{"kind":"cone","position":[1,0],"size":[1.4,0.8,1.2],"rotation":0,"support":1}]"#
+        }
+        "interior" => {
+            r#""roomShape":"rectangular","roomScale":[1.4,1.2],"furnishings":[{"kind":"bed","position":[-1.5,0.9],"rotation":0,"scale":0.9},{"kind":"desk","position":[1.6,-1],"rotation":0,"scale":0.95},{"kind":"chair","position":[1.6,0.15],"rotation":0,"scale":0.8},{"kind":"shelf","position":[0,-1.8],"rotation":1.57,"scale":0.9},{"kind":"nightstand","position":[-2.5,1.2],"rotation":0,"scale":0.8},{"kind":"plant","position":[2.4,1.2],"rotation":0,"scale":0.6}]"#
+        }
+        _ => {
+            r#""islandShape":"hexagonal","islandAspect":1.1,"islandDepth":1.6,"plots":[[-1.4,-0.7],[1.3,-0.4],[0,1.2]]"#
+        }
+    };
+    let geometry_rules = match location {
+        "exterior" => "Required top-level keys: islandShape, islandAspect, islandDepth, massing. islandShape: oval|crescent|split|elongated|terraced|hexagonal; aspect .65..1.45, depth .9..2.8. massing must have 3-6 connected/asymmetric volumes with x -2..2,z -1.6..1.6, size .4..3.5, kind block|cylinder|cone|cloud|crystal|tower. support is an optional earlier mass index for an attached roof/storey, never unsupported floating slabs. Vary footprint, count, roof hierarchy and voids.",
+        "interior" => "Required top-level keys: roomShape, roomScale, furnishings. roomShape MUST be rectangular or terraced-loft: a normal inhabited room, not a ring/platform/trophy plaza. roomScale [1.1..1.5,1.1..1.5]. 6-8 furnishings; MUST include bed, desk, chair and shelf. Bed and work desk occupy opposite sides, chair faces its desk within 1.2 units, shelf against rear wall, central aisle at least 1.2 units wide from front entry. Use real enclosing walls, continuous floor, window and doorway; loft needs load-bearing supports, stairs and rails. Bed x +/-1.3..1.6,z .7..1; desk on opposite side x +/-1.3..1.7,z -1.2..-.8; shelf x near 0,z -1.8. Avoid a circular scatter of objects. Rust reserves one side-wall display cabinet for at most three SMALL keepsakes; do not use souvenirs to replace furniture. Features: at most one small plant or lamp, no observatory, giant crystal or outdoor pergola indoors. Floor heights are solved from actual rendered floors.",
+        _ => "Required top-level keys: islandShape, islandAspect, islandDepth, plots. islandShape: oval|crescent|split|elongated|terraced|hexagonal; aspect .65..1.45, depth .9..2.8. plots MUST be a top-level array of 3-5 numeric [x,z] pairs with x -2.3..2.3,z -2..2, not objects or text. Use rings, offset courtyards, stepped terraces or branching routes, not always three-in-a-row. Retaining supports are created by Rust. Do not nest plots inside garden/scenes/geometry.",
+    };
     Ok(format!(
         r##"<art_direction>{concept}</art_direction>
 <abstract_imagery>{imagery}</abstract_imagery>
 <render_style>{style}</render_style>
 
-Describe a compact {location} scene blueprint. Copy habitatForm, architectureStyle and layout from the approved art direction so all three views belong to one place. If the concept omitted them, choose one exact allowlisted value for each. The exterior's dominant massing must visibly embody habitatForm; do not fall back to a cottage. Interior and garden layouts should echo the same spatial logic. Do not place individual structures, doors, rooms, crops, memories, tasks or landmarks; the Rust scene compiler owns all runtime geometry, portals and relations. Imagery is associative and must not be copied as a literal object.
+Describe a compact {location} scene blueprint. All positions MUST be [x,z], exactly TWO numbers, never [x,y,z]; Rust computes supported height. Copy habitatForm, architectureStyle and layout from the approved art direction so all three views belong to one place. If the concept omitted them, choose one exact allowlisted value for each. The exterior's dominant massing must visibly embody habitatForm; do not fall back to a cottage. The model owns structural geometry and functional zoning using the fields below; Rust only clamps unsafe transforms, adds supports/navigation and preserves personal relation IDs. Do not generate runtime IDs or landmarks. Imagery is associative, not literal copying.
 
 Return exactly:
-{{"density":0.0-1.0,"cameraYaw":number,"cameraPitch":number,"habitatForm":"cloud-house|courtyard-compound|cantilever-villa|reef-grotto|tower-village|stilt-lodge|temple-terrace|wandering-capsule","architectureStyle":"cloud-organic|cycladic-white|chinese-thatch|chinese-red-wall|jiangnan-white-wall|american-modern|coral-fantasy|ancient-greek","layout":"clustered|courtyard|vertical|cantilevered|terraced|ring|linear|scattered","silhouette":"short load-bearing spatial rule","features":[{{"kind":"tower|sail|wind-chimes|observatory|crystal|cloud|sky-window|plant|hearth|rug|lantern|propeller|path|farm-shed|watering-orb","color":"#RRGGBB or RGB value","animation":"optional float|spin|sway","emphasis":0.0-1.0}}]}}
+{{{geometry},"density":0.5,"cameraYaw":0.55,"cameraPitch":0.6,"habitatForm":"cloud-house|courtyard-compound|cantilever-villa|reef-grotto|tower-village|stilt-lodge|temple-terrace|wandering-capsule","architectureStyle":"cloud-organic|cycladic-white|chinese-thatch|chinese-red-wall|jiangnan-white-wall|american-modern|coral-fantasy|ancient-greek","layout":"clustered|courtyard|vertical|cantilevered|terraced|ring|linear|scattered","silhouette":"short load-bearing spatial rule","features":[{{"kind":"tower|sail|wind-chimes|observatory|crystal|cloud|sky-window|plant|hearth|rug|lantern|propeller|path|farm-shed|watering-orb","color":"#RRGGBB","emphasis":0.5}}]}}
+The geometry fields at the START of this schema are REQUIRED. Their example values illustrate syntax only: invent your own coordinates, sizes, counts and shapes to implement the concrete design brief. Never copy the example geometry.
 
-Use 2-5 features. Keep this under 500 words. Return JSON only."##
+Geometry constraints (only your target location):
+{geometry_rules}
+Use 2-4 location-appropriate features. Non-airborne objects must touch ground/floor; emphasis affects size only, never altitude. No float animation for furniture, plants, crystals or farm equipment. Keep under 380 words. Return JSON only."##
+    ))
+}
+
+pub const DETAIL_SYSTEM_PROMPT: &str = "You refine a buildable miniature world, not merely recolor it. Return compact JSON only. Preserve architecture and circulation. Add a coherent craft layer with useful ground-supported objects and clear negative space; never output full scene DSL.";
+
+pub fn build_detail_plan(
+    world: &TopiaWorldConfig,
+    brief: &str,
+    previous: Option<&str>,
+) -> Result<String, String> {
+    let geometry = serde_json::json!({"exterior":super::harness::spatial_summary(&world.scenes.exterior),"interior":super::harness::spatial_summary(&world.scenes.interior),"garden":super::harness::spatial_summary(&world.scenes.garden)});
+    Ok(format!(
+        r#"<concrete_brief>{brief}</concrete_brief><existing_geometry>{geometry}</existing_geometry>
+The exterior island radius is 4.8, garden 5.2, and room width/depth are enlarged 1.1-1.5x. Refine three spacious scenes with deliberate pathways, thresholds, craft and resting corners; do not fill every gap. Return {{"details":[{{"location":"exterior|interior|garden","kind":"pergola|planter-box|stone-path|balustrade|book-nook","position":[x,z],"rotation":radians,"scale":0.55-1.25}}]}}. Exterior/garden: 2-3 additions each. Interior: at most TWO small book-nook/planter-box accents against a wall; no indoor pergola, stone path, trophy grid or obstructed central aisle. Keep real bed, usable desk/chair and storage prominent; souvenirs stay small on the reserved display cabinet, not across the floor. Maximum eight additions, x -3.8..3.8,z -3..3. Keep door access, working/sleeping circulation and crop beds clear. Rust solves floor contact and collisions. No relations, IDs or floating geometry. Maximum 250 words.
+<previous_detail_plan>{}</previous_detail_plan>
+{}"#,
+        previous.unwrap_or("none"),
+        if previous.is_some() {
+            "This is a SECOND PASS: critically inspect the previous plan against the geometry and brief. Improve spacing, functional variety and small-scale craftsmanship; replace clutter or redundant features. Return the complete improved compact details array, not an explanation."
+        } else {
+            "This is the FIRST PASS: design the craft layer."
+        }
     ))
 }
 
@@ -189,19 +249,27 @@ Meaningful correlation is required, but it must be indirect: imagery should be r
     ))
 }
 
+pub const ITERATION_SYSTEM_PROMPT: &str = "Propose a compact, meaningful delta for an existing personal world. Return JSON only. Never rewrite geometry, cameras or architecture. Only use real supplied memory/task IDs and supported symbolic features.";
+
 pub fn build_iteration(
     current: &TopiaWorldConfig,
     inherited: &TopiaAssetLayer,
     input: &TopiaGenerationInput,
 ) -> Result<String, String> {
-    let world = serde_json::to_string(current).map_err(|error| error.to_string())?;
-    let assets = serde_json::to_string(inherited).map_err(|error| error.to_string())?;
-    let context = serde_json::to_string(&input.context).map_err(|error| error.to_string())?;
+    let context = serde_json::to_string(&input.context).map_err(|e| e.to_string())?;
+    let represented: Vec<_> = inherited
+        .memories
+        .iter()
+        .map(|m| (&m.source_memory_ids, &m.source_task_ids))
+        .collect();
+    let known = serde_json::to_string(&represented).map_err(|e| e.to_string())?;
     Ok(format!(
-        r#"<current_topia>{world}</current_topia>
-<existing_portable_assets>{assets}</existing_portable_assets>
+        r##"This is an ITERATION, not a redesign. Keep current architecture, sky, palette, cameras and every personal object. Never delete a souvenir. The backend owns preservation and safe placement; do not reproduce the existing scene JSON.
+<identity>{} / {}</identity>
+<already_represented_relations>{known}</already_represented_relations>
 <latest_runtime_context>{context}</latest_runtime_context>
-
-This is an ITERATION, not a redesign. Keep the current architecture, sky, palette, camera and established motifs. Return one complete schemaVersion 2 TopiaWorldConfig. Preserve every existing structure and portable asset. Add or gently evolve only decorations, crop-plots and souvenirs justified by newly completed/progressed quests, changed relationships or memories. Never delete a souvenir. Avoid duplicates by memoryIds/taskIds. Increase revision by one. Use only {PREFABS}. Return JSON only."#
+Return {{"additions":[{{"location":"exterior|interior|garden","kind":"crystal|plant|lantern|wind-chimes|observatory|watering-orb","color":"#RRGGBB","memoryIds":["exact new memory ID"],"taskId":"optional exact new quest ID"}}]}}.
+At most six compact symbolic additions, justified ONLY by unrepresented memories or active tasks. An empty additions list is valid. No new personal IDs, no arbitrary furniture, no transforms or floating heights. Maximum 200 words. JSON only."##,
+        current.profile.home_name, current.profile.archetype
     ))
 }

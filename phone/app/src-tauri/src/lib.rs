@@ -1087,6 +1087,8 @@ mod mobile_cloud {
         pub timeout_ms: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub max_completion_tokens: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub temperature: Option<f64>,
         #[serde(default)]
         pub fast: bool,
     }
@@ -1962,6 +1964,7 @@ async fn cloud_complete(
                     timeout_ms: timeout_ms.unwrap_or(12_000).clamp(3_000, 300_000),
                     max_completion_tokens: None,
                     fast: false,
+                    temperature: None,
                 })
         })
         .await;
@@ -2816,7 +2819,9 @@ pub fn run() {
             topia::save_topia_world,
             topia::reset_topia_world,
             topia::generate_topia_world,
+            topia::design_topia_souvenir,
             topia::switch_topia_world,
+            topia::delete_topia_world,
             topia::complete_topia_onboarding,
             topia::save_topia_thumbnail,
             topia::iterate_topia_world,

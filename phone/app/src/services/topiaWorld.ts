@@ -23,6 +23,19 @@ function publish(payload: TopiaWorldPayload) {
   return payload;
 }
 
+async function renderReview(
+  payload: TopiaWorldPayload,
+  context: TopiaWorldContext,
+) {
+  const { reviewTopiaWorld } = await import("../utils/topiaScene");
+  const { world, feedback } = reviewTopiaWorld(payload.world, payload.crops);
+  return invoke<TopiaWorldPayload>("save_topia_world", {
+    world,
+    context,
+    renderFeedback: feedback,
+  });
+}
+
 export const topiaWorldService = {
   load: (context: TopiaWorldContext) =>
     invoke<TopiaWorldPayload>("load_topia_world", { context }),
@@ -35,15 +48,24 @@ export const topiaWorldService = {
   generate: (profile: TopiaUserProfileInput, context: TopiaWorldContext) =>
     invoke<TopiaWorldPayload>("generate_topia_world", {
       input: { profile, context },
-    }).then(publish),
+    })
+      .then((payload) => renderReview(payload, context))
+      .then(publish),
   iterate: (context: TopiaWorldContext) =>
-    invoke<TopiaWorldPayload>("iterate_topia_world", { context }).then(publish),
+    invoke<TopiaWorldPayload>("iterate_topia_world", { context })
+      .then((payload) => renderReview(payload, context))
+      .then(publish),
   maintain: (context: TopiaWorldContext) =>
     invoke<TopiaWorldPayload | null>("maintain_topia_world", { context }).then(
       (payload) => (payload ? publish(payload) : null),
     ),
   switchWorld: (worldId: string, context: TopiaWorldContext) =>
     invoke<TopiaWorldPayload>("switch_topia_world", {
+      worldId,
+      context,
+    }).then(publish),
+  deleteWorld: (worldId: string, context: TopiaWorldContext) =>
+    invoke<TopiaWorldPayload>("delete_topia_world", {
       worldId,
       context,
     }).then(publish),

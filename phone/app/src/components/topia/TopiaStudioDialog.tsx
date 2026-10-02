@@ -3,8 +3,10 @@ import type {
   TopiaGenerationProgress,
   TopiaStudioPayload,
   TopiaUserProfileInput,
+  TopiaWorldSummary,
 } from "../../models";
 import { Icon } from "../ui/Icon";
+import { topiaNarration } from "../../utils/topiaNarration";
 
 type ProfileChoiceKey =
   | "traits"
@@ -160,6 +162,7 @@ interface Props {
   onGenerate: (profile: TopiaUserProfileInput) => void;
   onIterate: () => void;
   onSwitch: (id: string) => void;
+  onDelete: (id: string) => Promise<void>;
 }
 
 export function TopiaStudioDialog({
@@ -173,6 +176,7 @@ export function TopiaStudioDialog({
   onGenerate,
   onIterate,
   onSwitch,
+  onDelete,
 }: Props) {
   const initial = useMemo<TopiaUserProfileInput>(
     () => ({
@@ -201,11 +205,89 @@ export function TopiaStudioDialog({
   const [page, setPage] = useState(0);
   const [view, setView] = useState<"entry" | "customize" | "history">("entry");
   const dialogRef = useRef<HTMLElement>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TopiaWorldSummary | null>(
+    null,
+  );
+  const [deleting, setDeleting] = useState(false);
+  const narration = topiaNarration(progress?.stage ?? "preparing");
+  const [narrationIndex, setNarrationIndex] = useState(0);
+  useEffect(() => {
+    if (!generating) return;
+    setNarrationIndex(Math.floor(Math.random() * narration.lines.length));
+    const timer = setInterval(
+      () =>
+        setNarrationIndex(
+          (index) =>
+            (index +
+              1 +
+              Math.floor(Math.random() * (narration.lines.length - 1))) %
+            narration.lines.length,
+        ),
+      2300,
+    );
+    return () => clearInterval(timer);
+  }, [generating, narration]);
+  const [deleteError, setDeleteError] = useState("");
+  const confirmationRef = useRef<HTMLElement>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  const consumedPress = useRef<string | null>(null);
+  const cancelPress = () => {
+    if (pressTimer.current !== null) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+    pressOrigin.current = null;
+  };
+  const askToDelete = (world: TopiaWorldSummary) => {
+    cancelPress();
+    consumedPress.current = world.id;
+    setDeleteError("");
+    setDeleteTarget(world);
+  };
   useEffect(() => {
     setProfile(initial);
+  }, [initial]);
+  useEffect(() => {
     setPage(0);
     setView("entry");
-  }, [initial, open, mode]);
+    setDeleteTarget(null);
+  }, [open, mode]);
+  useEffect(() => {
+    if (view === "history" && studio.worlds.length === 0) setView("entry");
+  }, [studio.worlds.length, view]);
+  useEffect(() => cancelPress, [open, view]);
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const previousFocus = document.activeElement;
+    confirmationRef.current
+      ?.querySelector<HTMLButtonElement>("button")
+      ?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!deleting) setDeleteTarget(null);
+      } else if (event.key === "Tab") {
+        const buttons = Array.from(
+          confirmationRef.current?.querySelectorAll<HTMLButtonElement>(
+            "button:not(:disabled)",
+          ) ?? [],
+        );
+        event.preventDefault();
+        const index = buttons.indexOf(
+          document.activeElement as HTMLButtonElement,
+        );
+        buttons[
+          (index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length
+        ]?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected)
+        previousFocus.focus();
+    };
+  }, [deleteTarget, deleting]);
   useEffect(() => {
     if (!open) return;
     const frame = requestAnimationFrame(() => {
@@ -246,11 +328,30 @@ export function TopiaStudioDialog({
         ? `创建 Topia（第 ${page + 1} / ${pages.length} 步）`
         : "选择历史 Topia";
 
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await onDelete(deleteTarget.id);
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div
       className={`topia-studio-overlay${generating ? " is-generating" : ""}`}
       onMouseDown={(event) => {
-        if (!generating && event.target === event.currentTarget) onClose();
+        if (
+          !generating &&
+          !deleteTarget &&
+          event.target === event.currentTarget
+        )
+          onClose();
       }}
     >
       <section
@@ -259,6 +360,7 @@ export function TopiaStudioDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="topia-studio-title"
+        inert={deleteTarget ? true : undefined}
       >
         <header>
           <span>
@@ -286,7 +388,7 @@ export function TopiaStudioDialog({
               <i />
               <span>✦</span>
             </div>
-            <h3>{progress?.message ?? "正在唤醒新的 Topia"}</h3>
+            <h3>{narration.lines[narrationIndex % narration.lines.length]}</h3>
             <div
               className="topia-generation-progress"
               role="progressbar"
@@ -298,7 +400,7 @@ export function TopiaStudioDialog({
               <i style={{ width: `${progress?.progress ?? 2}%` }} />
             </div>
             <small>
-              {progress?.progress ?? 2}% · {progress?.stage ?? "preparing"}
+              {progress?.progress ?? 2}% · {narration.title}
             </small>
           </div>
         ) : view === "entry" ? (
@@ -331,16 +433,64 @@ export function TopiaStudioDialog({
         ) : view === "history" ? (
           <>
             <div className="topia-history-view">
+              <small>长按 Topia 可删除</small>
               <div className="topia-history-grid">
                 {historyWorlds.map((world) => (
                   <button
                     key={world.id}
                     className={world.active ? "active" : ""}
-                    onClick={() => !world.active && onSwitch(world.id)}
+                    data-topia-history-id={world.id}
+                    onPointerDown={(event) => {
+                      if (!event.isPrimary || event.button !== 0) return;
+                      cancelPress();
+                      consumedPress.current = null;
+                      pressOrigin.current = {
+                        x: event.clientX,
+                        y: event.clientY,
+                      };
+                      pressTimer.current = setTimeout(
+                        () => askToDelete(world),
+                        600,
+                      );
+                    }}
+                    onPointerMove={(event) => {
+                      const origin = pressOrigin.current;
+                      if (
+                        origin &&
+                        Math.hypot(
+                          event.clientX - origin.x,
+                          event.clientY - origin.y,
+                        ) > 10
+                      ) {
+                        consumedPress.current = world.id;
+                        cancelPress();
+                      }
+                    }}
+                    onPointerUp={cancelPress}
+                    onPointerCancel={cancelPress}
+                    onPointerLeave={cancelPress}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      askToDelete(world);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Delete") {
+                        event.preventDefault();
+                        askToDelete(world);
+                      }
+                    }}
+                    onClick={(event) => {
+                      if (consumedPress.current === world.id) {
+                        event.preventDefault();
+                        consumedPress.current = null;
+                        return;
+                      }
+                      if (!world.active) onSwitch(world.id);
+                    }}
                   >
                     <span className="topia-history-thumbnail">
                       {world.thumbnail ? (
-                        <img src={world.thumbnail} alt="" />
+                        <img src={world.thumbnail} alt="" draggable={false} />
                       ) : (
                         <span aria-hidden="true">
                           {world.source === "mock" ? "🏡" : "☁️"}
@@ -460,6 +610,44 @@ export function TopiaStudioDialog({
           </>
         )}
       </section>
+      {deleteTarget && (
+        <div
+          className="topia-delete-overlay"
+          onMouseDown={(event) => {
+            if (!deleting && event.target === event.currentTarget)
+              setDeleteTarget(null);
+          }}
+        >
+          <section
+            className="topia-delete-dialog"
+            ref={confirmationRef}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="topia-delete-title"
+            aria-describedby="topia-delete-description"
+          >
+            <h3 id="topia-delete-title">删除「{deleteTarget.homeName}」？</h3>
+            <p id="topia-delete-description">
+              {studio.worlds.length === 1
+                ? "至少需要保留一个 Topia，请先创建新的世界。"
+                : `删除后无法恢复，纪念品与共同记忆会保留。${deleteTarget.active ? "当前 Topia 将切换到最近的剩余世界。" : ""}`}
+            </p>
+            {deleteError && <p role="alert">删除失败：{deleteError}</p>}
+            <footer>
+              <button disabled={deleting} onClick={() => setDeleteTarget(null)}>
+                取消
+              </button>
+              <button
+                className="danger-inline"
+                disabled={deleting || studio.worlds.length === 1}
+                onClick={() => void confirmDelete()}
+              >
+                {deleting ? "正在删除…" : "删除"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

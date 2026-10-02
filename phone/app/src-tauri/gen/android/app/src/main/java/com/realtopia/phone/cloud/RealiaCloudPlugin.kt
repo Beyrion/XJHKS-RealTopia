@@ -40,6 +40,7 @@ class CloudCompleteArgs {
   var timeoutMs: Int = 12_000
   var maxCompletionTokens: Int? = null
   var fast: Boolean = false
+  var temperature: Double? = null
 }
 
 /**
@@ -52,6 +53,7 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
   // block each other. Keep this bounded so weak networks cannot create an
   // unbounded number of sockets or model requests.
   private val worker: ExecutorService = Executors.newFixedThreadPool(2)
+  private val deadlines = Executors.newSingleThreadScheduledExecutor()
   private val preferences = activity.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
   @Command
@@ -90,6 +92,8 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun complete(invoke: Invoke) {
     val args = invoke.parseArgs(CloudCompleteArgs::class.java)
+    // Include time waiting behind another request in the harness's budget.
+    val deadline = android.os.SystemClock.elapsedRealtime() + args.timeoutMs.coerceIn(250, 300_000)
     worker.execute {
       try {
         require(args.prompt.isNotBlank() && args.prompt.length <= MAX_PROMPT_CHARS) {
@@ -103,7 +107,7 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
             put(JSONObject().put("role", "system").put("content", args.system ?: DEFAULT_SYSTEM))
             put(JSONObject().put("role", "user").put("content", args.prompt))
           })
-          put("temperature", 0.2)
+          put("temperature", (args.temperature ?: 0.2).coerceIn(0.0, 1.5))
           if (args.json) put("response_format", JSONObject().put("type", "json_object"))
           args.maxCompletionTokens?.let {
             put("max_completion_tokens", it.coerceIn(256, 16_384))
@@ -111,14 +115,18 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
           if (args.fast) {
             // Qwen 3.5/3.6/3.7 default to thinking mode. Qwen 3.8 Max is
             // thinking-first, but accepts a lower reasoning effort.
-            if (model.contains("qwen3.8", ignoreCase = true)) {
+            if (model.startsWith("deepseek", ignoreCase = true)) {
+              put("thinking", JSONObject().put("type", "disabled"))
+            } else if (model.contains("qwen3.8", ignoreCase = true)) {
               put("reasoning_effort", "low")
             } else {
               put("enable_thinking", false)
             }
           }
         }
-        val response = postJson("chat/completions", body, args.timeoutMs)
+        val remaining = (deadline - android.os.SystemClock.elapsedRealtime()).toInt()
+        require(remaining > 0) { "请求超时（等待云端队列）" }
+        val response = postJson("chat/completions", body, remaining)
         val content = response.optJSONArray("choices")
           ?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim().orEmpty()
         require(content.isNotEmpty()) { "cloud model returned empty content" }
@@ -143,13 +151,16 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
     )
     val connection = URL("${baseUrl.trimEnd('/')}/$relativePath").openConnection() as HttpURLConnection
     connection.requestMethod = "POST"
-    val timeoutMs = requestedTimeoutMs.coerceIn(3_000, 300_000)
+    val timeoutMs = requestedTimeoutMs.coerceIn(1, 300_000)
     connection.connectTimeout = minOf(timeoutMs, 10_000)
     connection.readTimeout = timeoutMs
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
     connection.setRequestProperty("Authorization", "Bearer $apiKey")
     connection.setRequestProperty("Accept", "application/json")
+    // A readTimeout applies to each read, not the whole HTTP exchange. Disconnect
+    // at the absolute request budget so slow streaming/connects cannot extend it.
+    val cancellation = deadlines.schedule({ connection.disconnect() }, timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
     try {
       connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
       val status = connection.responseCode
@@ -161,6 +172,7 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
       }
       return JSONObject(responseText)
     } finally {
+      cancellation.cancel(false)
       connection.disconnect()
     }
   }

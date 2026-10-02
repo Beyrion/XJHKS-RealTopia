@@ -27,11 +27,29 @@ pub fn classify_failure(error: &str) -> FailureKind {
 
 pub fn completion_budget(stage: &str) -> u32 {
     match stage {
-        "concept" | "review" => 2_048,
-        stage if stage.contains("repair") => 3_072,
-        stage if stage.contains("blueprint") => 2_048,
-        _ => 4_096,
+        "design-brief" => 768,
+        "concept" | "review" => 1_024,
+        stage if stage.contains("blueprint") => 1_536,
+        "memory" | "detail-plan" | "detail-review" => 1_024,
+        "souvenir-design" | "souvenir-review" => 768,
+        _ => 2_048,
     }
+}
+
+pub const GENERATION_BUDGET_MS: u32 = 40_000;
+
+/// Short per-stage caps share a single deadline, including repairs and queueing.
+pub fn request_budget(stage: &str, remaining_ms: u32) -> Result<u32, String> {
+    if remaining_ms < 500 {
+        return Err("Topia generation budget exhausted".into());
+    }
+    let cap = match stage {
+        "design-brief" => 7_000,
+        "concept" => 12_000,
+        stage if stage.contains("blueprint") => 12_000,
+        _ => 8_000,
+    };
+    Ok(remaining_ms.min(cap))
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +71,45 @@ struct SceneBlueprint {
     layout: String,
     #[serde(default)]
     features: Vec<BlueprintFeature>,
+    #[serde(default)]
+    island_shape: String,
+    #[serde(default)]
+    island_aspect: Option<f64>,
+    #[serde(default)]
+    island_depth: Option<f64>,
+    #[serde(default)]
+    room_shape: String,
+    #[serde(default)]
+    room_scale: Option<[f64; 2]>,
+    #[serde(default)]
+    massing: Vec<BlueprintMass>,
+    #[serde(default)]
+    furnishings: Vec<BlueprintPlacement>,
+    #[serde(default)]
+    plots: Vec<[f64; 2]>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlueprintMass {
+    kind: String,
+    position: [f64; 2],
+    size: [f64; 3],
+    #[serde(default)]
+    rotation: f64,
+    #[serde(default)]
+    support: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlueprintPlacement {
+    kind: String,
+    position: [f64; 2],
+    #[serde(default)]
+    rotation: f64,
+    #[serde(default)]
+    scale: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -964,7 +1021,7 @@ fn exterior_structure(
             structure_object(
                 "garden-portal-island",
                 TopiaPrefab::FloatingIsland,
-                [-3.85, 1.05, -2.35],
+                [-5.8, 1.05, -3.5],
                 [0.52, 0.52, 0.42],
                 vec![accent, trim, roof],
             ),
@@ -1239,13 +1296,522 @@ fn feature_position(
     }
 }
 
+fn bounded(value: f64, low: f64, high: f64, default: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(low, high)
+    } else {
+        default
+    }
+}
+
+fn apply_spatial_blueprint(
+    scene: &mut TopiaSceneConfig,
+    location: TopiaLocation,
+    b: &SceneBlueprint,
+    concept: &TopiaGenerationConcept,
+) {
+    let aspect = bounded(b.island_aspect.unwrap_or(1.0), 0.65, 1.45, 1.0);
+    let shape = selected_token(
+        &b.island_shape,
+        &[
+            "oval",
+            "crescent",
+            "split",
+            "elongated",
+            "terraced",
+            "hexagonal",
+        ],
+        0,
+    );
+    let islands: Vec<_> = scene
+        .objects
+        .iter_mut()
+        .filter(|o| o.prefab == TopiaPrefab::FloatingIsland && o.anchor_id.is_none())
+        .collect();
+    for island in islands {
+        island.scale = Some([aspect, 1.0, 1.0 / aspect]);
+        island
+            .params
+            .insert("shape".into(), Value::String(shape.into()));
+        island.params.insert(
+            "radius".into(),
+            Value::from(if location == TopiaLocation::Garden {
+                5.2
+            } else {
+                4.8
+            }),
+        );
+        island.params.insert(
+            "depth".into(),
+            Value::from(bounded(b.island_depth.unwrap_or(1.9), 0.9, 2.8, 1.9)),
+        );
+    }
+    if shape == "split" && location != TopiaLocation::Interior {
+        for (i, x) in [-2.7, 2.7].into_iter().enumerate() {
+            scene.objects.push(with_params(
+                structure_object(
+                    &format!("connected-islet-{i}"),
+                    TopiaPrefab::FloatingIsland,
+                    [x, -0.1, -0.4],
+                    [1.0, 1.0, 0.8],
+                    vec![concept.palette[0], 0x75657f, concept.palette[2]],
+                ),
+                &[("radius", 1.5), ("depth", 1.25)],
+            ));
+            scene.objects.push(with_params(
+                structure_object(
+                    &format!("islet-bridge-{i}"),
+                    TopiaPrefab::Block,
+                    [x / 2.0, 0.18, -0.4],
+                    [1.0; 3],
+                    vec![concept.palette[1]],
+                ),
+                &[("width", 2.0), ("height", 0.12), ("depth", 0.55)],
+            ));
+        }
+    }
+    if location == TopiaLocation::Exterior && !b.massing.is_empty() {
+        // The model owns the structural composition, not only a template selector.
+        scene.objects.retain(|o| {
+            o.layer != TopiaObjectLayer::Structure
+                || matches!(
+                    o.prefab,
+                    TopiaPrefab::FloatingIsland | TopiaPrefab::Door | TopiaPrefab::RoundWindow
+                )
+                || o.id.starts_with("islet-bridge")
+        });
+        for (i, mass) in b.massing.iter().take(7).enumerate() {
+            let prefab = match mass.kind.as_str() {
+                "block" => TopiaPrefab::Block,
+                "cylinder" => TopiaPrefab::Cylinder,
+                "cone" => TopiaPrefab::Cone,
+                "cloud" => TopiaPrefab::Cloud,
+                "crystal" => TopiaPrefab::Crystal,
+                "tower" => TopiaPrefab::Tower,
+                _ => continue,
+            };
+            let size = [
+                bounded(mass.size[0], 0.3, 3.6, 1.0),
+                bounded(mass.size[1], 0.4, 3.6, 1.5),
+                bounded(mass.size[2], 0.3, 2.8, 1.0),
+            ];
+            let mut o = structure_object(
+                &format!("designed-mass-{i}"),
+                prefab,
+                [
+                    bounded(mass.position[0], -2.1, 2.1, 0.0),
+                    0.2 + size[1] / 2.0,
+                    bounded(mass.position[1], -1.8, 1.8, 0.0),
+                ],
+                [1.0; 3],
+                vec![concept.palette[i % 3], concept.palette[(i + 1) % 3]],
+            );
+            if matches!(
+                prefab,
+                TopiaPrefab::Block | TopiaPrefab::Cylinder | TopiaPrefab::Cone
+            ) {
+                o = with_params(
+                    o,
+                    &[
+                        ("width", size[0]),
+                        ("height", size[1]),
+                        ("depth", size[2]),
+                        ("radius", size[0] / 2.0),
+                        ("radiusTop", size[0] / 2.0),
+                        ("radiusBottom", size[0] / 2.0),
+                    ],
+                );
+            } else {
+                o.scale = Some(size);
+            }
+            o.rotation = Some([0.0, bounded(mass.rotation, -3.2, 3.2, 0.0), 0.0]);
+            if let Some(parent) = mass
+                .support
+                .filter(|p| *p < i)
+                .and_then(|p| {
+                    scene
+                        .objects
+                        .iter()
+                        .find(|o| o.id == format!("designed-mass-{p}"))
+                })
+                .filter(|parent| {
+                    let h = parent
+                        .params
+                        .get("height")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(parent.scale.unwrap_or([1.0; 3])[1]);
+                    parent.position[1] + h / 2.0 + size[1] <= 7.0
+                })
+            {
+                let parent_height = parent
+                    .params
+                    .get("height")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(parent.scale.unwrap_or([1.0; 3])[1]);
+                o.position[0] =
+                    parent.position[0] + (o.position[0] - parent.position[0]).clamp(-0.35, 0.35);
+                o.position[2] =
+                    parent.position[2] + (o.position[2] - parent.position[2]).clamp(-0.35, 0.35);
+                o.position[1] = parent.position[1] + parent_height / 2.0 + size[1] / 2.0;
+                o.params
+                    .insert("supportObject".into(), Value::String(parent.id.clone()));
+            }
+            scene.objects.push(o);
+        }
+        // Keep navigation attached to the foremost designed volume.
+        if let Some(mass) = scene
+            .objects
+            .iter()
+            .find(|o| o.id == "designed-mass-0")
+            .cloned()
+        {
+            for door in scene
+                .objects
+                .iter_mut()
+                .filter(|o| o.prefab == TopiaPrefab::Door)
+            {
+                door.position = [
+                    mass.position[0],
+                    0.92,
+                    mass.position[2]
+                        + mass
+                            .params
+                            .get("depth")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(1.4)
+                            / 2.0
+                        + 0.035,
+                ];
+                door.rotation = None;
+            }
+        }
+    }
+    if location == TopiaLocation::Interior {
+        let room_shape = selected_token(&b.room_shape, &["rectangular", "terraced-loft"], 0);
+        let scale = b.room_scale.unwrap_or([1.3, 1.3]);
+        let sx = bounded(scale[0], 1.1, 1.5, 1.3);
+        let sz = bounded(scale[1], 1.1, 1.5, 1.3);
+        if let Some(shell) = scene
+            .objects
+            .iter_mut()
+            .find(|o| o.prefab == TopiaPrefab::RoomShell)
+        {
+            if !b.room_shape.is_empty() {
+                shell
+                    .params
+                    .insert("shape".into(), Value::String(room_shape.into()));
+            }
+            shell.scale = Some([sx, 1.0, sz]);
+        }
+        for o in &mut scene.objects {
+            if o.prefab != TopiaPrefab::RoomShell {
+                o.position[0] *= sx;
+                o.position[2] *= sz;
+            }
+        }
+        for placement in b.furnishings.iter().take(8) {
+            // Reuse IDs/relations but honor the model's functional zones.
+            let kind =
+                serde_json::from_value::<TopiaPrefab>(Value::String(placement.kind.clone())).ok();
+            if let Some(o) = scene.objects.iter_mut().find(|o| {
+                Some(o.prefab) == kind
+                    && o.layer == TopiaObjectLayer::Structure
+                    && o.prefab != TopiaPrefab::RoomShell
+            }) {
+                o.position[0] = bounded(placement.position[0], -2.5, 2.5, 0.0) * sx;
+                o.position[2] = bounded(placement.position[1], -1.6, 1.6, 0.0) * sz;
+                o.rotation = Some([0.0, bounded(placement.rotation, -3.2, 3.2, 0.0), 0.0]);
+                let scale = bounded(placement.scale.unwrap_or(1.0), 0.65, 1.1, 1.0);
+                o.scale = Some([scale; 3]);
+            }
+        }
+    }
+    if location == TopiaLocation::Garden {
+        let mut plots = b.plots.iter().take(5).copied().collect::<Vec<_>>();
+        if plots.is_empty() {
+            plots = match b.layout.as_str() {
+                "ring" | "courtyard" => (0..4)
+                    .map(|i| {
+                        let a = i as f64 * 1.57;
+                        [a.cos() * 2.0, a.sin() * 2.0]
+                    })
+                    .collect(),
+                "terraced" | "vertical" => vec![[-1.9, -1.2], [0.0, 0.0], [1.9, 1.2]],
+                "linear" => vec![[-2.0, 0.0], [0.0, 0.0], [2.0, 0.0]],
+                _ => vec![[-1.7, -1.0], [1.7, -1.0], [0.0, 1.35]],
+            };
+        }
+        for (i, p) in plots.iter().enumerate() {
+            let h = if matches!(b.layout.as_str(), "terraced" | "vertical") {
+                0.18 + i as f64 * 0.2
+            } else {
+                0.18
+            };
+            scene.objects.push(with_params(
+                structure_object(
+                    &format!("garden-bed-pad-{i}"),
+                    TopiaPrefab::Block,
+                    [
+                        bounded(p[0], -2.3, 2.3, 0.0) * aspect,
+                        h / 2.0 + 0.17,
+                        bounded(p[1], -2.0, 2.0, 0.0) / aspect,
+                    ],
+                    [1.0; 3],
+                    vec![concept.palette[1], 0x76513f],
+                ),
+                &[("width", 1.65), ("height", h), ("depth", 1.4)],
+            ));
+        }
+        fit_crop_slots(scene);
+    }
+}
+
+/// A room is a residence first. Symbolic assets never count as usable furniture.
+pub fn enforce_residential_room(scene: &mut TopiaSceneConfig, concept: &TopiaGenerationConcept) {
+    let mut room_scale = [1.3, 1.3];
+    if let Some(shell) = scene
+        .objects
+        .iter_mut()
+        .find(|o| o.prefab == TopiaPrefab::RoomShell)
+    {
+        let shape = if shell.params.get("shape").and_then(Value::as_str) == Some("terraced-loft") {
+            "terraced-loft"
+        } else {
+            "rectangular"
+        };
+        shell
+            .params
+            .insert("shape".into(), Value::String(shape.into()));
+        shell.params.insert("residential".into(), Value::Bool(true));
+        shell
+            .params
+            .insert("maxSouvenirExhibits".into(), Value::from(3));
+        let s = shell.scale.unwrap_or([1.3, 1.0, 1.3]);
+        room_scale = [bounded(s[0], 1.1, 1.5, 1.3), bounded(s[2], 1.1, 1.5, 1.3)];
+        shell.scale = Some([room_scale[0], 1.0, room_scale[1]]);
+    }
+    let [sx, sz] = room_scale;
+    for (kind, id, p) in [
+        (TopiaPrefab::Bed, "room-bed", [-1.5 * sx, 0.2, 0.9 * sz]),
+        (
+            TopiaPrefab::Desk,
+            "room-work-desk",
+            [1.5 * sx, 1.0, -1.0 * sz],
+        ),
+        (
+            TopiaPrefab::Chair,
+            "room-work-chair",
+            [1.5 * sx, 0.3, 0.15 * sz],
+        ),
+        (TopiaPrefab::Shelf, "room-storage", [0.0, 1.1, -1.8 * sz]),
+    ] {
+        if !scene.objects.iter().any(|o| {
+            o.prefab == kind
+                && o.layer == TopiaObjectLayer::Structure
+                && o.params.get("detailKind").is_none()
+        }) {
+            scene.objects.push(structure_object(
+                id,
+                kind,
+                p,
+                [0.9; 3],
+                concept.palette.to_vec(),
+            ));
+        }
+    }
+    let side = scene
+        .objects
+        .iter()
+        .find(|o| o.prefab == TopiaPrefab::Bed && o.layer == TopiaObjectLayer::Structure)
+        .map(|o| if o.position[0] < 0.0 { -1.0 } else { 1.0 })
+        .unwrap_or(-1.0);
+    let mut desk_position = [0.0; 3];
+    for o in &mut scene.objects {
+        if o.layer != TopiaObjectLayer::Structure {
+            continue;
+        }
+        let role = match o.prefab {
+            TopiaPrefab::Bed => {
+                o.position[0] = side * bounded(o.position[0].abs() / sx, 1.3, 1.6, 1.5) * sx;
+                o.position[2] = bounded(o.position[2] / sz, 0.7, 1.0, 0.9) * sz;
+                o.rotation = Some([
+                    0.0,
+                    bounded(o.rotation.unwrap_or([0.0; 3])[1], -0.2, 0.2, 0.0),
+                    0.0,
+                ]);
+                "sleep"
+            }
+            TopiaPrefab::Desk => {
+                o.position[0] = -side * bounded(o.position[0].abs() / sx, 1.3, 1.7, 1.5) * sx;
+                o.position[2] = bounded(o.position[2] / sz, -1.2, -0.8, -1.0) * sz;
+                o.rotation = Some([0.0, 0.0, 0.0]);
+                desk_position = o.position;
+                "work"
+            }
+            TopiaPrefab::Shelf if o.params.get("detailKind").is_none() => {
+                o.position[0] = bounded(o.position[0] / sx, -0.2, 0.2, 0.0) * sx;
+                o.position[2] = -1.8 * sz;
+                o.rotation = Some([0.0, std::f64::consts::FRAC_PI_2, 0.0]);
+                "storage"
+            }
+            TopiaPrefab::Nightstand => {
+                o.position[0] = side * 2.6 * sx;
+                o.position[2] = 1.2 * sz;
+                "sleep"
+            }
+            _ => continue,
+        };
+        o.params
+            .insert("roomFunction".into(), Value::String(role.into()));
+        o.scale = Some([bounded(o.scale.unwrap_or([0.9; 3])[0], 0.85, 1.0, 0.9); 3]);
+        if o.animation.as_deref() == Some("float") {
+            o.animation = None;
+        }
+    }
+    for o in &mut scene.objects {
+        if o.prefab == TopiaPrefab::Chair && o.layer == TopiaObjectLayer::Structure {
+            o.position = [desk_position[0], 0.3, desk_position[2] + 1.12 * sz];
+            o.rotation = Some([0.0, 0.0, 0.0]);
+            o.params
+                .insert("roomFunction".into(), Value::String("work".into()));
+        }
+        if o.id == "room-window" {
+            o.position = [sx, 1.9, -2.05 * sz];
+            o.rotation = Some([0.0; 3]);
+            o.scale = Some([0.75; 3]);
+        }
+    }
+    if !scene.objects.iter().any(|o| o.id == "room-entry-door") {
+        scene.objects.push(structure_object(
+            "room-entry-door",
+            TopiaPrefab::Door,
+            [0.0, 1.1, 2.1 * sz],
+            [0.8; 3],
+            concept.palette.to_vec(),
+        ));
+    }
+    if !scene.objects.iter().any(|o| o.id == "room-display-cabinet") {
+        let mut cabinet = structure_object(
+            "room-display-cabinet",
+            TopiaPrefab::Shelf,
+            [side * 2.5 * sx, 0.2, -0.85 * sz],
+            [1.0; 3],
+            concept.palette.to_vec(),
+        );
+        cabinet.rotation = Some([0.0, std::f64::consts::FRAC_PI_2, 0.0]);
+        cabinet
+            .params
+            .insert("detailKind".into(), Value::String("display-cabinet".into()));
+        cabinet
+            .params
+            .insert("roomFunction".into(), Value::String("display".into()));
+        scene.objects.push(cabinet);
+    }
+    for o in &mut scene.objects {
+        if o.id == "room-entry-door" {
+            o.position = [0.0, 1.1, 2.1 * sz];
+            o.rotation = None;
+        }
+        if o.id == "room-display-cabinet" {
+            o.position = [side * 2.5 * sx, 0.2, -0.85 * sz];
+            o.rotation = Some([0.0, std::f64::consts::FRAC_PI_2, 0.0]);
+            o.scale = Some([1.0; 3]);
+        }
+    }
+}
+
+pub fn fit_crop_slots(scene: &mut TopiaSceneConfig) {
+    let slots: Vec<_> = scene
+        .objects
+        .iter()
+        .filter(|o| o.id.starts_with("garden-bed-pad-"))
+        .map(|o| {
+            (
+                [
+                    o.position[0],
+                    o.position[1]
+                        + o.params
+                            .get("height")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.18)
+                            / 2.0
+                        + 0.08,
+                    o.position[2],
+                ],
+                o.rotation,
+            )
+        })
+        .collect();
+    if slots.is_empty() {
+        return;
+    }
+    let count = scene
+        .objects
+        .iter()
+        .filter(|o| o.prefab == TopiaPrefab::CropPlot)
+        .count();
+    let per_bed = count.div_ceil(slots.len());
+    let columns = (per_bed as f64).sqrt().ceil().max(1.0) as usize;
+    for (i, crop) in scene
+        .objects
+        .iter_mut()
+        .filter(|o| o.prefab == TopiaPrefab::CropPlot)
+        .enumerate()
+    {
+        let (p, r) = slots[i % slots.len()];
+        let cell = i / slots.len();
+        let rows = per_bed.div_ceil(columns);
+        crop.position = [
+            p[0] + (cell % columns) as f64 * 1.55 / columns as f64
+                - (columns - 1) as f64 * 0.775 / columns as f64,
+            p[1],
+            p[2] + (cell / columns) as f64 * 1.3 / rows as f64
+                - (rows - 1) as f64 * 0.65 / rows as f64,
+        ];
+        crop.rotation = r;
+        crop.scale = Some([0.9 / columns as f64; 3]);
+        crop.animation = None;
+    }
+}
+
+pub fn blueprint_position_normalizations(value: &str) -> usize {
+    let Ok(compact) = extract_json(value) else {
+        return 0;
+    };
+    ["massing", "furnishings"]
+        .iter()
+        .filter_map(|field| compact.get(field).and_then(Value::as_array))
+        .flatten()
+        .filter(|item| {
+            item.get("position")
+                .and_then(Value::as_array)
+                .is_some_and(|p| p.len() == 3 && p.iter().all(Value::is_number))
+        })
+        .count()
+}
+
 pub fn compile_blueprint(
     value: &str,
     location: TopiaLocation,
     concept: &TopiaGenerationConcept,
 ) -> Result<TopiaSceneConfig, String> {
+    let mut compact = extract_json(value)?;
+    // Observed cloud output sometimes uses [x,y,z] despite the compact [x,z]
+    // contract. Height is compiler-owned: keep x/z instead of retrying an
+    // otherwise valid architecture or accepting a floating model-supplied y.
+    for field in ["massing", "furnishings"] {
+        if let Some(items) = compact.get_mut(field).and_then(Value::as_array_mut) {
+            for item in items {
+                if let Some(p) = item.get_mut("position").and_then(Value::as_array_mut) {
+                    if p.len() == 3 && p.iter().all(Value::is_number) {
+                        p.remove(1);
+                    }
+                }
+            }
+        }
+    }
     let blueprint: SceneBlueprint =
-        serde_json::from_value(extract_json(value)?).map_err(|error| error.to_string())?;
+        serde_json::from_value(compact).map_err(|error| error.to_string())?;
     let mut scene = fallback_scene(location, concept)?;
     if let Some(yaw) = blueprint.camera_yaw {
         scene.camera.yaw = yaw;
@@ -1338,7 +1904,12 @@ pub fn compile_blueprint(
         }
     }
 
-    let feature_limit = (2.0 + density * 4.0).round() as usize;
+    apply_spatial_blueprint(&mut scene, location, &blueprint, concept);
+    let feature_limit = if location == TopiaLocation::Interior {
+        1
+    } else {
+        (2.0 + density * 4.0).round() as usize
+    };
     for (index, feature) in blueprint
         .features
         .into_iter()
@@ -1348,6 +1919,11 @@ pub fn compile_blueprint(
         let Some(prefab) = feature_prefab(&feature.kind) else {
             continue;
         };
+        if location == TopiaLocation::Interior
+            && !matches!(prefab, TopiaPrefab::Plant | TopiaPrefab::Lantern)
+        {
+            continue;
+        }
         let angle = index as f64 * 2.399_963 + (silhouette_bias % 100) as f64 / 100.0;
         let radius = 1.25 + index as f64 * 0.42;
         let emphasis = if feature.emphasis.is_finite() {
@@ -1355,16 +1931,19 @@ pub fn compile_blueprint(
         } else {
             default_emphasis()
         };
-        let base_y = match location {
-            TopiaLocation::Exterior => 0.65,
-            TopiaLocation::Interior => 0.15,
-            TopiaLocation::Garden => 0.35,
+        let base_y = if prefab == TopiaPrefab::Cloud {
+            0.8
+        } else {
+            0.2
         };
+        let mut position = feature_position(layout, index, angle, radius, base_y, 0.0);
+        // Emphasis controls size, never unsupported elevation.
+        position[1] = base_y;
         scene.objects.push(TopiaObjectConfig {
             id: format!("blueprint-{:?}-{index}", location).to_ascii_lowercase(),
             prefab,
             layer: TopiaObjectLayer::Decoration,
-            position: feature_position(layout, index, angle, radius, base_y, emphasis),
+            position,
             rotation: Some([0.0, -angle, 0.0]),
             scale: Some([0.55 + emphasis * 0.45; 3]),
             colors: vec![feature
@@ -1376,11 +1955,445 @@ pub fn compile_blueprint(
             anchor_id: None,
             task_id: None,
             memory_ids: vec![],
-            animation: feature.animation,
+            animation: feature.animation.filter(|a| {
+                a != "float" || matches!(prefab, TopiaPrefab::Cloud | TopiaPrefab::WateringOrb)
+            }),
         });
+    }
+    if location == TopiaLocation::Interior {
+        enforce_residential_room(&mut scene, concept);
     }
     normalize_scene_contract(&mut scene, location)?;
     Ok(scene)
+}
+
+pub fn parse_design_brief(text: &str) -> Result<Value, String> {
+    let brief = extract_json(text)?;
+    if !brief
+        .get("keywords")
+        .and_then(Value::as_array)
+        .is_some_and(|v| {
+            (4..=8).contains(&v.len())
+                && v.iter().all(|v| {
+                    v.as_str()
+                        .is_some_and(|s| !s.trim().is_empty() && s.chars().count() <= 60)
+                })
+        })
+        || ["exterior", "interior", "garden"].iter().any(|k| {
+            !brief
+                .get(k)
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty() && s.chars().count() <= 500)
+        })
+    {
+        return Err("design brief needs concrete keywords and three spatial designs".into());
+    }
+    Ok(brief)
+}
+
+pub fn parse_souvenir_design(text: &str) -> Result<Value, String> {
+    let v = extract_json(text)?;
+    let name = v["name"]
+        .as_str()
+        .filter(|s| super::valid_text(s, 28))
+        .ok_or("invalid souvenir name")?;
+    let description = v["description"]
+        .as_str()
+        .filter(|s| super::valid_text(s, 180))
+        .ok_or("invalid souvenir description")?;
+    let kind = v["modelKind"]
+        .as_str()
+        .filter(|s| {
+            matches!(
+                *s,
+                "moon-rabbit-doll"
+                    | "constellation-badge"
+                    | "firefly-bottle"
+                    | "winged-book"
+                    | "star-compass"
+                    | "sprout-lantern"
+                    | "cloud-whale"
+                    | "planet-teacup"
+                    | "echo-shell"
+                    | "clockwork-bird"
+                    | "aurora-key"
+                    | "dream-camera"
+                    | "flaming-pan-sculpture"
+                    | "mnn-engine-core"
+            )
+        })
+        .ok_or("unsupported souvenir model")?;
+    let palette: Vec<_> = v["colors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(3)
+        .filter_map(parse_flexible_color)
+        .collect();
+    if palette.len() != 3 {
+        return Err("souvenir needs three valid colors".into());
+    }
+    let ornaments: Vec<_> = v["ornaments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(3)
+        .filter_map(Value::as_str)
+        .filter(|s| matches!(*s, "star" | "gem" | "leaf" | "ring" | "ribbon"))
+        .collect();
+    Ok(
+        serde_json::json!({"name":name,"description":description,"emoji":v["emoji"].as_str().filter(|s|super::valid_text(s,8)).unwrap_or("✨"),
+        "modelKind":kind,"colors":palette,"ornaments":ornaments,
+        "material":v["material"].as_str().filter(|s|matches!(*s,"wood"|"porcelain"|"paper"|"metal"|"glass")).unwrap_or("porcelain"),
+        "preferredLocation":v["preferredLocation"].as_str().filter(|s|matches!(*s,"exterior"|"interior"|"garden")).unwrap_or("interior")}),
+    )
+}
+
+pub fn parse_detail_plan(text: &str) -> Result<Value, String> {
+    let value = extract_json(text)?;
+    let details = value
+        .get("details")
+        .and_then(Value::as_array)
+        .ok_or("detail plan needs details array")?;
+    if details.is_empty() || details.len() > 9 {
+        return Err("detail plan needs one to nine bounded additions".into());
+    }
+    for detail in details {
+        if !matches!(
+            detail.get("location").and_then(Value::as_str),
+            Some("exterior" | "interior" | "garden")
+        ) || !matches!(
+            detail.get("kind").and_then(Value::as_str),
+            Some("pergola" | "planter-box" | "stone-path" | "balustrade" | "book-nook")
+        ) || !detail
+            .get("position")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.len() == 2 && a.iter().all(|v| v.as_f64().is_some()))
+        {
+            return Err(
+                "detail plan needs allowlisted kind, location and numeric [x,z] position".into(),
+            );
+        }
+    }
+    Ok(value)
+}
+
+pub fn apply_detail_plan(world: &mut super::TopiaWorldConfig, plan: &Value) -> Result<(), String> {
+    let mut counts = [0usize; 3];
+    let colors = world.profile.accent_colors.clone();
+    for (i, detail) in plan["details"]
+        .as_array()
+        .ok_or("missing detail array")?
+        .iter()
+        .enumerate()
+    {
+        let location = match detail["location"].as_str() {
+            Some("exterior") => TopiaLocation::Exterior,
+            Some("interior") => TopiaLocation::Interior,
+            _ => TopiaLocation::Garden,
+        };
+        let index = match location {
+            TopiaLocation::Exterior => 0,
+            TopiaLocation::Interior => 1,
+            TopiaLocation::Garden => 2,
+        };
+        let scene = super::scene_mut(world, location);
+        if counts[index]
+            >= if location == TopiaLocation::Interior {
+                2
+            } else {
+                3
+            }
+            || scene.objects.len() >= 32
+        {
+            continue;
+        }
+        let kind = detail["kind"].as_str().ok_or("missing craft kind")?;
+        if location == TopiaLocation::Interior && !matches!(kind, "book-nook" | "planter-box") {
+            continue;
+        }
+        let p = detail["position"]
+            .as_array()
+            .ok_or("missing craft position")?;
+        let mut object = structure_object(
+            &format!("crafted-detail-{i}"),
+            TopiaPrefab::Block,
+            [
+                bounded(p[0].as_f64().unwrap_or(0.0), -3.8, 3.8, 0.0),
+                0.2,
+                bounded(p[1].as_f64().unwrap_or(0.0), -3.0, 3.0, 0.0),
+            ],
+            [bounded(detail["scale"].as_f64().unwrap_or(0.9), 0.55, 1.25, 0.9); 3],
+            colors.to_vec(),
+        );
+        object
+            .params
+            .insert("detailKind".into(), Value::String(kind.into()));
+        object.rotation = Some([
+            0.0,
+            bounded(detail["rotation"].as_f64().unwrap_or(0.0), -3.2, 3.2, 0.0),
+            0.0,
+        ]);
+        if location == TopiaLocation::Interior {
+            // Accents stay at the perimeter; never take over the living/working aisle.
+            object.position[0] = if p[0].as_f64().unwrap_or(1.0) < 0.0 {
+                -2.65
+            } else {
+                2.65
+            };
+            object.position[2] = 1.65;
+            object.scale = Some([0.55; 3]);
+        }
+        scene.objects.push(object);
+        counts[index] += 1;
+    }
+    Ok(())
+}
+
+/// Palette-independent, ID-independent structural signatures for novelty checks.
+pub fn geometry_signature(scene: &TopiaSceneConfig) -> Vec<String> {
+    let mut tokens: Vec<_> = scene
+        .objects
+        .iter()
+        .filter(|o| o.layer == TopiaObjectLayer::Structure || o.prefab == TopiaPrefab::CropPlot)
+        .map(|o| {
+            let quantize = |v: [f64; 3]| v.map(|v| (v * 2.0).round() as i32);
+            let params: std::collections::BTreeMap<_, _> = o
+                .params
+                .iter()
+                .filter(|(k, _)| {
+                    matches!(
+                        k.as_str(),
+                        "shape" | "width" | "height" | "depth" | "radius"
+                    )
+                })
+                .collect();
+            format!(
+                "{:?}:{:?}:{:?}:{:?}:{}",
+                o.prefab,
+                quantize(o.position),
+                quantize(o.scale.unwrap_or([1.0; 3])),
+                quantize(o.rotation.unwrap_or([0.0; 3])),
+                serde_json::to_string(&params).unwrap_or_default()
+            )
+        })
+        .collect();
+    tokens.sort();
+    tokens
+}
+
+pub fn spatial_summary(scene: &TopiaSceneConfig) -> Value {
+    let objects: Vec<_> = scene
+        .objects
+        .iter()
+        .filter(|o| o.layer == TopiaObjectLayer::Structure)
+        .filter(|o| {
+            matches!(
+                o.prefab,
+                TopiaPrefab::FloatingIsland
+                    | TopiaPrefab::RoomShell
+                    | TopiaPrefab::Bed
+                    | TopiaPrefab::Desk
+                    | TopiaPrefab::Shelf
+            ) || o.id.starts_with("designed-mass-")
+                || o.id.starts_with("garden-bed-pad-")
+        })
+        .take(9)
+        .map(|o| {
+            serde_json::json!({
+                "kind": o.prefab, "p": o.position.map(|v| (v * 2.0).round() / 2.0),
+                "s": o.scale, "shape": o.params.get("shape"),
+            })
+        })
+        .collect();
+    serde_json::json!({"objects": objects})
+}
+
+pub fn compile_novel_blueprint(
+    text: &str,
+    location: TopiaLocation,
+    concept: &TopiaGenerationConcept,
+    recent: &[TopiaSceneConfig],
+) -> Result<TopiaSceneConfig, String> {
+    let v = extract_json(text)?;
+    let field = match location {
+        TopiaLocation::Exterior => "massing",
+        TopiaLocation::Interior => "furnishings",
+        TopiaLocation::Garden => "plots",
+    };
+    if !v
+        .get(field)
+        .and_then(Value::as_array)
+        .is_some_and(|v| v.len() >= 3)
+    {
+        let keys = v
+            .as_object()
+            .map(|o| o.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        return Err(format!("{field} must specify at least three concrete geometry/placement entries; a template and colors alone cannot build a distinct scene. Received keys: {}", keys.join(",")));
+    }
+    let scene = compile_blueprint(text, location, concept)?;
+    let signature = geometry_signature(&scene);
+    for prior in recent {
+        let old = geometry_signature(prior);
+        let overlap = signature.iter().filter(|t| old.contains(t)).count();
+        if overlap * 100 >= signature.len().max(old.len()) * 85 {
+            return Err("geometry repeats a recent scene: change island outline/massing, room functional zones, or crop topology; changing palette is not a repair".into());
+        }
+    }
+    Ok(scene)
+}
+
+#[derive(Deserialize)]
+struct IterationPlan {
+    additions: Vec<IterationAddition>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IterationAddition {
+    location: TopiaLocation,
+    kind: String,
+    #[serde(default)]
+    color: Option<Value>,
+    #[serde(default)]
+    memory_ids: Vec<String>,
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
+pub fn apply_iteration(
+    text: &str,
+    current: &super::TopiaWorldConfig,
+    input: &super::TopiaGenerationInput,
+) -> Result<super::TopiaWorldConfig, String> {
+    use std::hash::{Hash, Hasher};
+    let plan: IterationPlan =
+        serde_json::from_value(extract_json(text)?).map_err(|e| e.to_string())?;
+    if plan.additions.len() > 6 {
+        return Err("iteration has too many additions".into());
+    }
+    let mut world = current.clone();
+    for addition in plan.additions {
+        if addition
+            .memory_ids
+            .iter()
+            .any(|id| !input.context.memories.iter().any(|m| &m.id == id))
+            || addition
+                .task_id
+                .as_ref()
+                .is_some_and(|id| !input.context.quests.iter().any(|q| &q.id == id))
+        {
+            return Err("iteration invented personal relation IDs".into());
+        }
+        if addition.memory_ids.is_empty() && addition.task_id.is_none() {
+            continue;
+        }
+        if [
+            &world.scenes.exterior,
+            &world.scenes.interior,
+            &world.scenes.garden,
+        ]
+        .iter()
+        .any(|scene| {
+            scene.objects.iter().any(|o| {
+                (!addition.memory_ids.is_empty()
+                    && addition
+                        .memory_ids
+                        .iter()
+                        .all(|id| o.memory_ids.contains(id)))
+                    || (addition.task_id.is_some() && o.task_id == addition.task_id)
+            })
+        }) {
+            continue;
+        }
+        let scene = super::scene_mut(&mut world, addition.location);
+        if scene.objects.len() >= 36 || scene.landmarks.len() >= 8 {
+            continue;
+        }
+        if scene.objects.iter().any(|o| {
+            !addition.memory_ids.is_empty()
+                && addition
+                    .memory_ids
+                    .iter()
+                    .all(|id| o.memory_ids.contains(id))
+                || addition.task_id.is_some() && o.task_id == addition.task_id
+        }) {
+            continue;
+        }
+        let prefab = if addition.memory_ids.is_empty() {
+            TopiaPrefab::CropPlot
+        } else {
+            feature_prefab(&addition.kind).ok_or("unsupported symbolic iteration feature")?
+        };
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        addition.memory_ids.hash(&mut hash);
+        addition.task_id.hash(&mut hash);
+        let id = format!("evolution-{:x}", hash.finish());
+        let anchor = format!("{id}-anchor");
+        let i = scene.objects.len() % 6;
+        scene.objects.push(TopiaObjectConfig {
+            id: id.clone(),
+            prefab,
+            layer: if addition.memory_ids.is_empty() {
+                TopiaObjectLayer::Crop
+            } else {
+                TopiaObjectLayer::Souvenir
+            },
+            position: [-2.0 + i as f64 * 0.65, 0.25, 1.5],
+            rotation: None,
+            scale: Some([0.65; 3]),
+            colors: vec![addition
+                .color
+                .as_ref()
+                .and_then(parse_flexible_color)
+                .unwrap_or(current.profile.accent_colors[0])],
+            params: HashMap::new(),
+            anchor_id: Some(anchor.clone()),
+            task_id: addition.task_id.clone(),
+            memory_ids: addition.memory_ids.clone(),
+            animation: if addition.memory_ids.is_empty() {
+                None
+            } else {
+                Some("sparkle".into())
+            },
+        });
+        let title = input
+            .context
+            .memories
+            .iter()
+            .find(|m| addition.memory_ids.contains(&m.id))
+            .map(|m| m.title.as_str())
+            .or_else(|| {
+                input
+                    .context
+                    .quests
+                    .iter()
+                    .find(|q| Some(&q.id) == addition.task_id.as_ref())
+                    .map(|q| q.title.as_str())
+            })
+            .unwrap_or("新的收藏");
+        scene.landmarks.push(super::TopiaLandmark {
+            id,
+            anchor_id: anchor,
+            location: addition.location,
+            emoji: "✨".into(),
+            label: title.chars().take(36).collect(),
+            eyebrow: "旅程的纪念".into(),
+            description: "最近的经历在这里留下了一个象征。".into(),
+            fallback_placement: super::TopiaPlacement {
+                left: "50%".into(),
+                top: "50%".into(),
+            },
+            memory_ids: addition.memory_ids,
+            task_ids: addition.task_id.into_iter().collect(),
+            person_ids: vec![],
+        });
+    }
+    fit_crop_slots(&mut world.scenes.garden);
+    world.revision = current.revision.saturating_add(1);
+    super::validate_world(&world)?;
+    Ok(world)
 }
 
 pub fn fallback_summary(stage: &str, error: &str) -> String {
@@ -1393,6 +2406,263 @@ pub fn fallback_summary(stage: &str, error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn concept() -> TopiaGenerationConcept {
+        super::super::parse_concept(r##"{"title":"测试","archetype":"具体结构","palette":["#88ccff","#bb7755","#ccaa66"]}"##).unwrap()
+    }
+
+    #[test]
+    fn cloud_three_axis_position_keeps_footprint_but_not_floating_height() {
+        let scene = compile_blueprint(
+            r#"{"massing":[{"kind":"block","position":[1,100,-1],"size":[1,2,1]}]}"#,
+            TopiaLocation::Exterior,
+            &concept(),
+        )
+        .unwrap();
+        let mass = scene
+            .objects
+            .iter()
+            .find(|o| o.id == "designed-mass-0")
+            .unwrap();
+        assert_eq!(mass.position, [1.0, 1.2, -1.0]);
+        assert!(compile_blueprint(
+            r#"{"massing":[{"kind":"block","position":[1,2,3,4],"size":[1,2,1]}]}"#,
+            TopiaLocation::Exterior,
+            &concept()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn room_is_a_residence_even_if_blueprint_omits_usable_furniture() {
+        let scene = compile_blueprint(
+            r#"{"roomShape":"cloud-ring","furnishings":[],"features":[{"kind":"observatory"}]}"#,
+            TopiaLocation::Interior,
+            &concept(),
+        )
+        .unwrap();
+        for kind in [
+            TopiaPrefab::Bed,
+            TopiaPrefab::Desk,
+            TopiaPrefab::Chair,
+            TopiaPrefab::Shelf,
+        ] {
+            assert!(scene.objects.iter().any(|o| o.prefab == kind
+                && o.layer == TopiaObjectLayer::Structure
+                && o.params.get("detailKind").is_none()));
+        }
+        let shell = scene
+            .objects
+            .iter()
+            .find(|o| o.prefab == TopiaPrefab::RoomShell)
+            .unwrap();
+        assert_eq!(shell.params["shape"], "rectangular");
+        assert_eq!(shell.params["residential"], true);
+        let bed = scene
+            .objects
+            .iter()
+            .find(|o| o.prefab == TopiaPrefab::Bed && o.layer == TopiaObjectLayer::Structure)
+            .unwrap();
+        let desk = scene
+            .objects
+            .iter()
+            .find(|o| o.prefab == TopiaPrefab::Desk && o.layer == TopiaObjectLayer::Structure)
+            .unwrap();
+        assert!(bed.position[0] * desk.position[0] < 0.0);
+        assert!(scene.objects.iter().any(|o| o.id == "room-entry-door"));
+        assert!(
+            scene
+                .objects
+                .iter()
+                .any(|o| o.params.get("detailKind").and_then(Value::as_str)
+                    == Some("display-cabinet"))
+        );
+    }
+
+    #[test]
+    fn interior_detail_pass_cannot_turn_room_into_outdoor_exhibition() {
+        let mut world = super::super::mock_world().unwrap();
+        let plan=parse_detail_plan(r#"{"details":[{"location":"interior","kind":"pergola","position":[0,0]},{"location":"interior","kind":"book-nook","position":[0,0]},{"location":"interior","kind":"planter-box","position":[0,0]},{"location":"interior","kind":"book-nook","position":[0,0]}]}"#).unwrap();
+        apply_detail_plan(&mut world, &plan).unwrap();
+        let details: Vec<_> = world
+            .scenes
+            .interior
+            .objects
+            .iter()
+            .filter(|o| o.id.starts_with("crafted-detail-"))
+            .collect();
+        assert_eq!(details.len(), 2);
+        assert!(details.iter().all(|o| o.params["detailKind"] != "pergola"));
+    }
+
+    #[test]
+    fn same_palette_can_produce_different_geometry_in_all_views() {
+        for (location, a, b) in [
+            (
+                TopiaLocation::Exterior,
+                r#"{"islandShape":"crescent","massing":[{"kind":"block","position":[-1,0],"size":[1,2,1]},{"kind":"cylinder","position":[1,0],"size":[1,1,1]},{"kind":"cone","position":[0,-1],"size":[1,2,1]}]}"#,
+                r#"{"islandShape":"split","massing":[{"kind":"block","position":[0,1],"size":[2,1,1]},{"kind":"block","position":[-1,-1],"size":[1,3,1]},{"kind":"cloud","position":[1,-1],"size":[1,1,1]}]}"#,
+            ),
+            (
+                TopiaLocation::Interior,
+                r#"{"roomShape":"rectangular","furnishings":[{"kind":"bed","position":[-1,1]},{"kind":"desk","position":[1,-1]},{"kind":"shelf","position":[2,0]}]}"#,
+                r#"{"roomShape":"cantilever-loft","roomScale":[1.15,0.85],"furnishings":[{"kind":"bed","position":[1,0]},{"kind":"desk","position":[-1,1]},{"kind":"shelf","position":[-2,-1]}]}"#,
+            ),
+            (
+                TopiaLocation::Garden,
+                r#"{"layout":"ring","plots":[[-2,0],[0,2],[2,0]]}"#,
+                r#"{"layout":"terraced","plots":[[-2,-1],[0,0],[2,1]]}"#,
+            ),
+        ] {
+            let first = compile_novel_blueprint(a, location, &concept(), &[]).unwrap();
+            let second =
+                compile_novel_blueprint(b, location, &concept(), &[first.clone()]).unwrap();
+            assert_ne!(geometry_signature(&first), geometry_signature(&second));
+            assert!(
+                compile_novel_blueprint(a, location, &concept(), &[first]).is_err(),
+                "repetition must request a geometric repair"
+            );
+        }
+    }
+
+    #[test]
+    fn high_emphasis_does_not_levitate_grounded_features() {
+        let scene = compile_blueprint(r#"{"layout":"vertical","features":[{"kind":"plant","animation":"float","emphasis":1},{"kind":"crystal","animation":"float","emphasis":1}]}"#, TopiaLocation::Exterior, &concept()).unwrap();
+        for object in scene
+            .objects
+            .iter()
+            .filter(|o| o.id.starts_with("blueprint-"))
+        {
+            assert_eq!(object.position[1], 0.2);
+            assert!(object.animation.is_none());
+        }
+    }
+
+    #[test]
+    fn transferred_crops_follow_new_supported_beds() {
+        let mut scene = compile_blueprint(
+            r#"{"layout":"terraced","plots":[[-2,-1],[0,0],[2,1]]}"#,
+            TopiaLocation::Garden,
+            &concept(),
+        )
+        .unwrap();
+        for crop in scene
+            .objects
+            .iter_mut()
+            .filter(|o| o.prefab == TopiaPrefab::CropPlot)
+        {
+            crop.position = [7.0, 6.0, 7.0];
+        }
+        fit_crop_slots(&mut scene);
+        for crop in scene
+            .objects
+            .iter()
+            .filter(|o| o.prefab == TopiaPrefab::CropPlot)
+        {
+            assert!(scene
+                .objects
+                .iter()
+                .any(|pad| pad.id.starts_with("garden-bed-pad-")
+                    && pad.position[0] == crop.position[0]
+                    && pad.position[2] == crop.position[2]
+                    && crop.position[1] > pad.position[1]));
+        }
+    }
+
+    #[test]
+    fn requests_share_a_bounded_budget() {
+        assert_eq!(request_budget("concept", 20_000).unwrap(), 12_000);
+        assert_eq!(request_budget("garden-blueprint", 750).unwrap(), 750);
+        assert!(request_budget("concept-repair-1", 200).is_err());
+        assert_eq!(GENERATION_BUDGET_MS, 40_000);
+    }
+
+    #[test]
+    fn detail_pass_preserves_core_geometry_and_bounds_additions() {
+        let mut world = super::super::mock_world().unwrap();
+        let original = world.scenes.exterior.objects.clone();
+        let plan=parse_detail_plan(r#"{"details":[{"location":"exterior","kind":"pergola","position":[99,-99],"scale":9}]}"#).unwrap();
+        apply_detail_plan(&mut world, &plan).unwrap();
+        assert_eq!(
+            serde_json::to_value(&world.scenes.exterior.objects[..original.len()]).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+        let object = world.scenes.exterior.objects.last().unwrap();
+        assert_eq!(object.position, [3.8, 0.2, -3.0]);
+        assert_eq!(object.scale, Some([1.25; 3]));
+        assert!(parse_detail_plan(
+            r#"{"details":[{"location":"sky","kind":"code","position":[0,0]}]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn souvenir_design_keeps_allowed_geometry_and_normalizes_colors() {
+        let design=parse_souvenir_design(r##"{"name":"风芽灯","description":"一起照料的绿意变成了温柔的小灯。","modelKind":"sprout-lantern","colors":["#aabbcc",123,[1,2,3]],"ornaments":["leaf","code","gem"],"material":"wood"}"##).unwrap();
+        assert_eq!(design["ornaments"], serde_json::json!(["leaf", "gem"]));
+        assert_eq!(design["colors"][0], 0xaabbcc);
+        assert!(parse_souvenir_design(r#"{"modelKind":"javascript"}"#).is_err());
+    }
+
+    #[test]
+    fn many_portable_crops_get_distinct_supported_subplots() {
+        let mut scene = super::super::mock_world().unwrap().scenes.garden;
+        let source = scene
+            .objects
+            .iter()
+            .find(|o| o.prefab == TopiaPrefab::CropPlot)
+            .unwrap()
+            .clone();
+        scene.objects.retain(|o| o.prefab != TopiaPrefab::CropPlot);
+        for i in 0..8 {
+            let mut crop = source.clone();
+            crop.id = format!("test-crop-{i}");
+            scene.objects.push(crop);
+        }
+        scene.objects.push(with_params(
+            structure_object(
+                "garden-bed-pad-0",
+                TopiaPrefab::Block,
+                [0.0, 0.3, 0.0],
+                [1.0; 3],
+                vec![0x76513f],
+            ),
+            &[("height", 0.2)],
+        ));
+        fit_crop_slots(&mut scene);
+        let crops: Vec<_> = scene
+            .objects
+            .iter()
+            .filter(|o| o.prefab == TopiaPrefab::CropPlot)
+            .collect();
+        let positions: std::collections::HashSet<_> =
+            crops.iter().map(|o| format!("{:?}", o.position)).collect();
+        assert_eq!(positions.len(), 8);
+        assert!(crops
+            .iter()
+            .all(|o| o.position[1] < 0.6 && o.scale.unwrap()[0] <= 0.3 && o.animation.is_none()));
+    }
+
+    #[test]
+    fn incremental_plan_cannot_rewrite_architecture_or_invent_relations() {
+        let current = super::super::mock_world().unwrap();
+        let input = super::super::iteration_input(
+            &super::super::initial_studio().unwrap(),
+            super::super::TopiaRuntimeContext::default(),
+        );
+        let next = apply_iteration(r#"{"additions":[]}"#, &current, &input).unwrap();
+        assert_eq!(
+            serde_json::to_value(&next.scenes).unwrap(),
+            serde_json::to_value(&current.scenes).unwrap()
+        );
+        assert_eq!(next.revision, current.revision + 1);
+        assert!(apply_iteration(
+            r#"{"additions":[{"location":"interior","kind":"crystal","memoryIds":["invented"]}]}"#,
+            &current,
+            &input
+        )
+        .is_err());
+    }
 
     #[test]
     fn classifies_timeout_for_immediate_local_compilation() {

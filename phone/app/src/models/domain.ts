@@ -184,6 +184,8 @@ export interface WorldEvent {
 }
 
 export interface Souvenir {
+  designState?: "pending" | "ready" | "fallback";
+  viewedAt?: string;
   id: string;
   questId: string;
   personId?: string;
@@ -196,6 +198,9 @@ export interface Souvenir {
     preferredLocation?: "exterior" | "interior" | "garden";
     scale?: number;
     level?: number;
+    colors?: number[];
+    ornaments?: Array<"star" | "gem" | "leaf" | "ring" | "ribbon">;
+    material?: "wood" | "porcelain" | "paper" | "metal" | "glass";
   };
 }
 

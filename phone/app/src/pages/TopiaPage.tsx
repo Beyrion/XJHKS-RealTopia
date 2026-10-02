@@ -71,6 +71,7 @@ export default function TopiaPage() {
     gameEvents,
     session,
     souvenirs,
+    markSouvenirViewed,
     notify,
     worldEvents,
     acceptWorldEvent,
@@ -273,6 +274,10 @@ export default function TopiaPage() {
       setTopiaPayload(next);
       setLocation("exterior");
       setSelectedLandmark(null);
+      if (mode === "create") {
+        setTopiaStudioOpen(false);
+        setMoodMenuOpen(false);
+      }
       notify("Topia 已更新");
     } catch (error) {
       notify(
@@ -304,6 +309,15 @@ export default function TopiaPage() {
         `Topia 切换失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  };
+  const deleteTopia = async (worldId: string) => {
+    const next = await topiaWorldService.deleteWorld(worldId, worldContext);
+    setTopiaPayload(next);
+    if (topiaPayload?.world.id === worldId) {
+      setLocation("exterior");
+      setSelectedLandmark(null);
+    }
+    notify("Topia 已删除");
   };
   const useDefaultTopia = async () => {
     try {
@@ -380,6 +394,7 @@ export default function TopiaPage() {
     setMoodMenuOpen(false);
     setLocation(latestSouvenirPlacement.location);
     setSelectedLandmark(latestSouvenirPlacement.landmark);
+    markSouvenirViewed(latestSouvenirPlacement.souvenir.id);
   };
 
   return (
@@ -459,7 +474,11 @@ export default function TopiaPage() {
             key={landmark.id}
             aria-label={landmark.label}
             style={landmark.fallbackPlacement}
-            onClick={() => setSelectedLandmark(landmark)}
+            onClick={() => {
+              setSelectedLandmark(landmark);
+              const souvenirId = souvenirByAnchor.get(landmark.anchorId);
+              if (souvenirId) markSouvenirViewed(souvenirId);
+            }}
           >
             <span aria-hidden="true">{landmark.emoji}</span>
             <b>{landmark.label}</b>
@@ -468,7 +487,7 @@ export default function TopiaPage() {
             )}
           </button>
         ))}
-        {souvenirs[0] && latestSouvenirPlacement && (
+        {souvenirs[0] && !souvenirs[0].viewedAt && latestSouvenirPlacement && (
           <button
             type="button"
             className="latest-souvenir"
@@ -762,6 +781,7 @@ export default function TopiaPage() {
         onGenerate={generateTopia}
         onIterate={iterateTopia}
         onSwitch={switchTopia}
+        onDelete={deleteTopia}
       />
       {selectedLandmark && (
         <TopiaLandmarkDrawer
