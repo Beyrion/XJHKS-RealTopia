@@ -43,6 +43,17 @@ export interface Recording {
   path: string;
 }
 
+export interface PersonChoiceResult {
+  event_id: number;
+  person_id: string;
+  choice_index: number;
+  choice_id: "greet" | "catch_up" | "later";
+  label: string;
+  input: "rokid_touchpad" | string;
+  selected_at_elapsed_ms: number;
+  received_at_ms: number;
+}
+
 export interface LocalAsrResult {
   text: string;
   provider: string;
@@ -92,6 +103,7 @@ export interface SessionState {
   last_face?: FaceResult | null;
   last_recording?: Recording | null;
   recording_processing?: string;
+  last_person_choice?: PersonChoiceResult | null;
 }
 
 export interface PairedGlass {

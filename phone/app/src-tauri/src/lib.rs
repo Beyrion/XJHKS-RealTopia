@@ -43,6 +43,7 @@ struct SessionState {
     face_request_id: Option<u64>,
     last_recording: Option<RecordingMetric>,
     recording_processing: String,
+    last_person_choice: Option<PersonChoiceMetric>,
     person_hud_enabled: bool,
 }
 impl Default for SessionState {
@@ -63,6 +64,7 @@ impl Default for SessionState {
             face_request_id: None,
             last_recording: None,
             recording_processing: "idle".into(),
+            last_person_choice: None,
             person_hud_enabled: true,
         }
     }
@@ -108,6 +110,18 @@ struct RecordingMetric {
     duration_ms: i64,
     transfer_ms: i64,
     path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PersonChoiceMetric {
+    event_id: u64,
+    person_id: String,
+    choice_index: u8,
+    choice_id: String,
+    label: String,
+    input: String,
+    selected_at_elapsed_ms: i64,
+    received_at_ms: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +196,7 @@ struct NativeTransportState {
     last_error: Option<String>,
     last_capture: Option<CaptureMetric>,
     last_recording: Option<RecordingMetric>,
+    last_person_choice: Option<PersonChoiceMetric>,
 }
 
 #[cfg(mobile)]
@@ -1065,6 +1080,7 @@ fn merge_native(value: &mut SessionState, native: NativeTransportState) {
         value.recording_processing = "received".into();
     }
     value.last_recording = native.last_recording;
+    value.last_person_choice = native.last_person_choice;
 }
 
 fn base64_encode(data: &[u8]) -> String {
@@ -1500,6 +1516,7 @@ fn begin_session(
         face_request_id: None,
         last_recording: None,
         recording_processing: "idle".into(),
+        last_person_choice: None,
         person_hud_enabled: true,
     };
     #[cfg(mobile)]
@@ -1909,5 +1926,15 @@ mod tests {
         assert_eq!(base64_encode(b"M"), "TQ==");
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert_eq!(base64_encode(b"Man"), "TWFu");
+    }
+    #[test]
+    fn deserializes_native_person_choice() {
+        let choice: PersonChoiceMetric = serde_json::from_str(
+            r#"{"event_id":123,"person_id":"lin","choice_index":1,"choice_id":"catch_up","label":"聊聊近况","input":"rokid_touchpad","selected_at_elapsed_ms":456,"received_at_ms":789}"#,
+        )
+        .unwrap();
+        assert_eq!(choice.event_id, 123);
+        assert_eq!(choice.choice_id, "catch_up");
+        assert_eq!(choice.choice_index, 1);
     }
 }

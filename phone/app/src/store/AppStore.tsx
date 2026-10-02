@@ -429,9 +429,32 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           ];
         }
       }
+      const choice = nextSession.last_person_choice;
+      if (choice) {
+        const id = `person-choice-${choice.event_id}`;
+        if (!nextMemories.some((item) => item.id === id)) {
+          const known = peopleRef.current.find(
+            (item) => item.id === choice.person_id,
+          );
+          nextMemories = [
+            {
+              id,
+              time: now,
+              title: `对 ${known?.name ?? "陌生人"} 选择「${choice.label}」`,
+              meta: `眼镜触摸区 · 选项 ${choice.choice_index + 1} · 已回传手机`,
+              kind: "person",
+              personIds: known ? [known.id] : [],
+            },
+            ...nextMemories,
+          ];
+          appendLog(
+            `人物选项已回传 · ${known?.name ?? choice.person_id} · ${choice.label}`,
+          );
+        }
+      }
       if (nextMemories !== memoriesRef.current) updateMemories(nextMemories);
     },
-    [updateMemories],
+    [appendLog, updateMemories],
   );
 
   const processRecording = useCallback(
