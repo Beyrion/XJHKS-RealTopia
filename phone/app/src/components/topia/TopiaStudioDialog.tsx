@@ -238,13 +238,13 @@ export function TopiaStudioDialog({
 
   return (
     <div
-      className="topia-studio-overlay"
+      className={`topia-studio-overlay${generating ? " is-generating" : ""}`}
       onMouseDown={(event) => {
         if (!generating && event.target === event.currentTarget) onClose();
       }}
     >
       <section
-        className={`topia-studio-dialog view-${view}`}
+        className={`topia-studio-dialog view-${view}${generating ? " is-generating" : ""}`}
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
@@ -267,7 +267,11 @@ export function TopiaStudioDialog({
         </header>
 
         {generating ? (
-          <div className="topia-generation-wait" aria-live="polite">
+          <div
+            className="topia-generation-wait"
+            aria-live="polite"
+            aria-busy="true"
+          >
             <div className="topia-generation-orbit">
               <i />
               <i />
@@ -275,11 +279,18 @@ export function TopiaStudioDialog({
               <span>✦</span>
             </div>
             <h3>{progress?.message ?? "正在唤醒新的 Topia"}</h3>
-            <div className="topia-generation-progress">
-              <i style={{ width: `${progress?.progress ?? 4}%` }} />
+            <div
+              className="topia-generation-progress"
+              role="progressbar"
+              aria-label="Topia 生成进度"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress?.progress ?? 2}
+            >
+              <i style={{ width: `${progress?.progress ?? 2}%` }} />
             </div>
             <small>
-              {progress?.progress ?? 4}% · {progress?.stage ?? "starting"}
+              {progress?.progress ?? 2}% · {progress?.stage ?? "preparing"}
             </small>
           </div>
         ) : view === "entry" ? (

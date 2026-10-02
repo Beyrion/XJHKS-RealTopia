@@ -134,8 +134,10 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
 .topia-drawer { position:fixed; top:86px; right:0; bottom:0; z-index:61; width:min(480px,62vw); padding:22px 24px 28px; overflow:auto; border-left:2px solid var(--ink); background:linear-gradient(155deg,#fffdf8 0 72%,#eef0ff 100%); box-shadow:-8px 0 24px rgba(37,37,59,.2); }
 .topia-studio-trigger { position:absolute; bottom:14px; left:14px; z-index:9; width:42px; height:42px; display:grid; place-items:center; border:1.5px solid rgba(255,255,255,.75); border-radius:50%; background:rgba(37,37,59,.5); color:#fff; box-shadow:0 6px 18px rgba(37,37,59,.22); backdrop-filter:blur(10px);font-size:22px; }
 .topia-studio-overlay { position:fixed; inset:0; z-index:90; display:grid; place-items:center; padding:20px; background:rgba(28,28,50,.42); backdrop-filter:blur(14px) saturate(.8); }
+.topia-studio-overlay.is-generating { overflow:hidden;overscroll-behavior:none;touch-action:none; }
 .topia-studio-dialog { box-sizing:border-box;width:min(920px,80vw);max-width:80vw;max-height:80vh;overflow:auto;border:2px solid var(--ink);border-radius:24px;background:linear-gradient(145deg,#fffdf8,#f1f1ff);box-shadow:9px 10px 0 var(--ink); }
 .topia-studio-dialog.view-entry { height:min(430px,80vh);overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr); }
+.topia-studio-dialog.is-generating { height:min(560px,80vh);overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr);overscroll-behavior:none; }
 .topia-studio-dialog > header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:flex-start; gap:18px; padding:20px 22px 16px; border-bottom:1.5px solid var(--line); background:rgba(255,253,248,.92); backdrop-filter:blur(12px); }
 .topia-studio-dialog > header h2 { margin:0;font-size:25px; }
 .topia-studio-dialog > header p { margin:5px 0 0;color:var(--muted);font-size:13px; }
@@ -187,15 +189,17 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
 .topia-history-grid b,.topia-history-grid small { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .topia-history-grid small { margin-top:4px;color:var(--muted); }
 .topia-history-grid em { position:absolute;top:9px;right:9px;padding:4px 7px;border-radius:8px;background:rgba(255,255,255,.88);color:var(--ink);font-size:10px;font-style:normal;font-weight:900;backdrop-filter:blur(8px); }
-.topia-generation-wait { min-height:470px;padding:54px 30px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center; }
+.topia-generation-wait { min-height:0;padding:clamp(16px,5vh,54px) 30px;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center; }
 .topia-generation-orbit { position:relative;width:116px;height:116px;margin-bottom:28px;border:1px solid rgba(89,104,255,.25);border-radius:50%;animation:topia-studio-spin 7s linear infinite; }
 .topia-generation-orbit i { position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 16px var(--blue);transform-origin:0 0; }
 .topia-generation-orbit i:nth-child(1){transform:rotate(10deg) translateX(53px)}.topia-generation-orbit i:nth-child(2){transform:rotate(135deg) translateX(53px);background:var(--mint)}.topia-generation-orbit i:nth-child(3){transform:rotate(250deg) translateX(53px);background:var(--yellow)}
 .topia-generation-orbit span { position:absolute;inset:0;display:grid;place-items:center;font-size:38px;animation:topia-studio-spin 7s linear reverse infinite; }
 .topia-generation-wait h3 { margin:0;font-size:22px; }.topia-generation-wait p { max-width:480px;color:var(--muted);line-height:1.7; }
 .topia-generation-progress { width:min(480px,80%);height:9px;margin:18px 0 8px;overflow:hidden;border:1px solid var(--ink);border-radius:20px;background:#fff; }
-.topia-generation-progress i { display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--blue),var(--mint),var(--yellow));transition:width .55s ease; }
+.topia-generation-progress i { position:relative;display:block;height:100%;overflow:hidden;border-radius:inherit;background:linear-gradient(90deg,var(--blue),var(--mint),var(--yellow));transition:width .55s ease; }
+.topia-generation-progress i::after { content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.85),transparent);animation:topia-progress-shimmer 1.35s ease-in-out infinite; }
 @keyframes topia-studio-spin { to { transform:rotate(360deg); } }
+@keyframes topia-progress-shimmer { to { transform:translateX(100%); } }
 .topia-drawer-head { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; padding-bottom:16px; border-bottom:1.5px solid var(--line); }
 .topia-drawer-symbol { width:48px; height:48px; display:grid; place-items:center; border:1.5px solid var(--ink); border-radius:15px; background:var(--yellow); box-shadow:2px 2px 0 var(--ink); font-size:27px; }
 .topia-drawer-head small { color:var(--blue-dark); font-size:11px!important; font-weight:900; letter-spacing:.08em; }
@@ -882,6 +886,12 @@ small { color:var(--muted)!important;font-size:13px!important;line-height:1.4; }
   .topia-studio-dialog > header h2 { font-size:19px; }
   .topia-studio-dialog > header p { margin-top:3px;font-size:11px; }
   .topia-studio-dialog > header button { width:34px;height:34px; }
+  .topia-generation-wait { padding:10px 20px; }
+  .topia-generation-orbit { width:82px;height:82px;margin-bottom:12px; }
+  .topia-generation-orbit i:nth-child(1){transform:rotate(10deg) translateX(36px)}.topia-generation-orbit i:nth-child(2){transform:rotate(135deg) translateX(36px)}.topia-generation-orbit i:nth-child(3){transform:rotate(250deg) translateX(36px)}
+  .topia-generation-orbit span { font-size:30px; }
+  .topia-generation-wait h3 { font-size:18px; }
+  .topia-generation-progress { margin:10px 0 5px; }
   .topia-entry-choice { min-height:0;padding:10px 14px 13px; }
   .topia-entry-cards { gap:12px; }
   .topia-entry-cards button { min-height:0;padding:8px;border-radius:15px; }

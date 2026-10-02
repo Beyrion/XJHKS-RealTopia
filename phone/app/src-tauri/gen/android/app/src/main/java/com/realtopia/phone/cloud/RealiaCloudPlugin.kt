@@ -37,6 +37,9 @@ class CloudCompleteArgs {
   lateinit var prompt: String
   var system: String? = null
   var json: Boolean = false
+  var timeoutMs: Int = 12_000
+  var maxCompletionTokens: Int? = null
+  var fast: Boolean = false
 }
 
 /**
@@ -45,7 +48,10 @@ class CloudCompleteArgs {
  */
 @TauriPlugin
 class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
-  private val worker: ExecutorService = Executors.newSingleThreadExecutor()
+  // Dialogue enhancement and ambient world generation must not head-of-line
+  // block each other. Keep this bounded so weak networks cannot create an
+  // unbounded number of sockets or model requests.
+  private val worker: ExecutorService = Executors.newFixedThreadPool(2)
   private val preferences = activity.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
   @Command
@@ -99,8 +105,20 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
           })
           put("temperature", 0.2)
           if (args.json) put("response_format", JSONObject().put("type", "json_object"))
+          args.maxCompletionTokens?.let {
+            put("max_completion_tokens", it.coerceIn(256, 16_384))
+          }
+          if (args.fast) {
+            // Qwen 3.5/3.6/3.7 default to thinking mode. Qwen 3.8 Max is
+            // thinking-first, but accepts a lower reasoning effort.
+            if (model.contains("qwen3.8", ignoreCase = true)) {
+              put("reasoning_effort", "low")
+            } else {
+              put("enable_thinking", false)
+            }
+          }
         }
-        val response = postJson("chat/completions", body)
+        val response = postJson("chat/completions", body, args.timeoutMs)
         val content = response.optJSONArray("choices")
           ?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim().orEmpty()
         require(content.isNotEmpty()) { "cloud model returned empty content" }
@@ -118,15 +136,16 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun postJson(relativePath: String, body: JSONObject): JSONObject {
+  private fun postJson(relativePath: String, body: JSONObject, requestedTimeoutMs: Int): JSONObject {
     val apiKey = loadApiKey() ?: throw IllegalStateException("API Key 尚未安全配置")
     val baseUrl = validateBaseUrl(
       preferences.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL,
     )
     val connection = URL("${baseUrl.trimEnd('/')}/$relativePath").openConnection() as HttpURLConnection
     connection.requestMethod = "POST"
-    connection.connectTimeout = 20_000
-    connection.readTimeout = 120_000
+    val timeoutMs = requestedTimeoutMs.coerceIn(3_000, 300_000)
+    connection.connectTimeout = minOf(timeoutMs, 10_000)
+    connection.readTimeout = timeoutMs
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
     connection.setRequestProperty("Authorization", "Bearer $apiKey")

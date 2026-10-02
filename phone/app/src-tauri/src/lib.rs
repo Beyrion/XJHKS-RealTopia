@@ -1,3 +1,4 @@
+mod diagnostics;
 mod face;
 mod strangers;
 mod topia;
@@ -876,6 +877,11 @@ mod mobile_cloud {
         pub prompt: &'a str,
         pub system: Option<&'a str>,
         pub json: bool,
+        pub timeout_ms: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_completion_tokens: Option<u32>,
+        #[serde(default)]
+        pub fast: bool,
     }
 
     impl<R: Runtime> RealiaCloud<R> {
@@ -1615,6 +1621,9 @@ fn cloud_complete(
                 prompt: &prompt,
                 system: system.as_deref(),
                 json,
+                timeout_ms: 120_000,
+                max_completion_tokens: None,
+                fast: false,
             });
     }
     #[cfg(not(mobile))]

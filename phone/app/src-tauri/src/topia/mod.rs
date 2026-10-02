@@ -1,3 +1,4 @@
+mod harness;
 mod prompt;
 
 #[cfg(mobile)]
@@ -7,12 +8,16 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
+#[cfg(mobile)]
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
 const WORLD_FILE: &str = "topia-studio-v2.json";
 const LEGACY_WORLD_FILE: &str = "topia-world-v1.json";
 const MOCK_WORLD: &str = include_str!("mock_world.json");
+const TOPIA_CLOUD_TIMEOUT_MS: u32 = 180_000;
+const TOPIA_STAGE_REPAIR_ATTEMPTS: usize = 1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -194,7 +199,11 @@ pub struct TopiaObjectConfig {
     rotation: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scale: Option<[f64; 3]>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_flexible_colors"
+    )]
     colors: Vec<u32>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     params: HashMap<String, Value>,
@@ -236,14 +245,32 @@ pub struct TopiaLandmark {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TopiaCamera {
+    #[serde(default)]
     yaw: f64,
+    #[serde(default = "default_camera_pitch")]
     pitch: f64,
+}
+
+fn default_camera_pitch() -> f64 {
+    0.58
+}
+
+impl Default for TopiaCamera {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: default_camera_pitch(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TopiaSceneConfig {
+    #[serde(default)]
     camera: TopiaCamera,
+    #[serde(default)]
     objects: Vec<TopiaObjectConfig>,
+    #[serde(default)]
     landmarks: Vec<TopiaLandmark>,
 }
 
@@ -460,6 +487,14 @@ struct TopiaGenerationReview {
     repair_instructions: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TopiaGenerationConcept {
+    title: String,
+    archetype: String,
+    palette: [u32; 3],
+    sky: TopiaSkyConfig,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopiaSceneCrop {
@@ -582,6 +617,65 @@ fn validate_scene(scene: &TopiaSceneConfig, location: TopiaLocation) -> Result<(
             || !valid_percentage(&landmark.fallback_placement.top)
         {
             return Err(format!("{location:?} has an invalid landmark"));
+        }
+    }
+    let structure_is_valid = match location {
+        TopiaLocation::Exterior => {
+            scene
+                .objects
+                .iter()
+                .any(|object| object.prefab == TopiaPrefab::FloatingIsland)
+                && scene.objects.iter().any(|object| {
+                    object.prefab == TopiaPrefab::Door
+                        && object.anchor_id.as_deref() == Some("portal-interior")
+                })
+                && scene
+                    .objects
+                    .iter()
+                    .any(|object| object.anchor_id.as_deref() == Some("portal-garden"))
+        }
+        TopiaLocation::Interior => {
+            scene
+                .objects
+                .iter()
+                .filter(|object| object.prefab == TopiaPrefab::RoomShell)
+                .count()
+                == 1
+        }
+        TopiaLocation::Garden => scene
+            .objects
+            .iter()
+            .any(|object| object.prefab == TopiaPrefab::FloatingIsland),
+    };
+    if !structure_is_valid {
+        return Err(match location {
+            TopiaLocation::Exterior => {
+                "Exterior must contain a floating home, portal-interior door and portal-garden anchor"
+            }
+            TopiaLocation::Interior => "Interior must contain exactly one room-shell",
+            TopiaLocation::Garden => "Garden must contain a floating-island",
+        }
+        .into());
+    }
+    for souvenir in scene
+        .objects
+        .iter()
+        .filter(|object| object.layer == TopiaObjectLayer::Souvenir)
+    {
+        let anchor = souvenir
+            .anchor_id
+            .as_deref()
+            .ok_or_else(|| format!("{} souvenir has no anchor", souvenir.id))?;
+        if souvenir.animation.as_deref() != Some("sparkle")
+            || !scene
+                .landmarks
+                .iter()
+                .any(|landmark| landmark.anchor_id == anchor)
+        {
+            return Err(format!(
+                "{} souvenir must sparkle and have a landmark matching anchor {}",
+                souvenir.id, anchor
+            ));
         }
     }
     Ok(())
@@ -744,7 +838,472 @@ fn parse_world(value: &str) -> Result<TopiaWorldConfig, String> {
 }
 
 fn parse_review(value: &str) -> Result<TopiaGenerationReview, String> {
-    serde_json::from_value(extract_json(value)?).map_err(|error| error.to_string())
+    let review: TopiaGenerationReview =
+        serde_json::from_value(extract_json(value)?).map_err(|error| error.to_string())?;
+    if review.issues.len() > 24
+        || review.issues.iter().any(|issue| !valid_text(issue, 500))
+        || review.repair_instructions.chars().count() > 2_000
+        || (!review.approved && review.issues.is_empty())
+    {
+        return Err("cloud returned an invalid or incomplete Topia review".into());
+    }
+    Ok(review)
+}
+
+fn parse_concept(value: &str) -> Result<TopiaGenerationConcept, String> {
+    let value = extract_json(value)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "concept response must be a JSON object".to_string())?;
+    let defaults = TopiaSkyConfig::default();
+    let sky = object.get("sky").and_then(Value::as_object);
+    let sky_value = |key: &str| sky.and_then(|value| value.get(key));
+    let default_palette = [defaults.top, defaults.mid, defaults.low];
+    let palette = object
+        .get("palette")
+        .and_then(Value::as_array)
+        .map(|values| {
+            std::array::from_fn(|index| {
+                values
+                    .get(index)
+                    .and_then(parse_flexible_color)
+                    .unwrap_or(default_palette[index])
+            })
+        })
+        .unwrap_or(default_palette);
+    let concept = TopiaGenerationConcept {
+        title: concept_text(object.get("title"), "云上漂流屋", 48),
+        archetype: concept_text(object.get("archetype"), "漂浮的私人幻想居所", 100),
+        palette,
+        sky: TopiaSkyConfig {
+            theme: concept_text(sky_value("theme"), &defaults.theme, 48),
+            motifs: sky_value("motifs")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|value| value.trim().chars().take(48).collect::<String>())
+                        .filter(|value| !value.is_empty())
+                        .take(8)
+                        .collect()
+                })
+                .filter(|values: &Vec<String>| !values.is_empty())
+                .unwrap_or(defaults.motifs),
+            celestial_shape: concept_text(
+                sky_value("celestialShape"),
+                &defaults.celestial_shape,
+                48,
+            ),
+            decoration_density: concept_ratio(
+                sky_value("decorationDensity"),
+                defaults.decoration_density,
+            ),
+            drift: concept_ratio(sky_value("drift"), defaults.drift),
+            top: sky_value("top")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.top),
+            mid: sky_value("mid")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.mid),
+            low: sky_value("low")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.low),
+            aurora: sky_value("aurora")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.aurora),
+            celestial: sky_value("celestial")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.celestial),
+            stars: sky_value("stars")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.stars),
+            fog: sky_value("fog")
+                .and_then(parse_flexible_color)
+                .unwrap_or(defaults.fog),
+            magic: concept_ratio(sky_value("magic"), defaults.magic),
+        },
+    };
+    validate_concept(&concept)?;
+    Ok(concept)
+}
+
+fn concept_text(value: Option<&Value>, fallback: &str, max_chars: usize) -> String {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
+fn concept_ratio(value: Option<&Value>, fallback: f64) -> f64 {
+    value
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 1.0))
+        .unwrap_or(fallback)
+}
+
+fn parse_flexible_color(value: &Value) -> Option<u32> {
+    if let Some(value) = value.as_u64() {
+        return Some(value.min(0x00ff_ffff) as u32);
+    }
+    if let Some(value) = value.as_str() {
+        let value = value.trim().trim_start_matches('#');
+        return u32::from_str_radix(value, 16)
+            .ok()
+            .filter(|color| *color <= 0x00ff_ffff);
+    }
+    if let Some(rgb) = value.as_array().filter(|rgb| rgb.len() >= 3) {
+        let channel = |index: usize| rgb.get(index)?.as_u64().map(|value| value.min(255) as u32);
+        return Some((channel(0)? << 16) | (channel(1)? << 8) | channel(2)?);
+    }
+    let rgb = value.as_object()?;
+    let channel = |key: &str| rgb.get(key)?.as_u64().map(|value| value.min(255) as u32);
+    Some((channel("r")? << 16) | (channel("g")? << 8) | channel("b")?)
+}
+
+fn deserialize_flexible_colors<'de, D>(deserializer: D) -> Result<Vec<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<Value>::deserialize(deserializer)?;
+    Ok(values
+        .iter()
+        .filter_map(parse_flexible_color)
+        .take(8)
+        .collect())
+}
+
+fn validate_concept(concept: &TopiaGenerationConcept) -> Result<(), String> {
+    if !valid_text(&concept.title, 48)
+        || !valid_text(&concept.archetype, 100)
+        || concept.palette.iter().any(|color| *color > 0x00ff_ffff)
+        || !valid_text(&concept.sky.theme, 48)
+        || !valid_text(&concept.sky.celestial_shape, 48)
+        || concept.sky.motifs.len() > 8
+        || concept
+            .sky
+            .motifs
+            .iter()
+            .any(|motif| !valid_text(motif, 48))
+        || !(0.0..=1.0).contains(&concept.sky.decoration_density)
+        || !(0.0..=1.0).contains(&concept.sky.drift)
+        || !(0.0..=1.0).contains(&concept.sky.magic)
+        || [
+            concept.sky.top,
+            concept.sky.mid,
+            concept.sky.low,
+            concept.sky.aurora,
+            concept.sky.celestial,
+            concept.sky.stars,
+            concept.sky.fog,
+        ]
+        .iter()
+        .any(|color| *color > 0x00ff_ffff)
+    {
+        return Err("cloud returned invalid Topia concept metadata or sky".into());
+    }
+    Ok(())
+}
+
+fn inspect_scene(
+    value: &str,
+    location: TopiaLocation,
+) -> Result<(TopiaSceneConfig, Option<String>), String> {
+    let mut scene: TopiaSceneConfig =
+        serde_json::from_value(extract_json(value)?).map_err(|error| error.to_string())?;
+    let before = (scene.camera.yaw, scene.camera.pitch);
+    normalize_scene_contract(&mut scene, location)?;
+    let after = (scene.camera.yaw, scene.camera.pitch);
+    validate_scene(&scene, location)?;
+    let issue = (before != after).then(|| {
+        format!(
+            "{location:?} camera is out of range: yaw={} must be -3.2..3.2 and pitch={} must be 0.18..1.08. The backend fallback normalized it to yaw={} pitch={}; return an in-range camera explicitly.",
+            before.0, before.1, after.0, after.1
+        )
+    });
+    Ok((scene, issue))
+}
+
+fn normalize_scene_contract(
+    scene: &mut TopiaSceneConfig,
+    location: TopiaLocation,
+) -> Result<(), String> {
+    normalize_scene_camera(scene);
+    scene.objects.truncate(40);
+    for (index, object) in scene.objects.iter_mut().enumerate() {
+        if !valid_text(&object.id, 64) {
+            object.id = format!("generated-{location:?}-{index}").to_lowercase();
+        }
+        for value in &mut object.position {
+            *value = if value.is_finite() {
+                value.clamp(-8.0, 8.0)
+            } else {
+                0.0
+            };
+        }
+        if let Some(rotation) = &mut object.rotation {
+            for value in rotation {
+                *value = if value.is_finite() {
+                    value.clamp(-std::f64::consts::TAU, std::f64::consts::TAU)
+                } else {
+                    0.0
+                };
+            }
+        }
+        if let Some(scale) = &mut object.scale {
+            for value in scale {
+                *value = if value.is_finite() {
+                    value.clamp(0.1, 4.0)
+                } else {
+                    1.0
+                };
+            }
+        }
+        object.colors.truncate(8);
+        object.params.retain(|key, value| {
+            valid_text(key, 40)
+                && match value {
+                    Value::Bool(_) => true,
+                    Value::String(value) => value.chars().count() <= 64,
+                    Value::Number(value) => value
+                        .as_f64()
+                        .is_some_and(|number| number.is_finite() && number.abs() <= 20.0),
+                    _ => false,
+                }
+        });
+        if object
+            .animation
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "float" | "spin" | "sway" | "sparkle"))
+        {
+            object.animation = None;
+        }
+    }
+
+    let skeleton = fallback_scene(
+        location,
+        &TopiaGenerationConcept {
+            title: "fallback".into(),
+            archetype: "fallback".into(),
+            palette: [0x7898c8, 0xd8a8b8, 0x88b89c],
+            sky: TopiaSkyConfig::default(),
+        },
+    )?;
+    let required = |scene: &TopiaSceneConfig, object: &TopiaObjectConfig| match location {
+        TopiaLocation::Exterior => {
+            (object.prefab == TopiaPrefab::FloatingIsland
+                && !scene
+                    .objects
+                    .iter()
+                    .any(|item| item.prefab == TopiaPrefab::FloatingIsland))
+                || (object.anchor_id.as_deref() == Some("portal-interior")
+                    && !scene.objects.iter().any(|item| {
+                        item.prefab == TopiaPrefab::Door
+                            && item.anchor_id.as_deref() == Some("portal-interior")
+                    }))
+                || (object.anchor_id.as_deref() == Some("portal-garden")
+                    && !scene
+                        .objects
+                        .iter()
+                        .any(|item| item.anchor_id.as_deref() == Some("portal-garden")))
+        }
+        TopiaLocation::Interior => {
+            object.prefab == TopiaPrefab::RoomShell
+                && !scene
+                    .objects
+                    .iter()
+                    .any(|item| item.prefab == TopiaPrefab::RoomShell)
+        }
+        TopiaLocation::Garden => {
+            object.prefab == TopiaPrefab::FloatingIsland
+                && !scene
+                    .objects
+                    .iter()
+                    .any(|item| item.prefab == TopiaPrefab::FloatingIsland)
+        }
+    };
+    for object in &skeleton.objects {
+        if required(scene, object) {
+            scene.objects.push(object.clone());
+        }
+    }
+    for object in &skeleton.objects {
+        if scene.objects.len() >= 8 {
+            break;
+        }
+        if !scene.objects.iter().any(|item| item.id == object.id) && object.anchor_id.is_none() {
+            scene.objects.push(object.clone());
+        }
+    }
+
+    let mut ids = HashSet::new();
+    for (index, object) in scene.objects.iter_mut().enumerate() {
+        if !ids.insert(object.id.clone()) {
+            object.id = format!("{}-{index}", object.id);
+            ids.insert(object.id.clone());
+        }
+    }
+    if location == TopiaLocation::Interior {
+        let mut room_seen = false;
+        for object in &mut scene.objects {
+            if object.prefab == TopiaPrefab::RoomShell {
+                if room_seen {
+                    object.prefab = TopiaPrefab::Block;
+                }
+                room_seen = true;
+            }
+        }
+    }
+
+    scene.landmarks.truncate(8);
+    let anchors: HashSet<_> = scene
+        .objects
+        .iter()
+        .filter_map(|object| object.anchor_id.as_deref())
+        .collect();
+    let mut landmark_ids = HashSet::new();
+    scene.landmarks.retain_mut(|landmark| {
+        landmark.location = location;
+        landmark.label = landmark.label.chars().take(36).collect();
+        landmark.eyebrow = landmark.eyebrow.chars().take(36).collect();
+        landmark.description = landmark.description.chars().take(360).collect();
+        if !valid_percentage(&landmark.fallback_placement.left) {
+            landmark.fallback_placement.left = "50%".into();
+        }
+        if !valid_percentage(&landmark.fallback_placement.top) {
+            landmark.fallback_placement.top = "50%".into();
+        }
+        anchors.contains(landmark.anchor_id.as_str())
+            && valid_text(&landmark.id, 64)
+            && landmark_ids.insert(landmark.id.clone())
+            && valid_text(&landmark.emoji, 8)
+            && valid_text(&landmark.label, 36)
+            && valid_text(&landmark.eyebrow, 36)
+            && valid_text(&landmark.description, 360)
+    });
+    let landmark_anchors: HashSet<_> = scene
+        .landmarks
+        .iter()
+        .map(|landmark| landmark.anchor_id.as_str())
+        .collect();
+    for object in &mut scene.objects {
+        if object.layer == TopiaObjectLayer::Souvenir
+            && (object.animation.as_deref() != Some("sparkle")
+                || object
+                    .anchor_id
+                    .as_deref()
+                    .is_none_or(|anchor| !landmark_anchors.contains(anchor)))
+        {
+            object.layer = TopiaObjectLayer::Decoration;
+            object.memory_ids.clear();
+        }
+    }
+    Ok(())
+}
+
+fn normalize_scene_camera(scene: &mut TopiaSceneConfig) {
+    if !scene.camera.yaw.is_finite() {
+        scene.camera.yaw = 0.0;
+    }
+    if !scene.camera.pitch.is_finite() {
+        scene.camera.pitch = 0.58;
+    }
+    scene.camera.yaw = scene.camera.yaw.clamp(-3.2, 3.2);
+    scene.camera.pitch = scene.camera.pitch.clamp(0.18, 1.08);
+}
+
+fn fallback_concept(input: &TopiaGenerationInput) -> TopiaGenerationConcept {
+    let defaults = TopiaSkyConfig::default();
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(&input.profile)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    let seed = hasher.finish() as u32;
+    let title = input
+        .profile
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("{name}的漂流居所"))
+        .unwrap_or_else(|| "云上漂流屋".into());
+    let rotate = |color: u32, offset: u32| (color.rotate_left(offset % 24)) & 0x00ff_ffff;
+    TopiaGenerationConcept {
+        title: title.chars().take(48).collect(),
+        archetype: input
+            .profile
+            .summary
+            .split(['。', '，', ','])
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("温暖而开放的私人幻想居所")
+            .trim()
+            .chars()
+            .take(100)
+            .collect(),
+        palette: [
+            rotate(defaults.top, seed % 19),
+            rotate(defaults.mid, seed % 13),
+            rotate(defaults.low, seed % 7),
+        ],
+        sky: defaults,
+    }
+}
+
+fn fallback_scene(
+    location: TopiaLocation,
+    concept: &TopiaGenerationConcept,
+) -> Result<TopiaSceneConfig, String> {
+    let world = mock_world()?;
+    let mut scene = match location {
+        TopiaLocation::Exterior => world.scenes.exterior,
+        TopiaLocation::Interior => world.scenes.interior,
+        TopiaLocation::Garden => world.scenes.garden,
+    };
+    let palette = concept.palette;
+    for (object_index, object) in scene.objects.iter_mut().enumerate() {
+        if object.layer == TopiaObjectLayer::Structure {
+            for (color_index, color) in object.colors.iter_mut().enumerate() {
+                *color = palette[(object_index + color_index) % palette.len()];
+            }
+        }
+    }
+    validate_scene(&scene, location)?;
+    Ok(scene)
+}
+
+#[cfg(mobile)]
+fn assemble_generated_world(
+    input: &TopiaGenerationInput,
+    concept: TopiaGenerationConcept,
+    render_style: TopiaRenderStyleConfig,
+    scenes: TopiaScenes,
+) -> Result<TopiaWorldConfig, String> {
+    validate_concept(&concept)?;
+    Ok(TopiaWorldConfig {
+        schema_version: 2,
+        id: format!("topia-{}", Utc::now().timestamp_millis()),
+        owner_id: "local-user".into(),
+        revision: 1,
+        generated_at: Utc::now().to_rfc3339(),
+        source: "cloud".into(),
+        profile: TopiaWorldProfile {
+            home_name: concept.title,
+            archetype: concept.archetype,
+            traits: input.profile.traits.clone(),
+            experiences: input.profile.experiences.clone(),
+            accent_colors: concept.palette,
+        },
+        sky: concept.sky,
+        render_style,
+        scenes,
+        generation: None,
+    })
 }
 
 fn mock_world() -> Result<TopiaWorldConfig, String> {
@@ -1384,6 +1943,12 @@ fn payload(
 }
 
 fn emit_progress(app: &tauri::AppHandle, mode: &str, stage: &str, progress: u8, message: &str) {
+    crate::diagnostics::log(
+        app,
+        "topia",
+        "stage",
+        &format!("mode={mode} stage={stage} progress={progress} message={message}"),
+    );
     let _ = app.emit(
         "topia-generation-progress",
         TopiaGenerationProgress {
@@ -1393,6 +1958,209 @@ fn emit_progress(app: &tauri::AppHandle, mode: &str, stage: &str, progress: u8, 
             message: message.into(),
         },
     );
+}
+
+#[cfg(mobile)]
+fn complete_topia_stage(
+    app: &tauri::AppHandle,
+    stage: &str,
+    request: crate::mobile_cloud::CompleteRequest<'_>,
+) -> Result<crate::CloudModelResult, String> {
+    let started = Instant::now();
+    crate::diagnostics::log(app, "topia", "request-start", &format!("stage={stage}"));
+    let result = app
+        .state::<crate::mobile_cloud::RealiaCloud<tauri::Wry>>()
+        .complete(request);
+    match &result {
+        Ok(value) => crate::diagnostics::log(
+            app,
+            "topia",
+            "request-ok",
+            &format!(
+                "stage={stage} elapsed_ms={} provider={} model={} response_chars={}",
+                started.elapsed().as_millis(),
+                value.provider,
+                value.model,
+                value.text.chars().count()
+            ),
+        ),
+        Err(error) => crate::diagnostics::log(
+            app,
+            "topia",
+            "request-error",
+            &format!(
+                "stage={stage} elapsed_ms={} error={error}",
+                started.elapsed().as_millis()
+            ),
+        ),
+    }
+    result
+}
+
+#[cfg(mobile)]
+fn complete_validated_stage<T, F>(
+    app: &tauri::AppHandle,
+    mode: &str,
+    stage: &str,
+    progress: u8,
+    repair_message: &str,
+    original_prompt: &str,
+    system: &str,
+    validator: F,
+) -> Result<(T, crate::CloudModelResult), String>
+where
+    F: Fn(&str) -> Result<T, String>,
+{
+    let mut request_prompt = original_prompt.to_string();
+    for attempt in 0..=TOPIA_STAGE_REPAIR_ATTEMPTS {
+        let request_stage = if attempt == 0 {
+            stage.to_string()
+        } else {
+            format!("{stage}-repair-{attempt}")
+        };
+        let response = complete_topia_stage(
+            app,
+            &request_stage,
+            crate::mobile_cloud::CompleteRequest {
+                prompt: &request_prompt,
+                system: Some(if attempt == 0 {
+                    system
+                } else {
+                    prompt::REPAIR_SYSTEM_PROMPT
+                }),
+                json: true,
+                timeout_ms: TOPIA_CLOUD_TIMEOUT_MS,
+                max_completion_tokens: Some(harness::completion_budget(stage)),
+                fast: true,
+            },
+        )?;
+        match validator(&response.text) {
+            Ok(value) => return Ok((value, response)),
+            Err(error) if attempt < TOPIA_STAGE_REPAIR_ATTEMPTS => {
+                crate::diagnostics::log(
+                    app,
+                    "topia",
+                    "repair-requested",
+                    &format!("stage={stage} attempt={} error={error}", attempt + 1),
+                );
+                emit_progress(
+                    app,
+                    mode,
+                    stage,
+                    progress,
+                    &format!(
+                        "{repair_message}（{}/{}）",
+                        attempt + 1,
+                        TOPIA_STAGE_REPAIR_ATTEMPTS
+                    ),
+                );
+                request_prompt =
+                    prompt::build_json_repair(stage, original_prompt, &response.text, &error);
+            }
+            Err(error) => {
+                crate::diagnostics::log(
+                    app,
+                    "topia",
+                    "repair-exhausted",
+                    &format!("stage={stage} attempts={TOPIA_STAGE_REPAIR_ATTEMPTS} error={error}"),
+                );
+                return Err(format!(
+                    "{stage} validation failed after model repair: {error}"
+                ));
+            }
+        }
+    }
+    unreachable!()
+}
+
+#[cfg(mobile)]
+fn complete_scene_stage(
+    app: &tauri::AppHandle,
+    mode: &str,
+    stage: &str,
+    progress: u8,
+    repair_message: &str,
+    original_prompt: &str,
+    location: TopiaLocation,
+) -> Result<(TopiaSceneConfig, crate::CloudModelResult), String> {
+    let mut request_prompt = original_prompt.to_string();
+    let mut normalized_fallback = None;
+    for attempt in 0..=TOPIA_STAGE_REPAIR_ATTEMPTS {
+        let request_stage = if attempt == 0 {
+            stage.to_string()
+        } else {
+            format!("{stage}-repair-{attempt}")
+        };
+        let response = complete_topia_stage(
+            app,
+            &request_stage,
+            crate::mobile_cloud::CompleteRequest {
+                prompt: &request_prompt,
+                system: Some(if attempt == 0 {
+                    prompt::SCENE_SYSTEM_PROMPT
+                } else {
+                    prompt::REPAIR_SYSTEM_PROMPT
+                }),
+                json: true,
+                timeout_ms: TOPIA_CLOUD_TIMEOUT_MS,
+                max_completion_tokens: Some(harness::completion_budget(stage)),
+                fast: true,
+            },
+        )?;
+        let error = match inspect_scene(&response.text, location) {
+            Ok((scene, None)) => return Ok((scene, response)),
+            Ok((scene, Some(camera_issue))) => {
+                crate::diagnostics::log(
+                    app,
+                    "topia",
+                    "camera-normalized",
+                    &format!("stage={stage} {camera_issue}"),
+                );
+                normalized_fallback = Some((scene, response.clone()));
+                camera_issue
+            }
+            Err(error) => error,
+        };
+        if attempt == TOPIA_STAGE_REPAIR_ATTEMPTS {
+            if let Some(fallback) = normalized_fallback {
+                crate::diagnostics::log(
+                    app,
+                    "topia",
+                    "camera-fallback-accepted",
+                    &format!("stage={stage} after_model_repairs={TOPIA_STAGE_REPAIR_ATTEMPTS}"),
+                );
+                return Ok(fallback);
+            }
+            crate::diagnostics::log(
+                app,
+                "topia",
+                "repair-exhausted",
+                &format!("stage={stage} attempts={TOPIA_STAGE_REPAIR_ATTEMPTS} error={error}"),
+            );
+            return Err(format!(
+                "{stage} validation failed after model repair: {error}"
+            ));
+        }
+        crate::diagnostics::log(
+            app,
+            "topia",
+            "repair-requested",
+            &format!("stage={stage} attempt={} error={error}", attempt + 1),
+        );
+        emit_progress(
+            app,
+            mode,
+            stage,
+            progress,
+            &format!(
+                "{repair_message}（{}/{}）",
+                attempt + 1,
+                TOPIA_STAGE_REPAIR_ATTEMPTS
+            ),
+        );
+        request_prompt = prompt::build_json_repair(stage, original_prompt, &response.text, &error);
+    }
+    unreachable!()
 }
 
 fn finalize_generated_world(
@@ -1521,8 +2289,7 @@ pub fn save_topia_thumbnail(
     persist_studio(&app, &state)
 }
 
-#[tauri::command]
-pub fn generate_topia_world(
+fn generate_topia_world_blocking(
     input: TopiaGenerationInput,
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
@@ -1530,13 +2297,16 @@ pub fn generate_topia_world(
     let render_style = choose_render_style(&input)?;
     let concept_prompt = prompt::build_concept(&input, &render_style)?;
     #[cfg(mobile)]
-    let concept = app
-        .state::<crate::mobile_cloud::RealiaCloud<tauri::Wry>>()
-        .complete(crate::mobile_cloud::CompleteRequest {
-            prompt: &concept_prompt,
-            system: Some(prompt::CONCEPT_SYSTEM_PROMPT),
-            json: true,
-        })?;
+    let concept_result = complete_validated_stage(
+        &app,
+        "create",
+        "concept",
+        8,
+        "正在修正世界概念",
+        &concept_prompt,
+        prompt::CONCEPT_SYSTEM_PROMPT,
+        parse_concept,
+    );
     #[cfg(not(mobile))]
     {
         let _ = (input, app, concept_prompt);
@@ -1544,71 +2314,155 @@ pub fn generate_topia_world(
     }
     #[cfg(mobile)]
     {
-        emit_progress(&app, "create", "world", 38, "正在塑造浮空居所与天空");
         let mut state = load_studio(&app)?;
-        let world_prompt =
-            prompt::build_world(&input, &concept.text, &state.assets, &render_style)?;
-        let response = app
-            .state::<crate::mobile_cloud::RealiaCloud<tauri::Wry>>()
-            .complete(crate::mobile_cloud::CompleteRequest {
-                prompt: &world_prompt,
-                system: Some(prompt::WORLD_SYSTEM_PROMPT),
-                json: true,
-            })?;
-        emit_progress(&app, "create", "review", 70, "正在审视意象、结构与个人资产");
-        let mut candidate = parse_world_unchecked(&response.text)?;
-        migrate_world(&mut candidate);
-        candidate.render_style = render_style;
-        filter_relations(&mut candidate, &input.context);
-        let validation_error = validate_world(&candidate).err();
-        let review_prompt = prompt::build_review(
-            &input,
-            &concept.text,
-            &candidate,
-            &state.assets,
-            validation_error.as_deref(),
-        )?;
-        let review_response = app
-            .state::<crate::mobile_cloud::RealiaCloud<tauri::Wry>>()
-            .complete(crate::mobile_cloud::CompleteRequest {
-                prompt: &review_prompt,
-                system: Some(prompt::REVIEW_SYSTEM_PROMPT),
-                json: true,
-            })?;
-        let review = parse_review(&review_response.text)?;
-        let (parsed, provider, model) = if review.approved && validation_error.is_none() {
-            (candidate, response.provider, response.model)
-        } else {
-            emit_progress(&app, "create", "revision", 84, "正在根据审稿结果修订世界");
-            let mut issues = review.issues;
-            if let Some(error) = validation_error {
-                issues.push(format!("Rust schema validation: {error}"));
+        let (parsed_concept, concept_text, mut provider, mut model) = match concept_result {
+            Ok((parsed, response)) => (parsed, response.text, response.provider, response.model),
+            Err(error) => {
+                let parsed = fallback_concept(&input);
+                crate::diagnostics::log(
+                    &app,
+                    "topia",
+                    "local-fallback",
+                    &harness::fallback_summary("concept", &error),
+                );
+                emit_progress(&app, "create", "concept", 8, "云端较慢，正在本地整理创意");
+                (
+                    parsed,
+                    serde_json::to_string(&fallback_concept(&input))
+                        .map_err(|error| error.to_string())?,
+                    "RealTopia Rust Harness".into(),
+                    "deterministic-scene-compiler".into(),
+                )
             }
-            let revision_prompt = prompt::build_revision(
-                &input,
-                &candidate,
-                &state.assets,
-                &issues,
-                &review.repair_instructions,
-            )?;
-            let revision = app
-                .state::<crate::mobile_cloud::RealiaCloud<tauri::Wry>>()
-                .complete(crate::mobile_cloud::CompleteRequest {
-                    prompt: &revision_prompt,
-                    system: Some(prompt::WORLD_SYSTEM_PROMPT),
-                    json: true,
-                })?;
-            let mut repaired = parse_world_unchecked(&revision.text)?;
-            migrate_world(&mut repaired);
-            repaired.render_style = candidate.render_style;
-            filter_relations(&mut repaired, &input.context);
-            validate_world(&repaired)?;
-            (repaired, revision.provider, revision.model)
         };
-        emit_progress(&app, "create", "assets", 92, "正在安置作物、装饰与纪念品");
-        let (mut world, mut generated_assets) =
-            finalize_generated_world(parsed, &input, provider, model)?;
-        world.id = format!("topia-{}", Utc::now().timestamp_millis());
+
+        emit_progress(&app, "create", "exterior", 22, "正在搭建屋外与浮空房屋");
+        let exterior_prompt =
+            prompt::build_scene_blueprint(&input, &concept_text, &render_style, "exterior")?;
+        let (exterior, exterior_response) = match complete_validated_stage(
+            &app,
+            "create",
+            "exterior-blueprint",
+            22,
+            "正在修正屋外场景",
+            &exterior_prompt,
+            prompt::BLUEPRINT_SYSTEM_PROMPT,
+            |value| harness::compile_blueprint(value, TopiaLocation::Exterior, &parsed_concept),
+        ) {
+            Ok((scene, response)) => (scene, Some(response)),
+            Err(error) => {
+                crate::diagnostics::log(
+                    &app,
+                    "topia",
+                    "local-fallback",
+                    &harness::fallback_summary("exterior", &error),
+                );
+                emit_progress(&app, "create", "exterior", 22, "正在本地编译屋外场景");
+                (
+                    fallback_scene(TopiaLocation::Exterior, &parsed_concept)?,
+                    None,
+                )
+            }
+        };
+        if let Some(response) = exterior_response {
+            provider = response.provider;
+            model = response.model;
+        }
+
+        emit_progress(&app, "create", "interior", 40, "正在布置室内房间");
+        let interior_prompt =
+            prompt::build_scene_blueprint(&input, &concept_text, &render_style, "interior")?;
+        let interior = match complete_validated_stage(
+            &app,
+            "create",
+            "interior-blueprint",
+            40,
+            "正在修正室内场景",
+            &interior_prompt,
+            prompt::BLUEPRINT_SYSTEM_PROMPT,
+            |value| harness::compile_blueprint(value, TopiaLocation::Interior, &parsed_concept),
+        ) {
+            Ok((scene, response)) => {
+                provider = response.provider;
+                model = response.model;
+                scene
+            }
+            Err(error) => {
+                crate::diagnostics::log(
+                    &app,
+                    "topia",
+                    "local-fallback",
+                    &harness::fallback_summary("interior", &error),
+                );
+                emit_progress(&app, "create", "interior", 40, "正在本地编译室内场景");
+                fallback_scene(TopiaLocation::Interior, &parsed_concept)?
+            }
+        };
+
+        emit_progress(&app, "create", "garden", 56, "正在培育菜地与作物岛");
+        let garden_prompt =
+            prompt::build_scene_blueprint(&input, &concept_text, &render_style, "garden")?;
+        let garden = match complete_validated_stage(
+            &app,
+            "create",
+            "garden-blueprint",
+            56,
+            "正在修正菜地场景",
+            &garden_prompt,
+            prompt::BLUEPRINT_SYSTEM_PROMPT,
+            |value| harness::compile_blueprint(value, TopiaLocation::Garden, &parsed_concept),
+        ) {
+            Ok((scene, response)) => {
+                provider = response.provider;
+                model = response.model;
+                scene
+            }
+            Err(error) => {
+                crate::diagnostics::log(
+                    &app,
+                    "topia",
+                    "local-fallback",
+                    &harness::fallback_summary("garden", &error),
+                );
+                emit_progress(&app, "create", "garden", 56, "正在本地编译菜地场景");
+                fallback_scene(TopiaLocation::Garden, &parsed_concept)?
+            }
+        };
+
+        emit_progress(&app, "create", "assembly", 70, "正在合并并校验三处场景");
+        let mut candidate = assemble_generated_world(
+            &input,
+            parsed_concept.clone(),
+            render_style,
+            TopiaScenes {
+                exterior,
+                interior,
+                garden,
+            },
+        )?;
+        migrate_world(&mut candidate);
+        filter_relations(&mut candidate, &input.context);
+        emit_progress(&app, "create", "review", 76, "正在自动验收场景");
+        if let Err(error) = validate_world(&candidate) {
+            crate::diagnostics::log(&app, "topia", "local-reassembly", &format!("error={error}"));
+            candidate = assemble_generated_world(
+                &input,
+                parsed_concept,
+                candidate.render_style.clone(),
+                TopiaScenes {
+                    exterior: fallback_scene(TopiaLocation::Exterior, &fallback_concept(&input))?,
+                    interior: fallback_scene(TopiaLocation::Interior, &fallback_concept(&input))?,
+                    garden: fallback_scene(TopiaLocation::Garden, &fallback_concept(&input))?,
+                },
+            )?;
+            migrate_world(&mut candidate);
+            filter_relations(&mut candidate, &input.context);
+            validate_world(&candidate)?;
+        }
+        emit_progress(&app, "create", "revision", 92, "场景已通过自动验收");
+        emit_progress(&app, "create", "assets", 97, "正在保存资产与世界");
+        let (world, mut generated_assets) =
+            finalize_generated_world(candidate, &input, provider, model)?;
         extend_portable_assets(&mut generated_assets, &state.assets);
         state.assets = generated_assets;
         state.last_profile = Some(input.profile.clone());
@@ -1626,7 +2480,29 @@ pub fn generate_topia_world(
 }
 
 #[tauri::command]
-pub fn iterate_topia_world(
+pub async fn generate_topia_world(
+    input: TopiaGenerationInput,
+    app: tauri::AppHandle,
+) -> Result<TopiaWorldPayload, String> {
+    crate::diagnostics::log(&app, "topia", "generation-start", "mode=create");
+    let diagnostic_app = app.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || generate_topia_world_blocking(input, app))
+            .await
+            .map_err(|error| format!("Topia 生成后台任务失败: {error}"))?;
+    match &result {
+        Ok(_) => crate::diagnostics::log(&diagnostic_app, "topia", "generation-ok", "mode=create"),
+        Err(error) => crate::diagnostics::log(
+            &diagnostic_app,
+            "topia",
+            "generation-error",
+            &format!("mode=create error={error}"),
+        ),
+    }
+    result
+}
+
+fn iterate_topia_world_blocking(
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
 ) -> Result<TopiaWorldPayload, String> {
@@ -1642,13 +2518,16 @@ pub fn iterate_topia_world(
     emit_progress(&app, "iterate", "memory", 12, "正在回看最近的旅程");
     let user_prompt = prompt::build_iteration(&current, &state.assets, &input)?;
     #[cfg(mobile)]
-    let response = app
-        .state::<crate::mobile_cloud::RealiaCloud<tauri::Wry>>()
-        .complete(crate::mobile_cloud::CompleteRequest {
-            prompt: &user_prompt,
-            system: Some(prompt::WORLD_SYSTEM_PROMPT),
-            json: true,
-        })?;
+    let (parsed, response) = complete_validated_stage(
+        &app,
+        "iterate",
+        "memory",
+        12,
+        "正在修正 Topia 迭代结果",
+        &user_prompt,
+        prompt::WORLD_SYSTEM_PROMPT,
+        parse_world,
+    )?;
     #[cfg(not(mobile))]
     {
         let _ = (input, app, user_prompt);
@@ -1657,7 +2536,6 @@ pub fn iterate_topia_world(
     #[cfg(mobile)]
     {
         emit_progress(&app, "iterate", "assets", 72, "正在让新故事长成纪念品");
-        let parsed = parse_world(&response.text)?;
         let (mut world, mut assets) =
             finalize_generated_world(parsed, &input, response.provider, response.model)?;
         world.id = state.active_world_id.clone();
@@ -1679,7 +2557,16 @@ pub fn iterate_topia_world(
 }
 
 #[tauri::command]
-pub fn maintain_topia_world(
+pub async fn iterate_topia_world(
+    context: TopiaRuntimeContext,
+    app: tauri::AppHandle,
+) -> Result<TopiaWorldPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || iterate_topia_world_blocking(context, app))
+        .await
+        .map_err(|error| format!("Topia 迭代后台任务失败: {error}"))?
+}
+
+fn maintain_topia_world_blocking(
     context: TopiaRuntimeContext,
     app: tauri::AppHandle,
 ) -> Result<Option<TopiaWorldPayload>, String> {
@@ -1698,13 +2585,23 @@ pub fn maintain_topia_world(
         }
         // Scheduling policy remains in Rust; the same iteration command owns generation.
         drop(state);
-        return iterate_topia_world(context, app).map(Some);
+        return iterate_topia_world_blocking(context, app).map(Some);
     }
     #[cfg(not(mobile))]
     {
         let _ = (context, app, digest, state);
         Ok(None)
     }
+}
+
+#[tauri::command]
+pub async fn maintain_topia_world(
+    context: TopiaRuntimeContext,
+    app: tauri::AppHandle,
+) -> Result<Option<TopiaWorldPayload>, String> {
+    tauri::async_runtime::spawn_blocking(move || maintain_topia_world_blocking(context, app))
+        .await
+        .map_err(|error| format!("Topia 后台维护任务失败: {error}"))?
 }
 
 #[cfg(test)]
@@ -1738,16 +2635,39 @@ mod tests {
         let style = TopiaRenderStyleConfig::default();
         let concept =
             prompt::build_concept(&input, &style).expect("concept prompt should serialize");
-        let value = prompt::build_world(&input, &concept, &TopiaAssetLayer::default(), &style)
-            .expect("world prompt should serialize");
-        assert!(value.contains("floating home"));
-        assert!(value.contains("room-shell"));
-        assert!(value.contains("crop-plots"));
-        assert!(value.contains("测试用户"));
-        assert!(value.contains("Return JSON only"));
-        assert!(value.contains("NON-LITERAL IMAGERY RULE"));
+        let exterior = prompt::build_scene(
+            &input,
+            &concept,
+            &TopiaAssetLayer::default(),
+            &style,
+            "exterior",
+        )
+        .expect("exterior prompt should serialize");
+        let interior = prompt::build_scene(
+            &input,
+            &concept,
+            &TopiaAssetLayer::default(),
+            &style,
+            "interior",
+        )
+        .expect("interior prompt should serialize");
+        let garden = prompt::build_scene(
+            &input,
+            &concept,
+            &TopiaAssetLayer::default(),
+            &style,
+            "garden",
+        )
+        .expect("garden prompt should serialize");
+        assert!(exterior.contains("floating home"));
+        assert!(interior.contains("room-shell"));
+        assert!(garden.contains("crop-plots"));
+        assert!(exterior.contains("测试用户"));
+        assert!(exterior.contains("Scene JSON only"));
+        assert!(exterior.contains("NON-LITERAL IMAGERY RULE"));
         assert!(concept.contains("paper boat must not cause a paper boat object"));
         assert!(prompt::WORLD_SYSTEM_PROMPT.contains("sad adds rain"));
+        assert!(prompt::SCENE_SYSTEM_PROMPT.contains("one scene"));
     }
 
     #[test]
@@ -1872,6 +2792,93 @@ mod tests {
             .objects
             .retain(|object| object.anchor_id.as_deref() != Some("portal-interior"));
         assert!(validate_world(&world).is_err());
+    }
+
+    #[test]
+    fn generated_scene_camera_is_normalized_before_validation() {
+        let world = mock_world().expect("mock world should parse");
+        let mut scene = world.scenes.exterior;
+        scene.camera.yaw = 8.5;
+        scene.camera.pitch = -2.0;
+        normalize_scene_camera(&mut scene);
+        assert_eq!(scene.camera.yaw, 3.2);
+        assert_eq!(scene.camera.pitch, 0.18);
+        validate_scene(&scene, TopiaLocation::Exterior)
+            .expect("normalized camera should pass scene validation");
+    }
+
+    #[test]
+    fn scene_inspection_reports_camera_repair_feedback_and_keeps_a_safe_fallback() {
+        let world = mock_world().expect("mock world should parse");
+        let mut scene = world.scenes.exterior;
+        scene.camera.yaw = 8.5;
+        scene.camera.pitch = -2.0;
+        let json = serde_json::to_string(&scene).expect("scene should serialize");
+        let (safe, issue) =
+            inspect_scene(&json, TopiaLocation::Exterior).expect("scene should be repairable");
+        assert_eq!(safe.camera.yaw, 3.2);
+        assert_eq!(safe.camera.pitch, 0.18);
+        let issue = issue.expect("out-of-range camera must be sent back to the model");
+        assert!(issue.contains("yaw=8.5"));
+        assert!(issue.contains("pitch=-2"));
+        assert!(issue.contains("return an in-range camera explicitly"));
+    }
+
+    #[test]
+    fn repair_prompt_contains_original_contract_candidate_and_validator_feedback() {
+        let repair = prompt::build_json_repair(
+            "exterior",
+            "must contain portal-interior",
+            r#"{"camera":{"yaw":9}}"#,
+            "camera is out of range",
+        );
+        assert!(repair.contains("must contain portal-interior"));
+        assert!(repair.contains(r#"{"camera":{"yaw":9}}"#));
+        assert!(repair.contains("camera is out of range"));
+        assert!(repair.contains("complete corrected replacement"));
+    }
+
+    #[test]
+    fn concept_parser_accepts_common_model_color_formats_and_clamps_soft_values() {
+        let concept = parse_concept(
+            r##"{
+                "title":"绒光观星屋",
+                "archetype":"温柔的漂浮观测站",
+                "palette":[[255,128,2],"#102030",16777215],
+                "sky":{
+                    "theme":"晚霞梦境",
+                    "motifs":["star-dust"],
+                    "celestialShape":"prism",
+                    "decorationDensity":1.8,
+                    "drift":-0.4,
+                    "top":[10,20,30],
+                    "mid":"#405060",
+                    "low":66051,
+                    "aurora":{"r":70,"g":80,"b":90},
+                    "celestial":[255,240,180],
+                    "stars":"ffffff",
+                    "fog":[210,220,230],
+                    "magic":3
+                }
+            }"##,
+        )
+        .expect("common model color formats should be accepted locally");
+        assert_eq!(concept.palette, [0xff8002, 0x102030, 0xffffff]);
+        assert_eq!(concept.sky.top, 0x0a141e);
+        assert_eq!(concept.sky.mid, 0x405060);
+        assert_eq!(concept.sky.aurora, 0x46505a);
+        assert_eq!(concept.sky.decoration_density, 1.0);
+        assert_eq!(concept.sky.drift, 0.0);
+        assert_eq!(concept.sky.magic, 1.0);
+    }
+
+    #[test]
+    fn concept_parser_fills_nonessential_fields_instead_of_rejecting_the_stage() {
+        let concept = parse_concept(r#"{"title":"只有一个名字"}"#)
+            .expect("missing nonessential concept fields should use backend defaults");
+        assert_eq!(concept.title, "只有一个名字");
+        assert!(!concept.archetype.is_empty());
+        validate_concept(&concept).expect("normalized concept should remain valid");
     }
 
     #[test]

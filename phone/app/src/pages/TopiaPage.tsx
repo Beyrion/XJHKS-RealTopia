@@ -176,10 +176,21 @@ export default function TopiaPage() {
     void quickVoice.start("conversation", personId);
   };
   const worldContext = { quests, people, memories };
-  const runTopiaAction = async (action: () => Promise<TopiaWorldPayload>) => {
+  const runTopiaAction = async (
+    mode: TopiaGenerationProgress["mode"],
+    action: () => Promise<TopiaWorldPayload>,
+  ) => {
     setTopiaGenerating(true);
-    setTopiaProgress(null);
+    setTopiaProgress({
+      mode,
+      stage: "preparing",
+      progress: 2,
+      message: mode === "create" ? "正在准备新的 Topia" : "正在整理最近的变化",
+    });
     try {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
       const next = await action();
       setTopiaPayload(next);
       setLocation("exterior");
@@ -194,14 +205,16 @@ export default function TopiaPage() {
     }
   };
   const generateTopia = (nextProfile: TopiaUserProfileInput) =>
-    void runTopiaAction(() =>
+    void runTopiaAction("create", () =>
       topiaWorldService.generate(nextProfile, worldContext),
     );
   const iterateTopia = () => {
-    void runTopiaAction(() => topiaWorldService.iterate(worldContext));
+    void runTopiaAction("iterate", () =>
+      topiaWorldService.iterate(worldContext),
+    );
   };
   const switchTopia = (worldId: string) =>
-    void runTopiaAction(() =>
+    void runTopiaAction("iterate", () =>
       topiaWorldService.switchWorld(worldId, worldContext),
     );
   const useDefaultTopia = async () => {
