@@ -43,7 +43,7 @@ final class RokidPhotoTransport implements CxrController.Callback, WifiControlle
     static final long BLUETOOTH_RETRY_MS = 300;
     static final long P2P_RETRY_MS = 400;
     static final long SOCKET_RETRY_MS = 250;
-    static final int SOCKET_CONNECT_TIMEOUT_MS = 1_200;
+    static final int SOCKET_CONNECT_TIMEOUT_MS = 2_000;
     private static final long P2P_REQUEST_WATCHDOG_MS = 4_000;
     // vivo may spend ~5.3 s discovering the peer before it even calls CONNECT;
     // successful groups on this device have taken up to 8.9 s. Twelve seconds
