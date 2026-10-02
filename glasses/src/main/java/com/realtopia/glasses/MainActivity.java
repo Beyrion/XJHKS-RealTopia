@@ -2,6 +2,8 @@ package com.realtopia.glasses;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -10,11 +12,15 @@ import android.view.KeyEvent;
 import android.view.WindowManager;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.io.File;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
     private static final int PERMISSION_REQUEST=41;
     private WarmCamera camera;
+    private ArSceneRecorder sceneRecorder;
+    private SpriteDualRecorder spriteRecorder;
+    private HudSnapshotArchive hudArchive;
     private PhotoSocketServer photoServer;
     private RokidCommandBridge commandBridge;
     private GlassHudView hud;
@@ -25,13 +31,59 @@ public final class MainActivity extends Activity {
     private int perceptionFramesPerSecond=2;
     private int captureWidth=4032;
     private int captureQuality=90;
+    private boolean arStartPending,arCameraSuspended,arFailed,spriteFallbackPending,demoOverlaySequence,destroyed;
+    private int arRecordDurationMs=30_000,demoSequenceGeneration;
+    private boolean arRecordAudio;
+    private String activeSceneMode="",arLastFile="",arLastScreenFile="";
 
     @Override protected void onCreate(Bundle state){
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
+        configureHudArchive(getIntent());
         photoServer=new PhotoSocketServer();photoServer.start();
         camera=new WarmCamera(this);
+        sceneRecorder=new ArSceneRecorder(this,new ArSceneRecorder.Listener(){
+            @Override public void onSdkReady(){if(arStartPending)beginArSceneRecording();}
+            @Override public void onStarted(String outputDirectory){
+                if(destroyed)return;
+                hud.setStatus(GlassHudView.Mode.SCENE_RECORDING,"正在录制第一人称实景 + 眼镜界面");
+                if(demoOverlaySequence)scheduleDemoOverlaySequence(true);
+            }
+            @Override public void onFile(String path,boolean last){arLastFile=path==null?"":path;if(last&&!destroyed)hud.setStatus(sceneRecorder.isRecording()?GlassHudView.Mode.SENDING:GlassHudView.Mode.READY,sceneRecorder.isRecording()?"视频封装完成 · 正在等待停止回调":"视频已保存 · "+new File(arLastFile).getName());}
+            @Override public void onStopped(){
+                if(destroyed||!"ar-mix".equals(activeSceneMode))return;
+                activeSceneMode="";arStartPending=false;resumeCameraAfterArRecording();
+                if(!arFailed)hud.setStatus(GlassHudView.Mode.READY,arLastFile.isEmpty()?"录制已停止 · 未收到视频文件回调":"视频已保存 · "+new File(arLastFile).getName());
+            }
+            @Override public void onUnavailable(String message){
+                if(destroyed)return;
+                Log.w("RealiaRecording","AR_RECORD_FALLBACK reason="+message+" hudArchive="+(hudArchive==null?"disabled":hudArchive.directory()));
+                if(arStartPending||arCameraSuspended||"ar-mix".equals(activeSceneMode))trySpriteFallback(message);
+            }
+        });
+        sceneRecorder.prepare();
+        spriteRecorder=new SpriteDualRecorder(this,new SpriteDualRecorder.Listener(){
+            @Override public void onReady(){if(spriteFallbackPending)beginSpriteSceneRecording();}
+            @Override public void onStarted(String cameraPath,String screenPath){
+                if(destroyed||!"sprite-dual".equals(activeSceneMode))return;
+                arLastFile=cameraPath;arLastScreenFile=screenPath;
+                hud.setStatus(GlassHudView.Mode.SCENE_RECORDING,"同步录制第一人称实景 + HUD 双轨");
+                if(demoOverlaySequence)scheduleDemoOverlaySequence(true);
+            }
+            @Override public void onStopped(String cameraPath,String screenPath,boolean success){
+                if(destroyed||!"sprite-dual".equals(activeSceneMode))return;
+                activeSceneMode="";arLastFile=cameraPath;arLastScreenFile=screenPath;arStartPending=false;
+                resumeCameraAfterArRecording();
+                if(success)hud.setStatus(GlassHudView.Mode.READY,"双轨录制完成 · 脚本正在合成视频");
+                else failSceneRecording("Rokid Sprite 双轨文件保存失败");
+            }
+            @Override public void onUnavailable(String message){
+                if(destroyed)return;
+                if(spriteFallbackPending||"sprite-dual".equals(activeSceneMode))failSceneRecording(message);
+            }
+        });
+        spriteRecorder.prepare();
         conversationRecorder=new ConversationRecorder(this);
         commandBridge=new RokidCommandBridge(this::capture,this::setPerception,this::showPerson);commandBridge.start();
         String mock=getIntent().getStringExtra("mock");
@@ -39,11 +91,83 @@ public final class MainActivity extends Activity {
         else if("stranger".equals(mock))hud.postDelayed(()->hud.showPerson("__stranger__","陌生人","？？？",-1,"？？？","？？？"),1_500);
         if(checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED){prepareCamera();}
         else requestPermissions(new String[]{Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.BLUETOOTH_CONNECT},PERMISSION_REQUEST);
+        handleRecordingIntent(getIntent());
     }
 
     private void buildUi(){
         hud=new GlassHudView(this);hud.setStatus(GlassHudView.Mode.READY,"相机预热中");setContentView(hud);
     }
+    private boolean isDebuggable(){return (getApplicationInfo().flags&ApplicationInfo.FLAG_DEBUGGABLE)!=0;}
+    private void configureHudArchive(Intent intent){
+        if(!isDebuggable()||!intent.getBooleanExtra("archiveHud",false))return;
+        hudArchive=new HudSnapshotArchive(this);hud.setOnVisualChangeListener(()->{if(hudArchive!=null)hudArchive.capture(hud);});
+    }
+    private void handleRecordingIntent(Intent intent){
+        if(intent==null||!isDebuggable())return;
+        if("stop".equals(intent.getStringExtra("arRecordAction"))){arStartPending=false;if(sceneRecorder!=null)sceneRecorder.stop();if(spriteRecorder!=null)spriteRecorder.stop();return;}
+        int requested=intent.getIntExtra("arRecordDurationMs",0);
+        if(requested<=0){if(intent.getBooleanExtra("demoOverlaySequence",false))hud.postDelayed(()->scheduleDemoOverlaySequence(false),1_500);return;}
+        arRecordDurationMs=Math.min(180_000,Math.max(5_000,requested));
+        arRecordAudio=intent.getBooleanExtra("arRecordAudio",false);
+        demoOverlaySequence=intent.getBooleanExtra("demoOverlaySequence",false);
+        int delay=Math.min(30_000,Math.max(1_500,intent.getIntExtra("arRecordDelayMs",2_500)));
+        arStartPending=true;arFailed=false;spriteFallbackPending=false;activeSceneMode="";arLastFile="";arLastScreenFile="";
+        hud.setStatus(GlassHudView.Mode.READY,"AR 混合录制待启动 · 相机预热中");
+        hud.postDelayed(()->{if(arStartPending)beginArSceneRecording();},delay);
+    }
+    private void beginArSceneRecording(){
+        if(destroyed||!arStartPending||arCameraSuspended)return;
+        if(!sceneRecorder.isReady()){hud.setStatus(GlassHudView.Mode.READY,"正在连接 Rokid AR 混合录制服务");sceneRecorder.prepare();return;}
+        arCameraSuspended=true;hud.setStatus(GlassHudView.Mode.SCENE_RECORDING,"正在切换到 Rokid AR 混合相机");
+        camera.suspend(()->{
+            if(destroyed)return;
+            if(!arStartPending){resumeCameraAfterArRecording();return;}
+            arStartPending=false;activeSceneMode="ar-mix";
+            sceneRecorder.start(arRecordDurationMs,arRecordAudio);
+        });
+    }
+    private void trySpriteFallback(String reason){
+        if(destroyed)return;
+        Log.i("RealiaRecording","SPRITE_FALLBACK_REQUEST reason="+reason);
+        activeSceneMode="";arStartPending=true;spriteFallbackPending=true;
+        hud.setStatus(GlassHudView.Mode.SCENE_RECORDING,"AR Mix 不可用 · 正在切换同步双轨录制");
+        if(spriteRecorder.isReady())beginSpriteSceneRecording();else spriteRecorder.prepare();
+    }
+    private void beginSpriteSceneRecording(){
+        if(destroyed||!spriteFallbackPending)return;
+        spriteFallbackPending=false;activeSceneMode="sprite-dual";
+        Runnable start=()->{
+            if(destroyed)return;
+            arStartPending=false;
+            if(!spriteRecorder.start(arRecordDurationMs))failSceneRecording("Rokid Sprite 双轨录制启动失败");
+        };
+        if(arCameraSuspended)start.run();
+        else{arCameraSuspended=true;camera.suspend(start);}
+    }
+    private void failSceneRecording(String message){
+        arFailed=true;arStartPending=false;spriteFallbackPending=false;activeSceneMode="";
+        Log.e("RealiaRecording","SCENE_RECORDING_UNAVAILABLE message="+message+" hudArchive="+(hudArchive==null?"disabled":hudArchive.directory()));
+        resumeCameraAfterArRecording();
+        hud.setStatus(GlassHudView.Mode.ERROR,"整段场景录制不可用 · 已保留 HUD 状态截图");
+    }
+    private void resumeCameraAfterArRecording(){
+        if(!arCameraSuspended||destroyed)return;
+        arCameraSuspended=false;camera.prepare();
+        if(perceptionEnabled)camera.startStream(perceptionFramesPerSecond,captureQuality,new WarmCamera.StreamCallback(){
+            @Override public void onFrame(WarmCamera.StreamFrame frame){sendStreamFrame(frame);}
+            @Override public void onError(String message){MainActivity.this.onError(0,message);}
+        });
+    }
+    private void scheduleDemoOverlaySequence(boolean requireArRecording){
+        int sequence=++demoSequenceGeneration;
+        postDemoState(sequence,2_000,requireArRecording,()->hud.setStatus(GlassHudView.Mode.CAPTURING,"热拍摄 · 正在识别眼前场景"));
+        postDemoState(sequence,4_000,requireArRecording,()->hud.setStatus(GlassHudView.Mode.SENDING,"场景已发送 · 正在生成人物提示"));
+        postDemoState(sequence,6_000,requireArRecording,()->hud.showPerson("lin","林澄","植物研究员 / 老朋友",86,"让阳台重新生长","周末要不要一起去花市看看？我发现了一家很小的香草摊。"));
+        postDemoState(sequence,8_500,requireArRecording,hud::nextPersonChoice);
+        postDemoState(sequence,11_000,requireArRecording,()->hud.setStatus(requireArRecording?GlassHudView.Mode.SCENE_RECORDING:GlassHudView.Mode.READY,requireArRecording?"Overlay 演示完成 · 第一人称录制继续":"Overlay 状态演示完成"));
+    }
+    private boolean isSceneRecording(){return sceneRecorder.isRecording()||spriteRecorder.isRecording();}
+    private void postDemoState(int sequence,long delay,boolean requireArRecording,Runnable action){hud.postDelayed(()->{if(!destroyed&&sequence==demoSequenceGeneration&&(!requireArRecording||isSceneRecording()))action.run();},delay);}
     private void prepareCamera(){hud.setStatus(GlassHudView.Mode.READY,"相机预热中");camera.prepare();hud.postDelayed(()->hud.setStatus(GlassHudView.Mode.READY,"物理按键已就绪 · Photo socket :39831"),1_300);}
 
     private void capture(long requestId,int width,int quality,boolean forceCold){
@@ -140,6 +264,7 @@ public final class MainActivity extends Activity {
         try{JSONObject metadata=new JSONObject().put("recordingId",recordingId).put("sampleRate",ConversationRecorder.SAMPLE_RATE).put("channels",1).put("encoding","pcm_s16le").put("startedElapsedMs",value.startedAtMs).put("durationMs",value.durationMs).put("bytes",value.pcm.length);boolean sent=photoServer.sendAudio(recordingId,metadata,value.pcm);runOnUiThread(()->hud.setStatus(sent?GlassHudView.Mode.SENDING:GlassHudView.Mode.ERROR,sent?"录音已发送 · 等待手机转写与任务关联":"手机数据通道未连接"));}
         catch(JSONException error){onError(recordingId,error.getMessage());}
     }
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleRecordingIntent(intent);}
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);if(code==PERMISSION_REQUEST&&checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED)prepareCamera();else onError(0,"camera permission denied");}
-    @Override protected void onDestroy(){if(conversationRecorder!=null)conversationRecorder.close();if(camera!=null)camera.close();if(photoServer!=null)photoServer.close();super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;++demoSequenceGeneration;if(sceneRecorder!=null)sceneRecorder.close();if(spriteRecorder!=null)spriteRecorder.close();if(hudArchive!=null)hudArchive.close();if(conversationRecorder!=null)conversationRecorder.close();if(camera!=null)camera.close();if(photoServer!=null)photoServer.close();super.onDestroy();}
 }

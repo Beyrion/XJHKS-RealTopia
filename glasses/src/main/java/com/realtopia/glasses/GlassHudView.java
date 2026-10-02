@@ -9,7 +9,7 @@ import android.view.View;
 
 /** Single-wavelength HUD: every illuminated pixel uses the Rokid green emitter hue. */
 final class GlassHudView extends View {
-    enum Mode { READY, CAPTURING, SENDING, PERSON, RECORDING, ERROR }
+    enum Mode { READY, CAPTURING, SENDING, PERSON, RECORDING, SCENE_RECORDING, ERROR }
     private static final int R=76, G=255, B=151, GREEN=Color.rgb(R,G,B);
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private Mode mode=Mode.READY;
@@ -19,21 +19,26 @@ final class GlassHudView extends View {
     private static final long PERSON_TIMEOUT_MS=15_000;
     private long modeStarted=SystemClock.elapsedRealtime();
     private boolean perception;
+    private Runnable visualChangeListener;
 
     GlassHudView(Context context){super(context);paint.setTypeface(android.graphics.Typeface.create("sans",android.graphics.Typeface.NORMAL));setBackgroundColor(Color.BLACK);}
-    void setStatus(Mode next,String value){mode=next;detail=value==null?"":value;modeStarted=SystemClock.elapsedRealtime();invalidate();}
-    void setPerception(boolean value){perception=value;invalidate();}
+    void setOnVisualChangeListener(Runnable listener){visualChangeListener=listener;notifyVisualChanged();}
+    private void notifyVisualChanged(){invalidate();if(visualChangeListener!=null)post(visualChangeListener);}
+    void setStatus(Mode next,String value){mode=next;detail=value==null?"":value;modeStarted=SystemClock.elapsedRealtime();notifyVisualChanged();}
+    void setPerception(boolean value){perception=value;notifyVisualChanged();}
     void showPerson(String personId,String name,String title,int bond,String quest,String speech){personName=name;personTitle=title;personBond=bond;personQuest=quest;personSpeech=speech;personChoices.reset(personId);setStatus(Mode.PERSON,bond<0?"检测到陌生人":"人物已相认");}
     boolean isPersonMode(){return mode==Mode.PERSON;}
-    void previousPersonChoice(){if(mode!=Mode.PERSON)return;personChoices.previous();invalidate();}
-    void nextPersonChoice(){if(mode!=Mode.PERSON)return;personChoices.next();invalidate();}
+    void previousPersonChoice(){if(mode!=Mode.PERSON)return;personChoices.previous();notifyVisualChanged();}
+    void nextPersonChoice(){if(mode!=Mode.PERSON)return;personChoices.next();notifyVisualChanged();}
     PersonChoiceState.Selection selectedPersonChoice(){return mode==Mode.PERSON?personChoices.selection():null;}
     void finishPersonChoice(PersonChoiceState.Selection choice,boolean sent){if(choice==null)return;setStatus(sent?Mode.READY:Mode.ERROR,sent?"已选择 · "+choice.label:"选择已确认 · 等待手机重新连接");}
+    String snapshotMode(){return mode.name();}
+    String snapshotToken(){return mode.name()+"|"+detail+"|"+perception+"|"+personName+"|"+personChoices.selectedIndex();}
     private static int mono(int alpha){return Color.argb(alpha,R,G,B);}
 
     @Override protected void onDraw(Canvas c){super.onDraw(c);float w=getWidth(),h=getHeight();paint.setStyle(Paint.Style.FILL);if(mode==Mode.PERSON)drawPerson(c,w,h);else drawFieldHud(c,w,h);postInvalidateDelayed(1000);}
     private void drawFieldHud(Canvas c,float w,float h){
-        String heading=mode==Mode.RECORDING?"正在录音":mode==Mode.CAPTURING?"正在拍摄":
+        String heading=mode==Mode.RECORDING?"正在录音":mode==Mode.SCENE_RECORDING?"场景录制":mode==Mode.CAPTURING?"正在拍摄":
                 mode==Mode.SENDING?"正在传输":mode==Mode.ERROR?"连接异常":"RealTopia";
         text(c,heading,22,36,15,mono(125),true);
         wrapText(c,detail,22,70,w-44,20,mode==Mode.ERROR?mono(210):GREEN);

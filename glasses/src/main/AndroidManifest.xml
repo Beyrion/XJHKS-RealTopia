@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <application android:allowBackup="false" android:label="RealTopia Glass" android:theme="@style/AppTheme" android:usesCleartextTraffic="true">
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait" android:showWhenLocked="true" android:turnScreenOn="true">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:screenOrientation="portrait" android:showWhenLocked="true" android:turnScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

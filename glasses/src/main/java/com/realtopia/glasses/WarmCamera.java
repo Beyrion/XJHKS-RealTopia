@@ -10,6 +10,7 @@ import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import java.io.ByteArrayOutputStream;
@@ -84,6 +85,11 @@ final class WarmCamera implements AutoCloseable {
 
     WarmCamera(Context context) { this.context=context; thread.start(); handler=new Handler(thread.getLooper()); }
     void prepare() { handler.post(() -> ensureCamera(null)); }
+    void suspend(Runnable completion){handler.post(()->{
+        streamEnabled=false;streamCallback=null;nextStreamFrameAtMs=0;captureInFlight=false;activeRequestId=-1;
+        releaseCamera();
+        if(completion!=null)new Handler(Looper.getMainLooper()).post(completion);
+    });}
     void startStream(int framesPerSecond,int jpegQuality,StreamCallback callback) {
         handler.post(()->{
             if(closed){callback.onError("camera closed");return;}

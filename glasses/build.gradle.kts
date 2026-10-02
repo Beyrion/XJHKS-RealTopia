@@ -16,8 +16,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    buildFeatures { aidl = true }
 }
 dependencies {
     implementation("com.rokid.cxr:cxr-service-bridge:1.0")
+    implementation("com.rokid.security:glass3.open.sdk:2.2.0-E") {
+        exclude(group = "org.slf4j")
+    }
     testImplementation("junit:junit:4.13.2")
 }
