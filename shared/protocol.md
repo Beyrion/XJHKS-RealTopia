@@ -1,4 +1,4 @@
-# REA/1 transport protocol
+# REA/1 binary transport and dialogue events
 
 控制面使用 Rokid CXR 的蓝牙链路：
 
