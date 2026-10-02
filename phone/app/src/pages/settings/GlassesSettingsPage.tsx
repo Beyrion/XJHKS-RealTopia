@@ -14,6 +14,10 @@ export default function GlassesSettingsPage() {
     updatePerception,
     connectGlasses,
     notify,
+    sceneObservationEnabled,
+    sceneObservationStatus,
+    updateSceneObservationEnabled,
+    runSceneObservation,
   } = useAppStore();
   const ready = session.phase === "ready";
 
@@ -115,6 +119,33 @@ export default function GlassesSettingsPage() {
           />
           <b id="capture-fps-label">{glassSettings.framesPerSecond} FPS</b>
         </label>
+      </SettingCard>
+      <SettingCard title="场景观察与任务联动">
+        <Toggle
+          label="每分钟场景观察"
+          id="scene-observation"
+          checked={sceneObservationEnabled}
+          onChange={updateSceneObservationEnabled}
+        />
+        <p className="setting-note" id="scene-observation-status">
+          {sceneObservationStatus.running
+            ? "正在复制最新持续帧、人物检测并运行 Qwen3-VL-2B…"
+            : sceneObservationStatus.lastError
+              ? `等待重试 · ${sceneObservationStatus.lastError}`
+              : sceneObservationStatus.lastSummary
+                ? `最近观察：${sceneObservationStatus.lastSummary}${sceneObservationStatus.lastLatencyMs ? ` · ${(sceneObservationStatus.lastLatencyMs / 1_000).toFixed(1)} 秒` : ""}`
+                : "复制最新持续帧后在手机端理解活动；连续证据可推进当前任务，但不会自动完成。"}
+        </p>
+        <div className="buttons">
+          <button
+            id="scene-observe-now"
+            disabled={!ready || sceneObservationStatus.running}
+            onClick={() => void runSceneObservation(true)}
+          >
+            <Icon name="Telescope" />
+            {sceneObservationStatus.running ? "观察中" : "立即观察"}
+          </button>
+        </div>
       </SettingCard>
       <SettingCard title="图像参数">
         <label className="range">
