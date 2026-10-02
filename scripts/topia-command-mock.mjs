@@ -114,8 +114,16 @@ export async function installTopiaCommandMock(page, projectRoot) {
         return Promise.resolve();
       }
       if (command === "generate_topia_world")
-        return Promise.reject(
-          new Error("cloud generation is unavailable in browser UI tests"),
+        return new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "cloud generation is unavailable in browser UI tests",
+                ),
+              ),
+            600,
+          ),
         );
       if (command === "iterate_topia_world")
         return Promise.reject(

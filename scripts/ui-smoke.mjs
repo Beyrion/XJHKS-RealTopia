@@ -657,6 +657,52 @@ try {
     throw new Error(
       `Topia studio final page audit failed: ${JSON.stringify(topiaStudioFinalAudit)}`,
     );
+  await page.locator(".topia-guide-actions button").last().click();
+  await page.locator('[role="progressbar"]').waitFor();
+  const topiaGenerationAudit = await page.evaluate(() => {
+    const progress = document.querySelector('[role="progressbar"]');
+    const bar = progress?.querySelector("i");
+    const close = document.querySelector('[aria-label="关闭 Topia 工坊"]');
+    return {
+      title: document.querySelector("#topia-studio-title")?.textContent,
+      message: document.querySelector(".topia-generation-wait h3")?.textContent,
+      busy: document
+        .querySelector(".topia-generation-wait")
+        ?.getAttribute("aria-busy"),
+      value: progress?.getAttribute("aria-valuenow"),
+      width: bar?.style.width,
+      animation: bar
+        ? getComputedStyle(bar, "::after").animationName
+        : undefined,
+      closeDisabled: close instanceof HTMLButtonElement && close.disabled,
+      dialogOverflow: getComputedStyle(
+        document.querySelector(".topia-studio-dialog"),
+      ).overflowY,
+      overlayTouchAction: getComputedStyle(
+        document.querySelector(".topia-studio-overlay"),
+      ).touchAction,
+      scrollable: (() => {
+        const dialog = document.querySelector(".topia-studio-dialog");
+        return dialog.scrollHeight > dialog.clientHeight + 1;
+      })(),
+    };
+  });
+  if (
+    topiaGenerationAudit.title !== "正在创建 Topia" ||
+    topiaGenerationAudit.message !== "正在准备新的 Topia" ||
+    topiaGenerationAudit.busy !== "true" ||
+    topiaGenerationAudit.value !== "2" ||
+    topiaGenerationAudit.width !== "2%" ||
+    topiaGenerationAudit.animation !== "topia-progress-shimmer" ||
+    !topiaGenerationAudit.closeDisabled ||
+    topiaGenerationAudit.dialogOverflow !== "hidden" ||
+    topiaGenerationAudit.overlayTouchAction !== "none" ||
+    topiaGenerationAudit.scrollable
+  )
+    throw new Error(
+      `Topia generation progress audit failed: ${JSON.stringify(topiaGenerationAudit)}`,
+    );
+  await page.locator('[role="progressbar"]').waitFor({ state: "detached" });
   await page.locator('[aria-label="关闭 Topia 工坊"]').click();
   await page.screenshot({
     path: path.join(root, "artifacts/mockups/phone-topia-exterior.png"),
