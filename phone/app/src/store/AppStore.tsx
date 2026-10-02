@@ -17,6 +17,7 @@ import type {
   Person,
   Quest,
   Recording,
+  SceneObservationStatus,
   SessionState,
 } from "../models";
 import { modelHub } from "../services/modelHub";
@@ -28,6 +29,17 @@ import {
   inferQuestCategory,
   recommendedQuest,
 } from "../utils/gameRules";
+import {
+  linkSceneObservation,
+  sceneSimilarity,
+} from "../utils/sceneObservation";
+
+const SCENE_OBSERVATION_INTERVAL_MS = 60_000;
+const SCENE_PROGRESS_COOLDOWN_MS = 5 * 60_000;
+const SCENE_CONFIRMATION_WINDOW_MS = 3 * 60_000;
+const SCENE_VL_MODEL = "MNN/Qwen3-VL-2B-Instruct-MNN";
+const SCENE_PROMPT =
+  "请只用一句中文客观描述第一人称视野中的地点、主要人物、物体和正在发生的动作，不超过50个汉字。不要解释过程，不要猜测身份或看不清的文字。";
 
 type Updater<T> = T | ((current: T) => T);
 
@@ -45,6 +57,8 @@ interface AppStoreValue {
   toastMessage: string;
   activeQuestId: string | null;
   gameEvents: GameEvent[];
+  sceneObservationEnabled: boolean;
+  sceneObservationStatus: SceneObservationStatus;
   updateQuests: (next: Updater<Quest[]>) => void;
   updatePeople: (next: Updater<Person[]>) => void;
   updateMemories: (next: Updater<Memory[]>) => void;
@@ -61,6 +75,8 @@ interface AppStoreValue {
   refreshModelDownload: (force?: boolean) => Promise<void>;
   connectGlasses: (silent?: boolean) => Promise<void>;
   capture: (mode: "cold" | "hot") => Promise<void>;
+  updateSceneObservationEnabled: (enabled: boolean) => void;
+  runSceneObservation: (manual?: boolean) => Promise<void>;
   retryLastRecording: () => void;
 }
 
@@ -98,6 +114,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     "等待连接眼镜",
   ]);
   const [toastMessage, setToastMessage] = useState("");
+  const [sceneObservationEnabled, setSceneObservationEnabled] = useState(
+    storage.loadSceneObservationEnabled,
+  );
+  const sceneNextAtRef = useRef(Date.now() + SCENE_OBSERVATION_INTERVAL_MS);
+  const [sceneObservationStatus, setSceneObservationStatus] =
+    useState<SceneObservationStatus>({
+      running: false,
+      lastObservedAt: null,
+      nextRunAt: new Date(sceneNextAtRef.current).toISOString(),
+      lastSummary: null,
+      lastError: null,
+      lastLatencyMs: null,
+    });
 
   const questsRef = useRef(quests);
   const peopleRef = useRef(people);
@@ -108,6 +137,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const asrRef = useRef(asrDownload);
   const gameEventsRef = useRef(gameEvents);
   const activeQuestIdRef = useRef(activeQuestId);
+  const modelDownloadsRef = useRef(modelDownloads);
+  const sceneObservationEnabledRef = useRef(sceneObservationEnabled);
+  const sceneObservationInFlightRef = useRef(false);
   const connectingRef = useRef(false);
   const syncedSessionRef = useRef<string | null>(null);
   const lastModelStatusFetchRef = useRef(0);
@@ -166,6 +198,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     perceptionRef.current = next;
     setPerception(next);
     storage.savePerception(next);
+  }, []);
+
+  const updateSceneObservationEnabled = useCallback((enabled: boolean) => {
+    sceneObservationEnabledRef.current = enabled;
+    setSceneObservationEnabled(enabled);
+    storage.saveSceneObservationEnabled(enabled);
+    sceneNextAtRef.current = Date.now() + SCENE_OBSERVATION_INTERVAL_MS;
+    setSceneObservationStatus((current) => ({
+      ...current,
+      nextRunAt: enabled
+        ? new Date(sceneNextAtRef.current).toISOString()
+        : null,
+      lastError: null,
+    }));
   }, []);
 
   const appendGameEvent = useCallback(
@@ -352,6 +398,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     lastModelStatusFetchRef.current = now;
     try {
       const response = await nativeService.modelDownloadStatuses();
+      modelDownloadsRef.current = response.models;
       setModelDownloads(response.models);
       const next =
         response.models.find((item) => item.model_id.includes("Qwen3-ASR")) ??
@@ -364,6 +411,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const next = await nativeService.modelDownloadStatus();
         asrRef.current = next;
         setAsrDownload(next);
+        modelDownloadsRef.current = [next];
         setModelDownloads([next]);
       } catch {
         // Browser preview and Android builds without the model plugin use empty state.
@@ -618,6 +666,192 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [appendLog, notify, refreshSession],
   );
 
+  const runSceneObservation = useCallback(
+    async (manual = false) => {
+      if (sceneObservationInFlightRef.current) {
+        if (manual) notify("场景观察正在运行");
+        return;
+      }
+      if (
+        sessionRef.current.phase !== "ready" ||
+        !sessionRef.current.session_id
+      ) {
+        if (manual) notify("眼镜尚未连接");
+        return;
+      }
+      const modelReady = modelDownloadsRef.current.some(
+        (item) =>
+          item.ready && item.model_id.includes("Qwen3-VL-2B-Instruct-MNN"),
+      );
+      if (!modelReady) {
+        sceneNextAtRef.current = Date.now() + SCENE_OBSERVATION_INTERVAL_MS;
+        setSceneObservationStatus((current) => ({
+          ...current,
+          nextRunAt: new Date(sceneNextAtRef.current).toISOString(),
+          lastError: "Qwen3-VL-2B 尚未下载完成",
+        }));
+        if (manual) notify("请先下载 Qwen3-VL-2B 模型");
+        return;
+      }
+
+      sceneObservationInFlightRef.current = true;
+      const startedAt = Date.now();
+      sceneNextAtRef.current = startedAt + SCENE_OBSERVATION_INTERVAL_MS;
+      setSceneObservationStatus((current) => ({
+        ...current,
+        running: true,
+        nextRunAt: new Date(sceneNextAtRef.current).toISOString(),
+        lastError: null,
+      }));
+      try {
+        const settings = settingsRef.current;
+        const result = await nativeService.observeSceneWithVl(
+          SCENE_VL_MODEL,
+          SCENE_PROMPT,
+          settings.width,
+          settings.quality,
+          96,
+        );
+        const summary = result.vision.text.trim();
+        if (!summary) throw new Error("VL 没有返回场景描述");
+        const observedAt = new Date().toISOString();
+        const links = linkSceneObservation(
+          summary,
+          questsRef.current,
+          peopleRef.current,
+          result.face,
+          activeQuestIdRef.current,
+        );
+        const linkedQuest = links.primaryQuestId
+          ? questsRef.current.find((item) => item.id === links.primaryQuestId)
+          : undefined;
+        const linkedPeople = peopleRef.current.filter((item) =>
+          links.personIds.includes(item.id),
+        );
+        const evidence = `眼镜场景观察 #${result.capture.request_id}：${summary}`;
+        const activityMemory: Memory = {
+          id: `scene-${result.capture.request_id}-${Date.now()}`,
+          time: new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          title: `场景观察 · ${summary.slice(0, 28)}`,
+          meta: [
+            linkedQuest ? `关联任务：${linkedQuest.title}` : "未关联任务",
+            linkedPeople.length
+              ? `人物：${linkedPeople.map((item) => item.name).join("、")}`
+              : "未识别人物",
+            `${Math.round(result.vision.processing_total_ms)} ms`,
+          ].join(" · "),
+          kind: "activity",
+          observedAt,
+          summary,
+          personIds: links.personIds,
+          taskIds: links.taskIds,
+          evidence,
+          confidence: links.confidence,
+          status: "active",
+          dedupeKey: `scene-observed-${result.capture.request_id}`,
+        };
+
+        const previousEvidence = linkedQuest
+          ? memoriesRef.current.find(
+              (item) =>
+                item.kind === "activity" &&
+                item.taskIds?.includes(linkedQuest.id) &&
+                item.observedAt &&
+                Date.now() - Date.parse(item.observedAt) <=
+                  SCENE_CONFIRMATION_WINDOW_MS &&
+                sceneSimilarity(item.summary ?? "", summary) >= 0.35,
+            )
+          : undefined;
+        const recentProgress = linkedQuest
+          ? gameEventsRef.current.some(
+              (event) =>
+                event.type === "task_progressed" &&
+                event.source === "vision" &&
+                event.questId === linkedQuest.id &&
+                Date.now() - Date.parse(event.createdAt) <
+                  SCENE_PROGRESS_COOLDOWN_MS,
+            )
+          : false;
+        const canProgress =
+          linkedQuest &&
+          (linkedQuest.id === activeQuestIdRef.current ||
+            linkedQuest.status === "active") &&
+          linkedQuest.progress < 90 &&
+          previousEvidence &&
+          !recentProgress;
+
+        updateMemories((items) => [activityMemory, ...items].slice(0, 200));
+        appendGameEvent({
+          type: "scene_observed",
+          questId: linkedQuest?.id,
+          personId: links.personIds[0],
+          evidence,
+          dedupeKey: activityMemory.dedupeKey,
+          source: "vision",
+          summary: linkedQuest
+            ? `场景关联任务 · ${linkedQuest.title}`
+            : `记录场景 · ${summary}`,
+        });
+
+        if (canProgress) {
+          const progress = Math.min(90, linkedQuest.progress + 10);
+          updateQuests((items) =>
+            items.map((item) =>
+              item.id === linkedQuest.id
+                ? { ...item, progress, status: "active" }
+                : item,
+            ),
+          );
+          appendGameEvent({
+            type: "task_progressed",
+            questId: linkedQuest.id,
+            progress,
+            evidence: `${previousEvidence.evidence ?? previousEvidence.summary}；${evidence}`,
+            dedupeKey: `vision-progress-${linkedQuest.id}-${Math.floor(Date.now() / SCENE_PROGRESS_COOLDOWN_MS)}`,
+            source: "vision",
+            summary: `连续场景证据 · ${linkedQuest.title} ${progress}%`,
+          });
+          appendLog(`场景连续确认 · ${linkedQuest.title} → ${progress}%`);
+        } else {
+          appendLog(
+            `场景观察 #${result.capture.request_id} · ${summary}${linkedQuest ? ` · 关联「${linkedQuest.title}」` : ""}`,
+          );
+        }
+        setSceneObservationStatus({
+          running: false,
+          lastObservedAt: observedAt,
+          nextRunAt: new Date(sceneNextAtRef.current).toISOString(),
+          lastSummary: summary,
+          lastError: null,
+          lastLatencyMs: Date.now() - startedAt,
+        });
+        if (manual) notify("场景观察完成");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "场景观察失败";
+        appendLog(`场景观察失败 · ${message}`);
+        setSceneObservationStatus((current) => ({
+          ...current,
+          running: false,
+          lastError: message,
+        }));
+        if (manual) notify(message);
+      } finally {
+        sceneObservationInFlightRef.current = false;
+        if (Date.now() >= sceneNextAtRef.current) {
+          sceneNextAtRef.current = Date.now() + SCENE_OBSERVATION_INTERVAL_MS;
+          setSceneObservationStatus((current) => ({
+            ...current,
+            nextRunAt: new Date(sceneNextAtRef.current).toISOString(),
+          }));
+        }
+      }
+    },
+    [appendGameEvent, appendLog, notify, updateMemories, updateQuests],
+  );
+
   const retryLastRecording = useCallback(() => {
     const recording = sessionRef.current.last_recording;
     if (!recording) return;
@@ -642,6 +876,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     };
   }, [connectGlasses, refreshModelDownload, refreshSession]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (
+        sceneObservationEnabledRef.current &&
+        !sceneObservationInFlightRef.current &&
+        Date.now() >= sceneNextAtRef.current &&
+        sessionRef.current.phase === "ready"
+      ) {
+        void runSceneObservation();
+      }
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [runSceneObservation]);
+
   const value = useMemo<AppStoreValue>(
     () => ({
       quests,
@@ -657,6 +905,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       toastMessage,
       activeQuestId,
       gameEvents,
+      sceneObservationEnabled,
+      sceneObservationStatus,
       updateQuests,
       updatePeople,
       updateMemories,
@@ -673,6 +923,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       refreshModelDownload,
       connectGlasses,
       capture,
+      updateSceneObservationEnabled,
+      runSceneObservation,
       retryLastRecording,
     }),
     [
@@ -686,6 +938,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       currentMood,
       glassSettings,
       gameEvents,
+      sceneObservationEnabled,
+      sceneObservationStatus,
       logs,
       memories,
       notify,
@@ -696,6 +950,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       refreshModelDownload,
       refreshSession,
       retryLastRecording,
+      runSceneObservation,
       session,
       toastMessage,
       toggleQuestStep,
@@ -704,6 +959,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       updateMood,
       updatePeople,
       updatePerception,
+      updateSceneObservationEnabled,
       updateQuests,
     ],
   );

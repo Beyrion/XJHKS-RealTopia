@@ -13,7 +13,9 @@ use std::sync::Mutex;
 #[cfg(mobile)]
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
-use strangers::{photo_path, StrangerStore, StrangerSummary};
+#[cfg(mobile)]
+use strangers::photo_path;
+use strangers::{StrangerStore, StrangerSummary};
 use tauri::Manager;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -172,6 +174,12 @@ struct LocalVisionResult {
     processing_total_ms: i64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct SceneObservationResult {
+    capture: CaptureMetric,
+    face: Option<FaceAnalysis>,
+    vision: LocalVisionResult,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CloudConfig {
@@ -1097,6 +1105,130 @@ fn analyze_last_capture_with_vl(
     }
 }
 
+#[tauri::command]
+fn observe_scene_with_vl(
+    model_id: String,
+    prompt: String,
+    max_new_tokens: Option<u32>,
+    width: Option<u32>,
+    quality: Option<u8>,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<SceneObservationResult, String> {
+    #[cfg(mobile)]
+    {
+        if let Some((mut capture, snapshot_path)) = snapshot_latest_stream_capture(&app)? {
+            let snapshot_value = snapshot_path.to_string_lossy().into_owned();
+            let mut analysis_capture = capture.clone();
+            analysis_capture.mode = "scene_snapshot".into();
+            analysis_capture.stream = false;
+            analysis_capture.path = snapshot_value.clone();
+            let face = analyze_scene_face(&app, &state, &analysis_capture).ok();
+            let vision_result = app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
+                &model_id,
+                &snapshot_value,
+                capture.rotation_degrees,
+                &prompt,
+                max_new_tokens.unwrap_or(96).clamp(8, 512),
+            );
+            let _ = std::fs::remove_file(&snapshot_path);
+            let vision = vision_result?;
+            capture.mode = "scene_snapshot".into();
+            capture.stream = false;
+            return Ok(SceneObservationResult {
+                capture,
+                face,
+                vision,
+            });
+        }
+
+        let ticket = queue_capture(&app, "hot", width, quality, &state)?;
+        let capture = wait_for_capture_metric(&app, ticket.request_id)?;
+        wait_for_face_processing(&app, ticket.request_id)?;
+        let face = state
+            .session
+            .lock()
+            .map_err(|_| "state lock poisoned")?
+            .last_face
+            .clone()
+            .filter(|result| result.request_id == ticket.request_id);
+        let vision = app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
+            &model_id,
+            &capture.path,
+            capture.rotation_degrees,
+            &prompt,
+            max_new_tokens.unwrap_or(96).clamp(8, 512),
+        )?;
+        return Ok(SceneObservationResult {
+            capture,
+            face,
+            vision,
+        });
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (model_id, prompt, max_new_tokens, width, quality, app, state);
+        Err("场景观察仅支持 Android 应用".into())
+    }
+}
+
+#[cfg(mobile)]
+fn snapshot_latest_stream_capture(
+    app: &tauri::AppHandle,
+) -> Result<Option<(CaptureMetric, PathBuf)>, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let native = app
+            .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
+            .state()?;
+        if let Some(capture) = native.last_capture.filter(|item| item.stream) {
+            let source = PathBuf::from(&capture.path);
+            if let Some(parent) = source.parent() {
+                let suffix = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|error| error.to_string())?
+                    .as_millis();
+                let snapshot = parent.join(format!(
+                    "realia-scene-{}-{suffix}.jpg",
+                    capture.request_id
+                ));
+                if std::fs::copy(&source, &snapshot).is_ok() {
+                    return Ok(Some((capture, snapshot)));
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+#[cfg(mobile)]
+fn analyze_scene_face(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    capture: &CaptureMetric,
+) -> Result<FaceAnalysis, String> {
+    let receipt = MnnFaceProcessingGateway { app: app.clone() }.submit(CapturedImage {
+        request_id: capture.request_id,
+        path: capture.path.clone(),
+        rotation_degrees: capture.rotation_degrees,
+    })?;
+    if !receipt.accepted || receipt.provider != "mnn" {
+        return Err("MNN processing gateway rejected the scene snapshot".into());
+    }
+    let native = receipt
+        .analysis
+        .ok_or_else(|| "MNN processing gateway returned no scene analysis".to_string())?;
+    let analysis = {
+        let gallery = state.gallery.lock().map_err(|_| "gallery lock poisoned")?;
+        apply_gallery(capture.request_id, &native, &gallery)?
+    };
+    retain_unknown_faces(app, state, capture, &native, &analysis)?;
+    Ok(analysis)
+}
+
 #[derive(Clone, Debug)]
 pub struct CapturedImage {
     pub request_id: u64,
@@ -1760,6 +1892,16 @@ fn request_capture(
     quality: Option<u8>,
     state: tauri::State<'_, AppState>,
 ) -> Result<CaptureTicket, String> {
+    queue_capture(&app, &mode, width, quality, &state)
+}
+
+fn queue_capture(
+    app: &tauri::AppHandle,
+    mode: &str,
+    width: Option<u32>,
+    quality: Option<u8>,
+    state: &AppState,
+) -> Result<CaptureTicket, String> {
     if mode != "cold" && mode != "hot" {
         return Err("capture mode must be cold or hot".into());
     }
@@ -1775,7 +1917,7 @@ fn request_capture(
     let request_id = value.next_request_id;
     #[cfg(mobile)]
     app.state::<mobile_transport::RealiaTransport<tauri::Wry>>()
-        .capture(request_id, &mode, width, quality)?;
+        .capture(request_id, mode, width, quality)?;
     #[cfg(not(mobile))]
     let _ = app;
     value.next_request_id += 1;
@@ -1788,7 +1930,7 @@ fn request_capture(
     start_face_processing(app.clone(), request_id);
     Ok(CaptureTicket {
         request_id,
-        mode,
+        mode: mode.to_string(),
         accepted: true,
         note: "queued for Android native transport".into(),
     })
@@ -1808,21 +1950,7 @@ fn start_face_processing(app: tauri::AppHandle, request_id: u64) {
 
 #[cfg(mobile)]
 fn wait_for_capture_and_process(app: &tauri::AppHandle, request_id: u64) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let capture = loop {
-        let native = app
-            .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
-            .state()?;
-        if let Some(capture) = native.last_capture {
-            if capture.request_id == request_id {
-                break capture;
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("timed out waiting for capture #{request_id}"));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    };
+    let capture = wait_for_capture_metric(app, request_id)?;
 
     {
         let state = app.state::<AppState>();
@@ -1905,6 +2033,55 @@ fn wait_for_capture_and_process(app: &tauri::AppHandle, request_id: u64) -> Resu
         }
     }
     Ok(())
+}
+
+#[cfg(mobile)]
+fn wait_for_capture_metric(
+    app: &tauri::AppHandle,
+    request_id: u64,
+) -> Result<CaptureMetric, String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let native = app
+            .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
+            .state()?;
+        if let Some(capture) = native.last_capture {
+            if capture.request_id == request_id {
+                return Ok(capture);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for capture #{request_id}"));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+#[cfg(mobile)]
+fn wait_for_face_processing(app: &tauri::AppHandle, request_id: u64) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let state = app.state::<AppState>();
+        let session = state.session.lock().map_err(|_| "state lock poisoned")?;
+        if session.face_request_id == Some(request_id) {
+            if session.face_processing == "ready" {
+                return Ok(());
+            }
+            if session.face_processing == "error" {
+                return Err(session
+                    .face_error
+                    .clone()
+                    .unwrap_or_else(|| "人物检测失败".into()));
+            }
+        }
+        drop(session);
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for face processing #{request_id}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
 }
 
 #[tauri::command]
@@ -2108,6 +2285,7 @@ pub fn run() {
             open_model_repository,
             pick_and_analyze_with_vl,
             analyze_last_capture_with_vl,
+            observe_scene_with_vl,
             topia::load_topia_world,
             topia::save_topia_world,
             topia::reset_topia_world,

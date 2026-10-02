@@ -67,6 +67,7 @@ export type GameEventType =
   | "task_focused"
   | "task_progressed"
   | "task_completed"
+  | "scene_observed"
   | "affinity_changed";
 
 export interface GameEvent {
@@ -78,6 +79,8 @@ export interface GameEvent {
   progress?: number;
   vitalityDelta?: number;
   affinityDelta?: number;
+  evidence?: string;
+  dedupeKey?: string;
   source: "user" | "asr" | "vision" | "llm" | "system";
   summary: string;
 }
@@ -109,13 +112,26 @@ export interface Memory {
   time: string;
   title: string;
   meta: string;
-  kind: "task" | "recording" | "person" | "mood";
+  kind: "task" | "recording" | "person" | "mood" | "activity";
+  observedAt?: string;
   summary?: string;
   transcript?: string;
   personIds?: string[];
   taskIds?: string[];
   mood?: MoodKind;
   intensity?: number;
+  evidence?: string;
+  confidence?: number;
+  status?: "active" | "superseded" | "dismissed";
+  dedupeKey?: string;
+}
+export interface SceneObservationStatus {
+  running: boolean;
+  lastObservedAt: string | null;
+  nextRunAt: string | null;
+  lastSummary: string | null;
+  lastError: string | null;
+  lastLatencyMs: number | null;
 }
 
 export interface MoodProfile {

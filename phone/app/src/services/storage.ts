@@ -130,4 +130,10 @@ export const storage = {
   savePerception(value: boolean) {
     localStorage.setItem("realtopia.perception", value ? "on" : "off");
   },
+  loadSceneObservationEnabled() {
+    return localStorage.getItem("realtopia.sceneObservation") !== "off";
+  },
+  saveSceneObservationEnabled(value: boolean) {
+    localStorage.setItem("realtopia.sceneObservation", value ? "on" : "off");
+  },
 };

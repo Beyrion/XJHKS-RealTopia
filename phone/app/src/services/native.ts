@@ -10,6 +10,7 @@ import type {
   PairedGlass,
   SessionState,
   RecentStranger,
+  SceneObservationResult,
 } from "../models";
 
 export const nativeService = {
@@ -81,6 +82,20 @@ export const nativeService = {
     invoke<LocalVisionResult>("analyze_last_capture_with_vl", {
       modelId,
       prompt,
+      maxNewTokens,
+    }),
+  observeSceneWithVl: (
+    modelId: string,
+    prompt: string,
+    width: number,
+    quality: number,
+    maxNewTokens = 96,
+  ) =>
+    invoke<SceneObservationResult>("observe_scene_with_vl", {
+      modelId,
+      prompt,
+      width,
+      quality,
       maxNewTokens,
     }),
 

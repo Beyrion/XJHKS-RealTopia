@@ -94,6 +94,11 @@ export interface LocalVisionResult {
   processing_total_ms: number;
 }
 
+export interface SceneObservationResult {
+  capture: CaptureMetric;
+  face: FaceResult | null;
+  vision: LocalVisionResult;
+}
 
 export interface MoodSpeechResult {
   transcript: string;
