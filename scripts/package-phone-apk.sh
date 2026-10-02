@@ -3,6 +3,8 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_apk="$project_dir/phone/app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
+debug_apk="$project_dir/phone/app/src-tauri/gen/android/app/build/outputs/apk/debug/app-debug.apk"
+[[ -f "$debug_apk" && (! -f "$source_apk" || "$debug_apk" -nt "$source_apk") ]] && source_apk="$debug_apk"
 output_dir="${1:-$project_dir/artifacts/release}"
 output_apk="$output_dir/realtopia-phone-debug-with-models.apk"
 

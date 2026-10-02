@@ -80,6 +80,11 @@ try {
   await open("topia");
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: "networkidle" });
+  const onboarding = page.locator(".topia-studio-overlay");
+  if (await onboarding.isVisible().catch(() => false)) {
+    await page.locator(".topia-entry-cards button").first().click();
+    await onboarding.waitFor({ state: "hidden" });
+  }
   await page.locator(".world.webgl-ready").waitFor({ timeout: 10_000 });
   await capture("topia-exterior");
 

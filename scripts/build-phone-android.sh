@@ -72,4 +72,8 @@ cd "$phone_dir"
 npm run tauri -- android build --debug --apk --target aarch64 --ci
 cd "$android_dir"
 ./gradlew :app:testDebugUnitTest
-echo "Phone APK: $android_dir/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
+phone_apk="$android_dir/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
+debug_apk="$android_dir/app/build/outputs/apk/debug/app-debug.apk"
+[[ -f "$debug_apk" && (! -f "$phone_apk" || "$debug_apk" -nt "$phone_apk") ]] && phone_apk="$debug_apk"
+[[ -f "$phone_apk" ]] || { echo "Phone APK was not generated" >&2; exit 1; }
+echo "Phone APK: $phone_apk"

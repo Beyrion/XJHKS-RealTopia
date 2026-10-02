@@ -8,8 +8,10 @@ glass_serial="$(realtopia_detect_device glasses)"
 phone_serial="$(realtopia_detect_device phone)"
 glass_apk="$project_dir/glasses/build/outputs/apk/debug/glasses-debug.apk"
 phone_apk="$project_dir/phone/app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
+phone_debug_apk="$project_dir/phone/app/src-tauri/gen/android/app/build/outputs/apk/debug/app-debug.apk"
 
 "$project_dir/scripts/build.sh"
+[[ -f "$phone_debug_apk" && (! -f "$phone_apk" || "$phone_debug_apk" -nt "$phone_apk") ]] && phone_apk="$phone_debug_apk"
 test -f "$phone_apk" || { echo "Phone APK is missing: run Tauri android build first" >&2; exit 1; }
 realtopia_install_apk "$glass_serial" "$glass_apk"
 realtopia_install_apk "$phone_serial" "$phone_apk"

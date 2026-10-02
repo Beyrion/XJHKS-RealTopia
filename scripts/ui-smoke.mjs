@@ -1,5 +1,6 @@
 import { chromium } from "../phone/app/node_modules/playwright-core/index.mjs";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { installTopiaCommandMock } from "./topia-command-mock.mjs";
@@ -7,6 +8,9 @@ import { installTopiaCommandMock } from "./topia-command-mock.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const base = process.env.REALTOPIA_PREVIEW_URL ?? "http://127.0.0.1:4173";
 const appDir = path.join(root, "phone/app");
+const uiFixture = JSON.parse(
+  await readFile(path.join(root, "scripts/fixtures/ui-app-state.json"), "utf8"),
+);
 let preview = null;
 async function reachable() {
   try {
@@ -71,6 +75,7 @@ try {
   await page.goto(`${base}/?screen=topia`, {
     waitUntil: "networkidle",
   });
+  await page.locator(".topia-studio-dialog").waitFor();
   const onboardingAudit = await page.evaluate(() => ({
     open: Boolean(document.querySelector(".topia-studio-dialog")),
     title: document.querySelector("#topia-studio-title")?.textContent,
@@ -89,10 +94,15 @@ try {
       const dialog = document
         .querySelector(".topia-studio-dialog")
         ?.getBoundingClientRect();
-      const cards = [...document.querySelectorAll(".topia-entry-cards button")]
-        .map((element) => element.getBoundingClientRect());
-      return Boolean(dialog) && cards.length === 2 && cards.every(
-        (card) => card.top >= dialog.top && card.bottom <= dialog.bottom,
+      const cards = [
+        ...document.querySelectorAll(".topia-entry-cards button"),
+      ].map((element) => element.getBoundingClientRect());
+      return (
+        Boolean(dialog) &&
+        cards.length === 2 &&
+        cards.every(
+          (card) => card.top >= dialog.top && card.bottom <= dialog.bottom,
+        )
       );
     })(),
   }));
@@ -112,10 +122,22 @@ try {
   await page.locator(".topia-studio-dialog").waitFor({ state: "detached" });
   await page.reload({ waitUntil: "networkidle" });
   if (await page.locator(".topia-studio-dialog").count())
-    throw new Error("Topia onboarding reopened after user data was established");
+    throw new Error(
+      "Topia onboarding reopened after user data was established",
+    );
   await page.goto(`${base}/?screen=quests`, { waitUntil: "networkidle" });
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate((fixture) => {
+    localStorage.clear();
+    localStorage.setItem("realtopia.migration.roster-20261002.v2", "done");
+    localStorage.setItem("realtopia.quests", JSON.stringify(fixture.quests));
+    localStorage.setItem("realtopia.people", JSON.stringify(fixture.people));
+    localStorage.setItem(
+      "realtopia.memories",
+      JSON.stringify(fixture.memories),
+    );
+  }, uiFixture);
   await page.reload({ waitUntil: "networkidle" });
+  await page.locator(".q-list-head h1").waitFor();
   if (await page.locator(".voice, #voice-input, #plan-goal").count())
     throw new Error("task prompt bar still exists");
   const filterAudit = await page.evaluate(() => {
@@ -157,10 +179,14 @@ try {
   const focusControlAudit = await page.evaluate(() => {
     const row = document.querySelector(".q-title-row");
     const title = row?.querySelector("h1")?.getBoundingClientRect();
-    const button = row?.querySelector(".focus-quest-button")?.getBoundingClientRect();
+    const button = row
+      ?.querySelector(".focus-quest-button")
+      ?.getBoundingClientRect();
     return {
       label: row?.querySelector(".focus-quest-button")?.textContent?.trim(),
-      insideTitleRow: Boolean(row && row.contains(row.querySelector(".focus-quest-button"))),
+      insideTitleRow: Boolean(
+        row && row.contains(row.querySelector(".focus-quest-button")),
+      ),
       afterTitle: Boolean(title && button && button.left >= title.right - 1),
     };
   });
@@ -179,6 +205,32 @@ try {
       (event) => event.type === "task_completed" && event.questId === "book",
     ),
   );
+  await page.locator(".souvenir-unlock").waitFor();
+  const souvenirAudit = await page.evaluate(() => {
+    const souvenirs = JSON.parse(
+      localStorage.getItem("realtopia.souvenirs.v1") ?? "[]",
+    );
+    return {
+      title: document.querySelector("#souvenir-unlock-title")?.textContent,
+      name: document.querySelector(".souvenir-unlock h3")?.textContent,
+      persisted: souvenirs.some((item) => item.questId === "book"),
+      unlockEvents: JSON.parse(
+        localStorage.getItem("realtopia.gameEvents.v1") ?? "[]",
+      ).filter(
+        (event) =>
+          event.type === "souvenir_unlocked" && event.questId === "book",
+      ).length,
+    };
+  });
+  if (
+    souvenirAudit.title !== "获得纪念品" ||
+    souvenirAudit.name !== "书页星标" ||
+    !souvenirAudit.persisted ||
+    souvenirAudit.unlockEvents !== 1
+  )
+    throw new Error(`souvenir unlock failed: ${JSON.stringify(souvenirAudit)}`);
+  await page.getByRole("button", { name: "收入我的 Topia" }).click();
+  await page.locator('header.top [data-tab="quests"]').click();
   const gameplayAudit = await page.evaluate((before) => {
     const events = JSON.parse(
         localStorage.getItem("realtopia.gameEvents.v1") ?? "[]",
@@ -257,7 +309,7 @@ try {
     throw new Error("person memory panel did not activate");
   await page.locator('[data-person-panel="profile"]').click();
   await page.locator(".profile-grid").waitFor();
-  await page.locator('[data-tab="quests"]').click();
+  await page.locator('header.top [data-tab="quests"]').click();
   await page.locator(".quests").waitFor();
   const questReturnAudit = await page.evaluate(() => ({
     filter: document
@@ -506,6 +558,18 @@ try {
       renderStyle: world?.getAttribute("data-topia-render-style"),
       canvasRenderStyle:
         document.querySelector("#topia-canvas")?.dataset.topiaRenderStyle,
+      souvenirCount: Number(world?.getAttribute("data-topia-souvenir-count")),
+      souvenirKinds: (world?.getAttribute("data-topia-souvenir-kinds") ?? "")
+        .split(",")
+        .filter(Boolean),
+      souvenirModels: Number(
+        document.querySelector("#topia-canvas")?.dataset
+          .topiaSouvenirModelCount,
+      ),
+      minSouvenirMeshes: Number(
+        document.querySelector("#topia-canvas")?.dataset
+          .topiaSouvenirMinMeshCount,
+      ),
     };
   });
   if (
@@ -537,9 +601,120 @@ try {
     topiaAudit.activeQuest !== topiaAudit.storedActiveQuest ||
     !topiaAudit.focusProgress?.endsWith("%") ||
     topiaAudit.renderStyle !== "storybook-ink" ||
-    topiaAudit.canvasRenderStyle !== "storybook-ink"
+    topiaAudit.canvasRenderStyle !== "storybook-ink" ||
+    topiaAudit.souvenirCount < 5 ||
+    new Set(topiaAudit.souvenirKinds).size < 5 ||
+    topiaAudit.souvenirModels !== topiaAudit.souvenirCount ||
+    topiaAudit.minSouvenirMeshes < 8
   )
     throw new Error(`Topia audit failed: ${JSON.stringify(topiaAudit)}`);
+  const latestSouvenir = page.locator(".latest-souvenir");
+  await latestSouvenir.waitFor();
+  const latestSouvenirId = await latestSouvenir.getAttribute("data-souvenir");
+  const latestSouvenirLocation = await latestSouvenir.getAttribute(
+    "data-souvenir-location",
+  );
+  await latestSouvenir.click();
+  await page.locator(".topia-drawer").waitFor();
+  const souvenirSceneAudit = await page.evaluate(
+    ({ souvenirId, location }) => {
+      const marker = document.querySelector(
+        `[data-topia-souvenir="${souvenirId}"]`,
+      );
+      return {
+        activeLocation: document
+          .querySelector("[data-topia-location].active")
+          ?.getAttribute("data-topia-location"),
+        expectedLocation: location,
+        title: document.querySelector("#topia-landmark-title")?.textContent,
+        markerBound: marker?.getAttribute("data-topia-anchor-bound"),
+        markerVisible: Boolean(marker),
+        latestPointerEvents: getComputedStyle(
+          document.querySelector(".latest-souvenir"),
+        ).pointerEvents,
+      };
+    },
+    { souvenirId: latestSouvenirId, location: latestSouvenirLocation },
+  );
+  if (
+    souvenirSceneAudit.activeLocation !== souvenirSceneAudit.expectedLocation ||
+    souvenirSceneAudit.title !== "书页星标" ||
+    !souvenirSceneAudit.markerVisible ||
+    souvenirSceneAudit.markerBound !== "true" ||
+    souvenirSceneAudit.latestPointerEvents === "none"
+  )
+    throw new Error(
+      `souvenir scene navigation failed: ${JSON.stringify(souvenirSceneAudit)}`,
+    );
+  const souvenirPreview = page.locator(".souvenir-model-preview canvas");
+  await souvenirPreview.waitFor();
+  const souvenirPreviewBounds = await souvenirPreview.boundingBox();
+  if (!souvenirPreviewBounds)
+    throw new Error("souvenir detail preview has no bounds");
+  await page.mouse.move(
+    souvenirPreviewBounds.x + souvenirPreviewBounds.width / 2,
+    souvenirPreviewBounds.y + souvenirPreviewBounds.height / 2,
+  );
+  await page.mouse.wheel(0, -900);
+  await page.waitForTimeout(400);
+  const souvenirPreviewAudit = await souvenirPreview.evaluate((canvas) => ({
+    meshCount: Number(canvas.dataset.souvenirPreviewMeshCount),
+    kind: canvas.dataset.souvenirPreviewKind,
+    zoom: Number(canvas.dataset.souvenirPreviewZoom),
+    label: canvas.getAttribute("aria-label"),
+  }));
+  if (
+    souvenirPreviewAudit.meshCount < 8 ||
+    souvenirPreviewAudit.kind !== "winged-book" ||
+    souvenirPreviewAudit.zoom < 1.8 ||
+    !souvenirPreviewAudit.label?.includes("可拖动旋转并捏合缩放")
+  )
+    throw new Error(
+      `souvenir preview audit failed: ${JSON.stringify(souvenirPreviewAudit)}`,
+    );
+  await page.screenshot({
+    path: path.join(root, "artifacts/mockups/phone-topia-souvenir-drawer.png"),
+  });
+  await page.locator(".topia-drawer [data-close-topia-drawer]").first().click();
+  await page.locator("#world-mood").click();
+  const moodPickerOpenAudit = await page.evaluate(() => ({
+    expanded: document
+      .querySelector("#world-mood")
+      ?.getAttribute("aria-expanded"),
+    choices: document.querySelectorAll("[data-mood-choice]").length,
+    voiceDialogs: document.querySelectorAll('.mood-dialog[role="dialog"]')
+      .length,
+  }));
+  if (
+    moodPickerOpenAudit.expanded !== "true" ||
+    moodPickerOpenAudit.choices !== 7 ||
+    moodPickerOpenAudit.voiceDialogs
+  )
+    throw new Error(
+      `direct mood picker failed to open: ${JSON.stringify(moodPickerOpenAudit)}`,
+    );
+  await page.locator('[data-mood-choice="joyful"]').click();
+  await page.locator(".world.mood-joyful").waitFor();
+  await page.locator("#today-mood").click();
+  const moodPickerAudit = await page.evaluate(() => ({
+    storedMood: JSON.parse(localStorage.getItem("realtopia.mood") ?? "null")
+      ?.mood,
+    summary: JSON.parse(localStorage.getItem("realtopia.mood") ?? "null")
+      ?.summary,
+    reopenedFromToday: Boolean(document.querySelector(".mood-picker-menu")),
+    voiceDialogs: document.querySelectorAll('.mood-dialog[role="dialog"]')
+      .length,
+  }));
+  if (
+    moodPickerAudit.storedMood !== "joyful" ||
+    moodPickerAudit.summary !== "此刻感到愉快" ||
+    !moodPickerAudit.reopenedFromToday ||
+    moodPickerAudit.voiceDialogs
+  )
+    throw new Error(
+      `direct mood selection failed: ${JSON.stringify(moodPickerAudit)}`,
+    );
+  await page.keyboard.press("Escape");
   await page.locator(".topia-studio-trigger").click();
   await page.locator(".topia-studio-dialog").waitFor();
   const topiaStudioAudit = await page.evaluate(() => ({
@@ -556,8 +731,12 @@ try {
     blurred: getComputedStyle(document.querySelector(".topia-studio-overlay"))
       .backdropFilter,
     triggerEmoji: document.querySelector(".topia-studio-trigger")?.textContent,
-    dialogWidth: document.querySelector(".topia-studio-dialog")?.getBoundingClientRect().width,
-    dialogHeight: document.querySelector(".topia-studio-dialog")?.getBoundingClientRect().height,
+    dialogWidth: document
+      .querySelector(".topia-studio-dialog")
+      ?.getBoundingClientRect().width,
+    dialogHeight: document
+      .querySelector(".topia-studio-dialog")
+      ?.getBoundingClientRect().height,
     viewport: [innerWidth, innerHeight],
   }));
   if (
@@ -750,8 +929,8 @@ try {
     visible: element.classList.contains("topia-anchor-visible"),
     collapsed: element.classList.contains("topia-anchor-collapsed"),
   }));
-  await page.mouse.wheel(0, 650);
-  await page.waitForTimeout(350);
+  await page.mouse.wheel(0, 800);
+  await page.waitForTimeout(700);
   const anchorAfterShrink = await anchoredLabel.evaluate((element) => ({
       opacity: parseFloat(getComputedStyle(element).opacity),
       pointerEvents: getComputedStyle(element).pointerEvents,
@@ -796,7 +975,24 @@ try {
     throw new Error(
       `Topia zoom label audit failed: ${JSON.stringify(anchorAudit)}`,
     );
-  await anchoredLabel.click();
+  await page.mouse.wheel(0, -1800);
+  await page.waitForTimeout(350);
+  await page.screenshot({
+    path: path.join(root, "artifacts/mockups/phone-topia-souvenir-detail.png"),
+  });
+  await page.mouse.wheel(0, 1800);
+  await page.waitForTimeout(350);
+  const anchoredLabelHitTarget = await anchoredLabel.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    return hit === element || element.contains(hit);
+  });
+  if (!anchoredLabelHitTarget)
+    throw new Error("landmark label is obstructed by another scene anchor");
+  await anchoredLabel.click({ force: true });
   await page.locator('.topia-drawer[role="dialog"]').waitFor();
   await page.locator(".topia-drawer [data-close-topia-drawer]").click();
   await page.locator('[data-topia-portal="garden"]').click();
@@ -841,12 +1037,23 @@ try {
     inside: document
       .querySelector(".topia-drawer")
       ?.contains(document.querySelector(".topia-relations")),
+    souvenirCount: Number(
+      document
+        .querySelector(".world")
+        ?.getAttribute("data-topia-souvenir-count"),
+    ),
+    minSouvenirMeshes: Number(
+      document.querySelector("#topia-canvas")?.dataset
+        .topiaSouvenirMinMeshCount,
+    ),
   }));
   if (
     interiorDrawerAudit.title !== "窗边花圃" ||
     !interiorDrawerAudit.task?.includes("让阳台重新生长") ||
     !interiorDrawerAudit.person?.includes("林澄") ||
-    !interiorDrawerAudit.inside
+    !interiorDrawerAudit.inside ||
+    interiorDrawerAudit.souvenirCount < 4 ||
+    interiorDrawerAudit.minSouvenirMeshes < 8
   )
     throw new Error(
       `Topia landmark drawer audit failed: ${JSON.stringify(interiorDrawerAudit)}`,
@@ -869,12 +1076,23 @@ try {
     progressLabels: [
       ...document.querySelectorAll('[data-topia-landmark^="crop-"]'),
     ].map((item) => item.textContent),
+    souvenirCount: Number(
+      document
+        .querySelector(".world")
+        ?.getAttribute("data-topia-souvenir-count"),
+    ),
+    minSouvenirMeshes: Number(
+      document.querySelector("#topia-canvas")?.dataset
+        .topiaSouvenirMinMeshCount,
+    ),
   }));
   if (
     gardenAudit.crops !== 5 ||
     !gardenAudit.active ||
     gardenAudit.canvasLabel !== "菜地三维场景" ||
-    !gardenAudit.progressLabels.some((value) => value?.includes("68%"))
+    !gardenAudit.progressLabels.some((value) => value?.includes("68%")) ||
+    gardenAudit.souvenirCount < 4 ||
+    gardenAudit.minSouvenirMeshes < 8
   )
     throw new Error(
       `Topia garden audit failed: ${JSON.stringify(gardenAudit)}`,
@@ -897,6 +1115,27 @@ try {
   await page
     .locator(".world.webgl-ready.location-exterior")
     .waitFor({ timeout: 10000 });
+  const souvenirRetentionAudit = await page.evaluate(() => ({
+    count: Number(
+      document
+        .querySelector(".world")
+        ?.getAttribute("data-topia-souvenir-count"),
+    ),
+    kinds: document
+      .querySelector(".world")
+      ?.getAttribute("data-topia-souvenir-kinds"),
+    models: Number(
+      document.querySelector("#topia-canvas")?.dataset.topiaSouvenirModelCount,
+    ),
+  }));
+  if (
+    souvenirRetentionAudit.count !== topiaAudit.souvenirCount ||
+    souvenirRetentionAudit.kinds !== topiaAudit.souvenirKinds.join(",") ||
+    souvenirRetentionAudit.models !== topiaAudit.souvenirModels
+  )
+    throw new Error(
+      `souvenirs were not retained across scenes: ${JSON.stringify(souvenirRetentionAudit)}`,
+    );
   await page.evaluate(() => {
     const previous = window.__TAURI_INTERNALS__;
     let finish;
@@ -1125,7 +1364,8 @@ try {
           subtitle: inbox.querySelector("small")?.textContent?.trim(),
           tagCount: inbox.querySelectorAll("em").length,
           iconCount: inbox.querySelectorAll("svg").length,
-          fits: inbox.scrollWidth <= inbox.clientWidth &&
+          fits:
+            inbox.scrollWidth <= inbox.clientWidth &&
             inbox.scrollHeight <= inbox.clientHeight,
           insideList: box.left >= list.left && box.right <= list.right,
         };
@@ -1166,27 +1406,28 @@ try {
       '.settings-route-cache[data-route-active="true"]',
     );
     return {
-    stats: active.querySelectorAll(".setting-view .stats").length,
-    decorativeSummary: /<1 MB|规则规划器|响应速度|可用状态/.test(
-      active.innerText,
-    ),
-    forbiddenPrompt:
-      /任务拆分|云端失败|端侧任务回退|prompt|提示词|物理按钮即时拍摄|自动提炼/i.test(
+      stats: active.querySelectorAll(".setting-view .stats").length,
+      decorativeSummary: /<1 MB|规则规划器|响应速度|可用状态/.test(
         active.innerText,
       ),
-    passiveNotes: active.querySelectorAll(
-      ".model-download-note,.setting-view .row",
-    ).length,
-    modelRowsWithoutAction: [
-      ...active.querySelectorAll(".model-download"),
-    ].filter((row) => !row.querySelector("button")).length,
-    placeholderCount: active.querySelectorAll("input[placeholder]").length,
-    contentBackground: getComputedStyle(document.querySelector(".s-content"))
-      .backgroundColor,
-    modelIconFilter: getComputedStyle(
-      active.querySelector(".model-icon.cloud-model"),
-    ).filter,
-  }});
+      forbiddenPrompt:
+        /任务拆分|云端失败|端侧任务回退|prompt|提示词|物理按钮即时拍摄|自动提炼/i.test(
+          active.innerText,
+        ),
+      passiveNotes: active.querySelectorAll(
+        ".model-download-note,.setting-view .row",
+      ).length,
+      modelRowsWithoutAction: [
+        ...active.querySelectorAll(".model-download"),
+      ].filter((row) => !row.querySelector("button")).length,
+      placeholderCount: active.querySelectorAll("input[placeholder]").length,
+      contentBackground: getComputedStyle(document.querySelector(".s-content"))
+        .backgroundColor,
+      modelIconFilter: getComputedStyle(
+        active.querySelector(".model-icon.cloud-model"),
+      ).filter,
+    };
+  });
   if (
     intelligenceAudit.stats ||
     intelligenceAudit.decorativeSummary ||
@@ -1223,13 +1464,10 @@ try {
     return {
       stats: active.querySelectorAll(".stats").length,
       cardSummaries: active.querySelectorAll(".s-card > p").length,
-      headerSummaries: active.querySelectorAll(".setting-head > p")
-        .length,
+      headerSummaries: active.querySelectorAll(".setting-head > p").length,
       navSummaries: document.querySelectorAll(".settings .s-nav nav small")
         .length,
-      passiveNotes: active.querySelectorAll(
-        ".model-download-note,.row",
-      ).length,
+      passiveNotes: active.querySelectorAll(".model-download-note,.row").length,
       minTitleGap: Math.min(...gaps),
     };
   });
@@ -1417,6 +1655,12 @@ try {
       id: world?.getAttribute("data-topia-world"),
       source: world?.getAttribute("data-topia-world-source"),
       objects: Number(world?.getAttribute("data-topia-object-count")),
+      souvenirCount: Number(world?.getAttribute("data-topia-souvenir-count")),
+      souvenirKinds: world?.getAttribute("data-topia-souvenir-kinds"),
+      souvenirModels: Number(
+        document.querySelector("#topia-canvas")?.dataset
+          .topiaSouvenirModelCount,
+      ),
       customTag: document.querySelector('[data-topia-landmark="custom-memory"]')
         ?.textContent,
       promptVisible:
@@ -1428,7 +1672,10 @@ try {
   if (
     dynamicWorldAudit.id !== "dynamic-world-smoke" ||
     dynamicWorldAudit.source !== "cloud" ||
-    dynamicWorldAudit.objects !== 1 ||
+    dynamicWorldAudit.objects !== 6 ||
+    dynamicWorldAudit.souvenirCount !== topiaAudit.souvenirCount ||
+    dynamicWorldAudit.souvenirKinds !== topiaAudit.souvenirKinds.join(",") ||
+    dynamicWorldAudit.souvenirModels !== topiaAudit.souvenirModels ||
     !dynamicWorldAudit.customTag?.includes("只属于测试用户的灯塔") ||
     dynamicWorldAudit.promptVisible
   )
@@ -1441,7 +1688,7 @@ try {
       `browser errors: ${[...consoleErrors, ...httpErrors].join(" | ")}`,
     );
   process.stdout.write(
-    `${JSON.stringify({ ok: true, gameplayAudit, visualAudit, topiaAudit, topiaStudioAudit, anchorAudit, interiorDrawerAudit, gardenAudit, conversationPickerAudit, quickListeningAudit, quickProcessingAudit, quickSuccessAudit, quickErrorAudit, moodEffectAudit, filterAudit, peopleAudit, intelligenceAudit, settingsDecorationAudit, memoryPaginationAudit, memoryDrawerAudit, promptAudit, dynamicWorldAudit })}\n`,
+    `${JSON.stringify({ ok: true, gameplayAudit, souvenirAudit, souvenirSceneAudit, souvenirPreviewAudit, souvenirRetentionAudit, visualAudit, topiaAudit, moodPickerAudit, topiaStudioAudit, anchorAudit, interiorDrawerAudit, gardenAudit, conversationPickerAudit, quickListeningAudit, quickProcessingAudit, quickSuccessAudit, quickErrorAudit, moodEffectAudit, filterAudit, peopleAudit, intelligenceAudit, settingsDecorationAudit, memoryPaginationAudit, memoryDrawerAudit, promptAudit, dynamicWorldAudit })}\n`,
   );
 } finally {
   await browser.close();

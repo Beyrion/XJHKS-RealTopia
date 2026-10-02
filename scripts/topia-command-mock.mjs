@@ -1,13 +1,19 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-export async function installTopiaCommandMock(page, projectRoot) {
-  const mockWorld = JSON.parse(
-    await readFile(
-      path.join(projectRoot, "phone/app/src-tauri/src/topia/mock_world.json"),
-      "utf8",
-    ),
-  );
+export async function installTopiaCommandMock(
+  page,
+  projectRoot,
+  worldOverride,
+) {
+  const mockWorld =
+    worldOverride ??
+    JSON.parse(
+      await readFile(
+        path.join(projectRoot, "phone/app/src-tauri/src/topia/mock_world.json"),
+        "utf8",
+      ),
+    );
   await page.addInitScript((bundledWorld) => {
     const storageKey = "realtopia.topiaWorld.v1";
     const studioKey = "realtopia.topiaStudio.v2";
@@ -19,6 +25,7 @@ export async function installTopiaCommandMock(page, projectRoot) {
           key !== storageKey &&
           key !== studioKey,
       );
+    const hadUserDataAtBoot = hasUserData();
     const resolvePayload = (inputWorld, context = {}) => {
       const world = copy(inputWorld);
       const quests = new Map(
@@ -86,11 +93,13 @@ export async function installTopiaCommandMock(page, projectRoot) {
               landmarks: { exterior: [], interior: [], garden: [] },
               memories: [],
             },
-            needsOnboarding: !hasUserData(),
+            needsOnboarding: !hadUserDataAtBoot,
           };
       return { world, crops, studio };
     };
     const invoke = (command, args = {}) => {
+      if (command === "plugin:event|listen") return Promise.resolve(1);
+      if (command === "plugin:event|unlisten") return Promise.resolve();
       if (command === "load_topia_world") {
         const saved = localStorage.getItem(storageKey);
         return Promise.resolve(
@@ -156,14 +165,33 @@ export async function installTopiaCommandMock(page, projectRoot) {
       if (command === "switch_topia_world") {
         const saved = localStorage.getItem(storageKey);
         return Promise.resolve(
-          resolvePayload(saved ? JSON.parse(saved) : bundledWorld, args.context),
+          resolvePayload(
+            saved ? JSON.parse(saved) : bundledWorld,
+            args.context,
+          ),
         );
       }
       return Promise.reject(new Error(`unmocked command: ${command}`));
     };
+    const callbacks = new Map();
+    const transformCallback = (callback, once = false) => {
+      const identifier = window.crypto.getRandomValues(new Uint32Array(1))[0];
+      callbacks.set(identifier, (data) => {
+        if (once) callbacks.delete(identifier);
+        return callback?.(data);
+      });
+      return identifier;
+    };
     window.__TAURI_INTERNALS__ = {
       ...(window.__TAURI_INTERNALS__ ?? {}),
       invoke,
+      transformCallback,
+      unregisterCallback: (identifier) => callbacks.delete(identifier),
+      runCallback: (identifier, data) => callbacks.get(identifier)?.(data),
+      callbacks,
+    };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: (_, identifier) => callbacks.delete(identifier),
     };
   }, mockWorld);
 }
