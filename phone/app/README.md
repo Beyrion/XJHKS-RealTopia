@@ -30,6 +30,17 @@ retained glasses cold/hot capture. Continuous-perception frames are not sent to
 VL implicitly. Qwen3 1.7B and Qwen3-TTS remain repository links only. None of
 these Qwen repositories is packaged in the APK.
 
+Live glasses audio is transported in 500 ms PCM chunks. Silero VAD provides
+cheap acoustic speech/silence gating; after a candidate silent tail, TurnSense
+classifies the reassembled utterance as `complete`, `incomplete`, or `invalid`.
+Only `complete` enters ASR, `incomplete` keeps collecting until speech resumes
+(with an 8-second hard endpoint), and `invalid` is discarded. TurnSense uses
+the official Kaldi FBank/LFR/CMVN frontend and an FP16 MNN weight file with FP32
+accumulation because MNN ARM FP16 accumulation produced non-finite output on
+the MT6993 test phone. Both Silero and TurnSense are bundled in the phone APK;
+TurnSense is checksum-verified and extracted into app-private no-backup storage
+on first startup so installing the phone APK is sufficient.
+
 The Topia home screen also supports a user-initiated mood check-in. The mood
 plugin records 16 kHz mono PCM into app-specific storage; `RealiaAsrPlugin`
 transcribes it locally with Qwen3-ASR and deletes the temporary PCM before only
