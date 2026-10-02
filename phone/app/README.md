@@ -22,9 +22,13 @@ The boundary is intentional:
 The downloaded Qwen3-ASR snapshot is wired to MNN through `RealiaAsrPlugin` and
 `realtopia_asr_jni`. Incoming 16 kHz mono PCM is transcribed locally by default;
 the cloud transcription route is only a fallback when a cloud key is configured.
-The Qwen3 1.7B, Qwen3-VL 2B/4B and Qwen3-TTS entries are intentionally manual
-because of their storage footprint. None of these five Qwen repositories is
-packaged in the APK.
+Qwen3-VL 2B/4B stay outside the APK but can be installed on demand with the
+same resumable, checksum-verified ModelScope downloader. `RealiaVlPlugin` and
+`phone/vl-native` share one MNN multimodal runtime and switch between the two
+variants. Settings → Intelligence can analyze a gallery image or the last
+retained glasses cold/hot capture. Continuous-perception frames are not sent to
+VL implicitly. Qwen3 1.7B and Qwen3-TTS remain repository links only. None of
+these Qwen repositories is packaged in the APK.
 
 The Topia home screen also supports a user-initiated mood check-in. The mood
 plugin records 16 kHz mono PCM into app-specific storage; `RealiaAsrPlugin`

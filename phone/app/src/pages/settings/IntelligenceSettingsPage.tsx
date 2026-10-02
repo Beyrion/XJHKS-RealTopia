@@ -3,7 +3,7 @@ import { ModelRepositoryList } from "../../components/settings/ModelRepositoryLi
 import { Icon } from "../../components/ui/Icon";
 import { SettingCard } from "../../components/ui/SettingCard";
 import { Toggle } from "../../components/ui/Toggle";
-import type { ModelSettings } from "../../models";
+import type { LocalVisionResult, ModelSettings } from "../../models";
 import { modelHub } from "../../services/modelHub";
 import { nativeService } from "../../services/native";
 import { useAppStore } from "../../store/AppStore";
@@ -16,6 +16,16 @@ export default function IntelligenceSettingsPage() {
   );
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [visionModelId, setVisionModelId] = useState(
+    "MNN/Qwen3-VL-2B-Instruct-MNN",
+  );
+  const [visionPrompt, setVisionPrompt] = useState(
+    "请只用一句中文描述图片中的主要人物、物体、动作和场景，不超过50个汉字，不要解释过程，不要猜测看不清的文字。",
+  );
+  const [visionResult, setVisionResult] = useState<LocalVisionResult | null>(
+    null,
+  );
+  const [visionRunning, setVisionRunning] = useState(false);
 
   useEffect(() => {
     void modelHub
@@ -73,6 +83,93 @@ export default function IntelligenceSettingsPage() {
               .catch(() => notify("无法打开 ModelScope 页面"))
           }
         />
+      </SettingCard>
+      <SettingCard title="本地视觉理解">
+        <p className="setting-note">
+          选择图库图片，或分析最近一次眼镜冷拍/热拍。图片只在手机端 MNN
+          推理，不会上传云端。
+        </p>
+        <label className="select">
+          <span>视觉模型</span>
+          <select
+            id="vision-model"
+            value={visionModelId}
+            onChange={(event) => setVisionModelId(event.target.value)}
+          >
+            <option value="MNN/Qwen3-VL-2B-Instruct-MNN">
+              Qwen3-VL 2B · 更省内存
+            </option>
+            <option value="MNN/Qwen3-VL-4B-Instruct-MNN">
+              Qwen3-VL 4B · 更高质量
+            </option>
+          </select>
+        </label>
+        <label className="vision-prompt">
+          <span>对图片提问</span>
+          <textarea
+            id="vision-prompt"
+            value={visionPrompt}
+            maxLength={2_000}
+            onChange={(event) => setVisionPrompt(event.target.value)}
+          />
+        </label>
+        <div className="buttons right">
+          <button
+            id="vision-last-capture"
+            disabled={visionRunning}
+            onClick={() => {
+              setVisionRunning(true);
+              void nativeService
+                .analyzeLastCaptureWithVl(visionModelId, visionPrompt)
+                .then(setVisionResult)
+                .then(() => notify("眼镜照片分析完成"))
+                .catch((error) =>
+                  notify(
+                    error instanceof Error ? error.message : "视觉理解失败",
+                  ),
+                )
+                .finally(() => setVisionRunning(false));
+            }}
+          >
+            <Icon name="Camera" />
+            分析眼镜照片
+          </button>
+          <button
+            className="primary"
+            id="vision-pick-image"
+            disabled={visionRunning}
+            onClick={() => {
+              setVisionRunning(true);
+              void nativeService
+                .pickAndAnalyzeWithVl(visionModelId, visionPrompt)
+                .then(setVisionResult)
+                .then(() => notify("图库图片分析完成"))
+                .catch((error) =>
+                  notify(
+                    error instanceof Error ? error.message : "视觉理解失败",
+                  ),
+                )
+                .finally(() => setVisionRunning(false));
+            }}
+          >
+            <Icon name={visionRunning ? "RefreshCw" : "ScanFace"} />
+            {visionRunning ? "推理中" : "选择图片并分析"}
+          </button>
+        </div>
+        {visionResult ? (
+          <div className="vision-result" id="vision-result">
+            <p>{visionResult.text}</p>
+            <small>
+              {visionResult.model} · {visionResult.image_width}×
+              {visionResult.image_height} · 总计 {Math.round(visionResult.latency_ms)}
+              ms · 视觉编码 {Math.round(visionResult.vision_ms)} ms · 解码
+              {Math.round(visionResult.decode_ms)} ms
+              {visionResult.retry_count
+                ? ` · 自动重试 ${visionResult.retry_count} 次`
+                : ""}
+            </small>
+          </div>
+        ) : null}
       </SettingCard>
       <SettingCard title="云侧模型">
         <div className="model">

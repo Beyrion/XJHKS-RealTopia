@@ -437,6 +437,7 @@ small { font-size: 13px!important; line-height: 1.4; }
 .buttons button, .danger-inline { min-height: 48px; padding: 11px 16px; display: inline-flex; gap: 7px; align-items: center; justify-content: center; border: 1.5px solid var(--ink); border-radius: 12px; background: #fff; font-size: 14px; font-weight: 800; }
 .buttons .primary { background: var(--blue); color: #fff; box-shadow: 3px 3px 0 var(--ink); }
 .buttons .danger, .danger-inline { background: #ffe1e7; color: #a12e48; }
+.setting-note { margin: 10px 2px 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .toggle, .range, .select, .secret { min-height: 54px; border-top: 1.5px solid var(--line); display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
 .s-card > p + .toggle, .s-card > p + .range { border-top: 0; }
 .toggle input { display: none; }
@@ -449,6 +450,12 @@ small { font-size: 13px!important; line-height: 1.4; }
 .range b { color: var(--blue-dark); text-align: right; }
 .select button { min-width: 260px; display: flex; gap: 7px; align-items: center; justify-content: flex-end; background: none; color: var(--blue-dark); font-size: 13px; font-weight: 700; }
 .select input, .select select { min-width: 330px; height: 48px; padding: 0 12px; border: 1.5px solid var(--line); border-radius: 10px; outline: 0; background: #fff; color: var(--ink); font: 14px ui-monospace, monospace; }
+.vision-prompt { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: start; padding-top: 13px; border-top: 1.5px solid var(--line); font-size: 14px; }
+.vision-prompt span { padding-top: 10px; }
+.vision-prompt textarea { min-height: 84px; padding: 11px 12px; resize: vertical; border: 1.5px solid var(--line); border-radius: 10px; outline: 0; background: #fff; color: var(--ink); font: 14px/1.55 ui-monospace, monospace; }
+.vision-result { margin-top: 15px; padding: 14px 16px; border: 1.5px solid var(--blue); border-radius: 14px; background: #f0f2ff; }
+.vision-result p { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
+.vision-result small { display: block; margin-top: 9px; color: var(--muted); font-size: 11px; }
 .secret { display: grid; grid-template-columns: 120px 1fr auto; gap: 10px; }
 .secret input { height: 48px; padding: 0 12px; border: 1.5px solid var(--line); border-radius: 10px; outline: 0; color: var(--ink); font: 14px ui-monospace, monospace; }
 .secret button { min-width: 44px; min-height: 44px; padding: 9px; border-radius: 9px; background: #edf0ff; color: var(--blue-dark); font-size: 13px; }

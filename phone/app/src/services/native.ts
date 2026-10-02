@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   LocalAsrResult,
+  LocalVisionResult,
   GalleryEnrollmentReceipt,
   ModelDownloadStatus,
   MoodSpeechResult,
@@ -66,6 +67,22 @@ export const nativeService = {
     invoke<void>("start_model_download", { modelId }),
   openModelRepository: (modelId: string) =>
     invoke<void>("open_model_repository", { modelId }),
+  pickAndAnalyzeWithVl: (modelId: string, prompt: string, maxNewTokens = 128) =>
+    invoke<LocalVisionResult>("pick_and_analyze_with_vl", {
+      modelId,
+      prompt,
+      maxNewTokens,
+    }),
+  analyzeLastCaptureWithVl: (
+    modelId: string,
+    prompt: string,
+    maxNewTokens = 128,
+  ) =>
+    invoke<LocalVisionResult>("analyze_last_capture_with_vl", {
+      modelId,
+      prompt,
+      maxNewTokens,
+    }),
 
   cloudComplete: (prompt: string, system: string | null, json: boolean) =>
     invoke<NativeCloudResult>("cloud_complete", { prompt, system, json }),

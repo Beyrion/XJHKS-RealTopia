@@ -153,6 +153,27 @@ struct LocalAsrResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct LocalVisionResult {
+    text: String,
+    provider: String,
+    model: String,
+    side: String,
+    latency_ms: f64,
+    vision_ms: f64,
+    prefill_ms: f64,
+    decode_ms: f64,
+    image_width: u32,
+    image_height: u32,
+    prompt_tokens: i32,
+    generated_tokens: i32,
+    retry_count: i32,
+    status: i32,
+    model_load_ms: i64,
+    processing_total_ms: i64,
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct CloudConfig {
     provider: String,
     base_url: String,
@@ -738,6 +759,89 @@ mod mobile_asr {
 }
 
 #[cfg(mobile)]
+mod mobile_vl {
+    use super::LocalVisionResult;
+    use serde::Serialize;
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        Manager, Runtime,
+    };
+
+    pub struct RealiaVl<R: Runtime>(PluginHandle<R>);
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AnalyzeRequest<'a> {
+        model_id: &'a str,
+        path: &'a str,
+        rotation_degrees: i32,
+        prompt: &'a str,
+        max_new_tokens: u32,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PickAndAnalyzeRequest<'a> {
+        model_id: &'a str,
+        prompt: &'a str,
+        max_new_tokens: u32,
+    }
+
+    impl<R: Runtime> RealiaVl<R> {
+        pub fn analyze(
+            &self,
+            model_id: &str,
+            path: &str,
+            rotation_degrees: i32,
+            prompt: &str,
+            max_new_tokens: u32,
+        ) -> Result<LocalVisionResult, String> {
+            self.0
+                .run_mobile_plugin(
+                    "analyze",
+                    AnalyzeRequest {
+                        model_id,
+                        path,
+                        rotation_degrees,
+                        prompt,
+                        max_new_tokens,
+                    },
+                )
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn pick_and_analyze(
+            &self,
+            model_id: &str,
+            prompt: &str,
+            max_new_tokens: u32,
+        ) -> Result<LocalVisionResult, String> {
+            self.0
+                .run_mobile_plugin(
+                    "pickAndAnalyze",
+                    PickAndAnalyzeRequest {
+                        model_id,
+                        prompt,
+                        max_new_tokens,
+                    },
+                )
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+        Builder::new("realia-vl")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("com.realtopia.phone.vl", "RealiaVlPlugin")?;
+                app.manage(RealiaVl(handle));
+                Ok(())
+            })
+            .build()
+    }
+}
+
+#[cfg(mobile)]
 mod mobile_cloud {
     use super::{CloudConfig, CloudModelResult};
     use serde::Serialize;
@@ -931,6 +1035,65 @@ fn open_model_repository(app: tauri::AppHandle, model_id: String) -> Result<(), 
     {
         let _ = (app, model_id);
         Err("模型页面请在 Android 应用中打开".into())
+    }
+}
+
+#[tauri::command]
+fn pick_and_analyze_with_vl(
+    model_id: String,
+    prompt: String,
+    max_new_tokens: Option<u32>,
+    app: tauri::AppHandle,
+) -> Result<LocalVisionResult, String> {
+    #[cfg(mobile)]
+    {
+        return app
+            .state::<mobile_vl::RealiaVl<tauri::Wry>>()
+            .pick_and_analyze(
+                &model_id,
+                &prompt,
+                max_new_tokens.unwrap_or(128).clamp(8, 512),
+            );
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (model_id, prompt, max_new_tokens, app);
+        Err("本地视觉理解仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+fn analyze_last_capture_with_vl(
+    model_id: String,
+    prompt: String,
+    max_new_tokens: Option<u32>,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<LocalVisionResult, String> {
+    let capture = state
+        .session
+        .lock()
+        .map_err(|_| "state lock poisoned")?
+        .last_capture
+        .clone()
+        .ok_or_else(|| "还没有可分析的眼镜照片".to_string())?;
+    if capture.stream || !std::path::Path::new(&capture.path).is_file() {
+        return Err("持续感知帧已在人物检测后删除，请先执行一次冷拍或热拍".into());
+    }
+    #[cfg(mobile)]
+    {
+        return app.state::<mobile_vl::RealiaVl<tauri::Wry>>().analyze(
+            &model_id,
+            &capture.path,
+            capture.rotation_degrees,
+            &prompt,
+            max_new_tokens.unwrap_or(128).clamp(8, 512),
+        );
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (model_id, prompt, max_new_tokens, app, capture);
+        Err("本地视觉理解仅支持 Android 应用".into())
     }
 }
 
@@ -1943,6 +2106,8 @@ pub fn run() {
             start_asr_download,
             start_model_download,
             open_model_repository,
+            pick_and_analyze_with_vl,
+            analyze_last_capture_with_vl,
             topia::load_topia_world,
             topia::save_topia_world,
             topia::reset_topia_world,
@@ -1954,6 +2119,7 @@ pub fn run() {
         .plugin(mobile_face::init())
         .plugin(mobile_models::init())
         .plugin(mobile_asr::init())
+        .plugin(mobile_vl::init())
         .plugin(mobile_cloud::init())
         .plugin(mobile_mood::init());
     builder

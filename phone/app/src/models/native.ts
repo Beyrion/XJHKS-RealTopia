@@ -3,11 +3,15 @@ export interface CaptureMetric {
   mode: "cold" | "hot" | "stream";
   stream?: boolean;
   bytes: number;
+  width: number;
+  height: number;
+  rotation_degrees: number;
   camera_open_ms: number;
   warmup_ms: number;
   capture_ms: number;
   transfer_ms: number;
   e2e_ms: number;
+  path: string;
 }
 
 export interface FaceResult {
@@ -70,6 +74,26 @@ export interface LocalAsrResult {
   status: number;
   model_load_ms: number;
 }
+
+export interface LocalVisionResult {
+  text: string;
+  provider: string;
+  model: string;
+  side: "edge";
+  latency_ms: number;
+  vision_ms: number;
+  prefill_ms: number;
+  decode_ms: number;
+  image_width: number;
+  image_height: number;
+  prompt_tokens: number;
+  generated_tokens: number;
+  retry_count: number;
+  status: number;
+  model_load_ms: number;
+  processing_total_ms: number;
+}
+
 
 export interface MoodSpeechResult {
   transcript: string;
