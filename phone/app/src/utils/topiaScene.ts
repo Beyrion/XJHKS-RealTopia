@@ -2,14 +2,16 @@ import * as THREE from "three";
 
 export type TopiaMood="joyful"|"calm"|"sad"|"anxious"|"angry"|"tired"|"neutral";
 
-const moodLooks:Record<TopiaMood,{fog:number;fogDensity:number;sky:number;ground:number;sun:number;sunIntensity:number;exposure:number;sparkle:number;sparkleOpacity:number;cloudSpeed:number;glow:number}>={
-  joyful:{fog:0xffefd5,fogDensity:.012,sky:0xfff7db,ground:0x8ebd91,sun:0xffdc78,sunIntensity:4.8,exposure:1.24,sparkle:0xffffa8,sparkleOpacity:.96,cloudSpeed:.00008,glow:0xffd578},
-  calm:{fog:0xddefff,fogDensity:.016,sky:0xe7f5ff,ground:0x8eaa99,sun:0xfff0c5,sunIntensity:3.8,exposure:1.1,sparkle:0xcceeff,sparkleOpacity:.62,cloudSpeed:.00009,glow:0x8de1f1},
-  sad:{fog:0x7890a8,fogDensity:.027,sky:0x9eb8ce,ground:0x506b6b,sun:0xb8cee0,sunIntensity:2.1,exposure:.79,sparkle:0xa6c9dd,sparkleOpacity:.24,cloudSpeed:.00017,glow:0x6fa8cf},
-  anxious:{fog:0xd6dcf2,fogDensity:.021,sky:0xdfe6ff,ground:0x778590,sun:0xe6e9ff,sunIntensity:3.3,exposure:1.02,sparkle:0xe9ddff,sparkleOpacity:.56,cloudSpeed:.00034,glow:0x9a96ff},
-  angry:{fog:0x695c6b,fogDensity:.025,sky:0xc29a9f,ground:0x493d49,sun:0xff9b7a,sunIntensity:3.7,exposure:.9,sparkle:0xff9d76,sparkleOpacity:.74,cloudSpeed:.00028,glow:0xff755f},
-  tired:{fog:0x51587b,fogDensity:.03,sky:0x8993bd,ground:0x393c57,sun:0xbfc8ff,sunIntensity:1.9,exposure:.72,sparkle:0xd8d9ff,sparkleOpacity:.88,cloudSpeed:.000055,glow:0x8a8de8},
-  neutral:{fog:0xd9efff,fogDensity:.018,sky:0xf8fbff,ground:0x8aa57d,sun:0xfff0c5,sunIntensity:4,exposure:1.12,sparkle:0xffef9a,sparkleOpacity:.78,cloudSpeed:.00012,glow:0x8de1f1},
+type MoodLook={fog:number;fogDensity:number;sky:number;ground:number;sun:number;sunIntensity:number;exposure:number;sparkle:number;sparkleOpacity:number;cloudSpeed:number;glow:number;skyTop:number;skyMid:number;skyLow:number;aurora:number;celestial:number;stars:number};
+
+const moodLooks:Record<TopiaMood,MoodLook>={
+  joyful:{fog:0xffd9bf,fogDensity:.011,sky:0xfff1d0,ground:0x91c79e,sun:0xffdc78,sunIntensity:4.8,exposure:1.22,sparkle:0xffffa8,sparkleOpacity:.98,cloudSpeed:.00008,glow:0xffd578,skyTop:0x6ccce8,skyMid:0xf58dc3,skyLow:0xffc06f,aurora:0xfff19a,celestial:0xffe27a,stars:0xfff6bd},
+  calm:{fog:0xccecf2,fogDensity:.015,sky:0xdff8ff,ground:0x8eaa99,sun:0xfff0c5,sunIntensity:3.8,exposure:1.08,sparkle:0xcceeff,sparkleOpacity:.7,cloudSpeed:.00009,glow:0x8de1f1,skyTop:0x647ac7,skyMid:0x7fd4dc,skyLow:0xc9a9db,aurora:0x9fffe2,celestial:0xeafcff,stars:0xe8ffff},
+  sad:{fog:0x617b96,fogDensity:.026,sky:0x8caac5,ground:0x506b6b,sun:0xb8cee0,sunIntensity:2.1,exposure:.78,sparkle:0xa6c9dd,sparkleOpacity:.3,cloudSpeed:.00017,glow:0x6fa8cf,skyTop:0x213b65,skyMid:0x405b83,skyLow:0x6e6c91,aurora:0x74b7cf,celestial:0xc5d8ec,stars:0xbcdcf0},
+  anxious:{fog:0xb7b9df,fogDensity:.02,sky:0xd9ddff,ground:0x778590,sun:0xe6e9ff,sunIntensity:3.3,exposure:1.0,sparkle:0xe9ddff,sparkleOpacity:.62,cloudSpeed:.00034,glow:0x9a96ff,skyTop:0x4f428f,skyMid:0x8d6fb1,skyLow:0x57a1aa,aurora:0xd798ff,celestial:0xece1ff,stars:0xeee8ff},
+  angry:{fog:0x57465d,fogDensity:.024,sky:0xa57182,ground:0x493d49,sun:0xff9b7a,sunIntensity:3.7,exposure:.88,sparkle:0xff9d76,sparkleOpacity:.78,cloudSpeed:.00028,glow:0xff755f,skyTop:0x281c43,skyMid:0x7f304e,skyLow:0xdb5f48,aurora:0xff744f,celestial:0xffa358,stars:0xffb18c},
+  tired:{fog:0x454c72,fogDensity:.029,sky:0x7b85ae,ground:0x393c57,sun:0xbfc8ff,sunIntensity:1.9,exposure:.71,sparkle:0xd8d9ff,sparkleOpacity:.9,cloudSpeed:.000055,glow:0x8a8de8,skyTop:0x171f4d,skyMid:0x3e3a72,skyLow:0x716493,aurora:0x7d8cff,celestial:0xd8d5ff,stars:0xefedff},
+  neutral:{fog:0xcceaff,fogDensity:.017,sky:0xedfbff,ground:0x8aa57d,sun:0xfff0c5,sunIntensity:4,exposure:1.1,sparkle:0xffef9a,sparkleOpacity:.82,cloudSpeed:.00012,glow:0x8de1f1,skyTop:0x5abbd7,skyMid:0x9898dd,skyLow:0xefafbd,aurora:0x8cf5de,celestial:0xffefaa,stars:0xf3f6ff},
 };
 
 const C={
@@ -36,6 +38,55 @@ function plant(x:number,z:number){
 }
 
 function crystal(x:number,y:number,z:number,color:number,scale=1){const value=glow(new THREE.OctahedronGeometry(.18*scale,0),color);value.position.set(x,y,z);value.scale.y=1.6;return value}
+
+function fantasySky(look:MoodLook,paletteMix:number){
+  const neutral=moodLooks.neutral;
+  const color=(base:number,target:number)=>new THREE.Color(base).lerp(new THREE.Color(target),paletteMix);
+  const skyMaterial=new THREE.ShaderMaterial({
+    side:THREE.BackSide,depthWrite:false,fog:false,
+    uniforms:{
+      uTime:{value:0},uMagic:{value:.42+paletteMix*.58},
+      uTop:{value:color(neutral.skyTop,look.skyTop)},uMid:{value:color(neutral.skyMid,look.skyMid)},uLow:{value:color(neutral.skyLow,look.skyLow)},uAurora:{value:color(neutral.aurora,look.aurora)},
+    },
+    vertexShader:`varying vec3 vDirection;varying vec2 vScreen;
+      void main(){vDirection=normalize(position);vec4 clip=projectionMatrix*modelViewMatrix*vec4(position,1.0);vScreen=clip.xy/clip.w;gl_Position=clip;}`,
+    fragmentShader:`precision highp float;
+      varying vec3 vDirection;varying vec2 vScreen;
+      uniform float uTime;uniform float uMagic;
+      uniform vec3 uTop;uniform vec3 uMid;uniform vec3 uLow;uniform vec3 uAurora;
+      void main(){
+        vec3 direction=normalize(vDirection);
+        float height=clamp(vScreen.y*.5+.5,0.0,1.0);
+        vec3 color=mix(uLow,uMid,smoothstep(.08,.53,height));
+        color=mix(color,uTop,smoothstep(.52,.96,height));
+        float longitude=atan(direction.z,direction.x);
+        float waves=sin(vScreen.x*5.2+vScreen.y*7.4+longitude+uTime*.085)+sin(vScreen.x*9.1-uTime*.052)*.34;
+        float ribbon=pow(clamp(waves*.5+.5,0.0,1.0),5.0);
+        float veil=smoothstep(.28,.48,height)*(1.0-smoothstep(.86,1.0,height));
+        color+=uAurora*ribbon*veil*(.18+uMagic*.28);
+        float horizon=1.0-smoothstep(.0,.22,abs(height-.43));
+        color+=uAurora*horizon*.075*uMagic;
+        gl_FragColor=vec4(color,1.0);
+      }`,
+  });
+  const group=new THREE.Group();
+  const dome=new THREE.Mesh(new THREE.SphereGeometry(46,32,20),skyMaterial);dome.renderOrder=-10;group.add(dome);
+
+  const count=150,positions=new Float32Array(count*3);
+  for(let index=0;index<count;index++){
+    const y=-.08+(index/(count-1))*1.04,radial=Math.sqrt(Math.max(0,1-y*y)),angle=index*2.399963;
+    positions[index*3]=Math.cos(angle)*radial*38;positions[index*3+1]=y*38;positions[index*3+2]=Math.sin(angle)*radial*38;
+  }
+  const starGeometry=new THREE.BufferGeometry();starGeometry.setAttribute("position",new THREE.BufferAttribute(positions,3));
+  const stars=new THREE.Points(starGeometry,new THREE.PointsMaterial({color:color(neutral.stars,look.stars),size:.16,transparent:true,opacity:THREE.MathUtils.lerp(.5,look.sparkleOpacity,paletteMix),depthWrite:false,blending:THREE.AdditiveBlending}));group.add(stars);
+
+  const celestial=new THREE.Group();celestial.position.set(-8.5,10,-17);
+  const orbColor=color(neutral.celestial,look.celestial);
+  const aura=new THREE.Mesh(new THREE.CircleGeometry(1.55,32),new THREE.MeshBasicMaterial({color:orbColor,transparent:true,opacity:.16,depthWrite:false,blending:THREE.AdditiveBlending}));celestial.add(aura);
+  const orb=new THREE.Mesh(new THREE.CircleGeometry(.76,32),new THREE.MeshBasicMaterial({color:orbColor,transparent:true,opacity:.92,depthWrite:false}));orb.position.z=.05;celestial.add(orb);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(1.18,.035,8,48),new THREE.MeshBasicMaterial({color:color(neutral.aurora,look.aurora),transparent:true,opacity:.7,depthWrite:false,blending:THREE.AdditiveBlending}));ring.position.z=.08;ring.rotation.z=-.28;celestial.add(ring);group.add(celestial);
+  return {group,skyMaterial,stars,celestial,ring};
+}
 
 function floatingRoom(stage:number){
   const room=new THREE.Group();
@@ -84,12 +135,13 @@ function floatingRoom(stage:number){
 
 export function mountTopiaScene(canvas:HTMLCanvasElement,mood:TopiaMood="neutral",intensity=0){
   const container=canvas.parentElement;if(!container)return()=>undefined;
-  const look=moodLooks[mood]??moodLooks.neutral,mix=THREE.MathUtils.clamp(intensity/100,0,1);
+  const look=moodLooks[mood]??moodLooks.neutral,mix=THREE.MathUtils.clamp(intensity/100,0,1),paletteMix=mood==="neutral"?1:.45+mix*.55;
   let renderer:THREE.WebGLRenderer;
   try{renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true,powerPreference:"high-performance"})}catch{return()=>undefined}
   renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=THREE.MathUtils.lerp(1.12,look.exposure,mix);
   const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(look.fog,THREE.MathUtils.lerp(.018,look.fogDensity,mix));
   const camera=new THREE.OrthographicCamera(-5,5,3,-3,.1,100);
+  const backdrop=fantasySky(look,paletteMix);scene.add(backdrop.group);backdrop.group.remove(backdrop.celestial);backdrop.celestial.position.set(3.5,1.55,-32);camera.add(backdrop.celestial);scene.add(camera);
   scene.add(new THREE.HemisphereLight(look.sky,look.ground,THREE.MathUtils.lerp(3.2,2.6,mix)));const sun=new THREE.DirectionalLight(look.sun,THREE.MathUtils.lerp(4,look.sunIntensity,mix));sun.position.set(-5,9,6);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);scene.add(sun);
   const stage=Number([...container.classList].find(value=>value.startsWith("stage-"))?.slice(6)??1),world=floatingRoom(stage);scene.add(world);
   const sparkleGeometry=new THREE.BufferGeometry(),sparklePositions=new Float32Array(42*3);
@@ -109,6 +161,6 @@ export function mountTopiaScene(canvas:HTMLCanvasElement,mood:TopiaMood="neutral
   const up=(event:PointerEvent)=>{pointers.delete(event.pointerId);if(pointers.size===1){const remaining=[...pointers.values()][0];lastX=remaining.x;lastY=remaining.y}};
   const wheel=(event:WheelEvent)=>{event.preventDefault();camera.zoom=THREE.MathUtils.clamp(camera.zoom-event.deltaY*.0008,.78,1.65);camera.updateProjectionMatrix()};
   canvas.addEventListener("pointerdown",down);canvas.addEventListener("pointermove",move);canvas.addEventListener("pointerup",up);canvas.addEventListener("pointercancel",up);canvas.addEventListener("wheel",wheel,{passive:false});
-  const animate=()=>{if(disposed)return;const now=performance.now();currentYaw+=(targetYaw-currentYaw)*.09;currentPitch+=(targetPitch-currentPitch)*.09;const radius=9.5,flat=radius*Math.cos(currentPitch);camera.position.set(Math.sin(currentYaw)*flat,1+Math.sin(currentPitch)*radius,Math.cos(currentYaw)*flat);camera.lookAt(0,1,0);world.position.y=Math.sin(now*.00055)*.05;sparkles.rotation.y=now*.000045;sparkles.position.y=Math.sin(now*.0007)*.08;driftingClouds.position.x=Math.sin(now*THREE.MathUtils.lerp(.00012,look.cloudSpeed,mix))*.65;driftingClouds.position.y=Math.cos(now*.0002)*.08;ambientGlow.intensity=1.05+Math.sin(now*(mood==="angry"?.004:.0011))*.24;renderer.render(scene,camera);frame=requestAnimationFrame(animate)};animate();
+  const animate=()=>{if(disposed)return;const now=performance.now();currentYaw+=(targetYaw-currentYaw)*.09;currentPitch+=(targetPitch-currentPitch)*.09;const radius=9.5,flat=radius*Math.cos(currentPitch);camera.position.set(Math.sin(currentYaw)*flat,1+Math.sin(currentPitch)*radius,Math.cos(currentYaw)*flat);camera.lookAt(0,1,0);backdrop.skyMaterial.uniforms.uTime.value=now*.001;backdrop.stars.rotation.y=now*.000012;backdrop.ring.rotation.z=-.28+now*.000035;backdrop.celestial.scale.setScalar(1+Math.sin(now*.0007)*.035);world.position.y=Math.sin(now*.00055)*.05;sparkles.rotation.y=now*.000045;sparkles.position.y=Math.sin(now*.0007)*.08;driftingClouds.position.x=Math.sin(now*THREE.MathUtils.lerp(.00012,look.cloudSpeed,mix))*.65;driftingClouds.position.y=Math.cos(now*.0002)*.08;ambientGlow.intensity=1.05+Math.sin(now*(mood==="angry"?.004:.0011))*.24;renderer.render(scene,camera);frame=requestAnimationFrame(animate)};animate();
   return()=>{disposed=true;cancelAnimationFrame(frame);observer.disconnect();canvas.removeEventListener("pointerdown",down);canvas.removeEventListener("pointermove",move);canvas.removeEventListener("pointerup",up);canvas.removeEventListener("pointercancel",up);canvas.removeEventListener("wheel",wheel);scene.traverse(object=>{if(object instanceof THREE.Mesh||object instanceof THREE.Points){object.geometry.dispose();const materials=Array.isArray(object.material)?object.material:[object.material];materials.forEach(value=>value.dispose())}});renderer.dispose();container.classList.remove("webgl-ready")};
 }
