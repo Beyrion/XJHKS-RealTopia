@@ -22,19 +22,59 @@ class TranscribeArgs {
   var maxNewTokens: Int = 256
 }
 
+@InvokeArg class SpeakerArgs {
+  lateinit var pcmPath: String
+  var sampleRate: Int = 16000
+  var channels: Int = 1
+  var sessionId: Long = 0
+}
+
 @TauriPlugin
 class RealiaAsrPlugin(private val activity: Activity) : Plugin(activity) {
   private val worker: ExecutorService = Executors.newSingleThreadExecutor()
   private val native = AsrNative()
+  private val speakers = ConsecutiveDiarizer(activity)
   private var engineHandle: Long = 0
   private var modelLoadMs: Long = -1
   private var lastError: String? = null
+
+  @Command fun warmupSpeakers(invoke: Invoke) {
+    worker.execute { try { invoke.resolve(speakers.warmup()) } catch (e: Exception) { invoke.reject("说话人模型加载失败：${e.message}") } }
+  }
+  @Command fun diarize(invoke: Invoke) {
+    val args = invoke.parseArgs(SpeakerArgs::class.java)
+    worker.execute { try { invoke.resolve(speakers.process(args.pcmPath, args.sampleRate, args.channels, args.sessionId)) } catch (e: Exception) { speakers.cleanup(); invoke.reject("说话人分段失败：${e.message}") } }
+  }
+  @Command fun releaseSpeakerTurns(invoke: Invoke) {
+    worker.execute { speakers.cleanup(); invoke.resolve() }
+  }
+  @Command fun resetSpeakerSession(invoke: Invoke) {
+    worker.execute { speakers.resetSession(); invoke.resolve() }
+  }
+
+  @Command
+  fun warmup(invoke: Invoke) {
+    worker.execute {
+      try {
+        val reused = engineHandle != 0L
+        ensureEngine()
+        invoke.resolve(JSObject().apply {
+          put("loaded", true); put("reused", reused)
+          put("load_ms", if (reused) 0 else modelLoadMs)
+        })
+      } catch (error: Exception) {
+        lastError = error.message ?: error.javaClass.simpleName
+        invoke.reject("ASR预加载失败：$lastError")
+      }
+    }
+  }
 
   @Command
   fun transcribe(invoke: Invoke) {
     val args = invoke.parseArgs(TranscribeArgs::class.java)
     worker.execute {
       try {
+        val reused = engineHandle != 0L
         ensureEngine()
         val recording = File(args.pcmPath).canonicalFile
         val filesRoot = activity.getExternalFilesDir(null)?.canonicalFile
@@ -52,6 +92,8 @@ class RealiaAsrPlugin(private val activity: Activity) : Plugin(activity) {
         val result = JSObject(nativeJson)
         if (result.has("error")) throw IllegalStateException(result.getString("error"))
         result.put("model_load_ms", modelLoadMs)
+        result.put("load_this_call_ms", if (reused) 0 else modelLoadMs)
+        result.put("model_reused", reused)
         lastError = null
         invoke.resolve(result)
       } catch (error: Exception) {
@@ -93,6 +135,7 @@ class RealiaAsrPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun onDestroy(activity: AppCompatActivity) {
     worker.execute {
+      speakers.release()
       if (engineHandle != 0L) {
         native.destroy(engineHandle)
         engineHandle = 0
