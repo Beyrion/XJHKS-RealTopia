@@ -7,6 +7,7 @@ import type {
   DialogueSuggestion,
   ConversationInsight,
   ConversationTurn,
+  LocalAsrResult,
 } from "../models";
 import { analyzeConversation } from "../utils/memoryPlanner";
 import { localConversationInsight } from "../utils/memoryPlanner";
@@ -14,6 +15,9 @@ import { inferQuestCategory } from "../utils/gameRules";
 import { sanitizeText } from "../utils/text";
 import { souvenirForQuest } from "../utils/souvenir";
 import { nativeService } from "./native";
+import { decideTask, stableKey, compactUtterance } from "../utils/taskGate";
+import { normalizeQuest, recordEvidence } from "../utils/questEvidence";
+import { mergeMemoryRecords } from "../utils/socialMemory";
 
 export interface RecordingSnapshot {
   quests: Quest[];
@@ -23,11 +27,21 @@ export interface RecordingSnapshot {
   transcriptPrefix?: string;
   conversationHistory?: ConversationTurn[];
   sceneSummary?: string | null;
-  /** A recognized-person recording is an explicit task-capture transaction. */
-  requireTask?: boolean;
+  activeQuestId?: string | null;
+  requireTaskConfirmation?: boolean;
+  deferTasks?: boolean;
+  sessionSummary?: boolean;
 }
 
 export interface LocalTranscription {
+  metrics?: Pick<
+    LocalAsrResult,
+    | "latency_ms"
+    | "realtime_factor"
+    | "model_load_ms"
+    | "load_this_call_ms"
+    | "model_reused"
+  >;
   transcript: string;
   localText: string;
   log: string;
@@ -35,11 +49,17 @@ export interface LocalTranscription {
 
 function memoryContext(snapshot: RecordingSnapshot) {
   return {
+    sessionSummary: snapshot.sessionSummary,
+    memories: snapshot.memories,
+    activeQuestId: snapshot.activeQuestId,
     tasks: snapshot.quests.map((value) => ({
       id: value.id,
       title: value.title,
       body: value.body,
       personId: value.personId ?? null,
+      lifecycle: value.lifecycle,
+      participantIds: value.participantIds,
+      ownerPersonId: value.ownerPersonId,
     })),
     people: snapshot.people.map((value) => ({
       id: value.id,
@@ -72,11 +92,18 @@ export async function transcribeRecordingLocally(
   );
   return {
     localText: local.text,
+    metrics: {
+      latency_ms: local.latency_ms,
+      realtime_factor: local.realtime_factor,
+      model_load_ms: local.model_load_ms,
+      load_this_call_ms: local.load_this_call_ms,
+      model_reused: local.model_reused,
+    },
     transcript: [transcriptPrefix, local.text]
       .filter(Boolean)
       .join(" ")
       .slice(-6_000),
-    log: `录音 #${recording.recording_id} 本地转写 ${local.latency_ms.toFixed(0)}ms · RTF ${local.realtime_factor.toFixed(2)} · 加载 ${local.model_load_ms}ms`,
+    log: `录音 #${recording.recording_id} 本地转写 ${local.latency_ms.toFixed(0)}ms · RTF ${local.realtime_factor.toFixed(2)} · 首次加载 ${local.model_load_ms}ms · ${local.model_reused ? "复用常驻模型" : `本次加载 ${local.load_this_call_ms ?? "未知"}ms`}`,
   };
 }
 
@@ -132,19 +159,35 @@ export async function processRecordingPipeline(
     );
 
     const taskIds = new Set(insight.taskIds);
+    const sourceId = `utterance:${recording.conversation_id ?? recording.recording_id}:${stableKey(compactUtterance(conversationText))}`;
     const originalQuestIds = new Set(snapshot.quests.map((item) => item.id));
-    insight.taskOperations.forEach((operation, index) => {
+    (snapshot.deferTasks ? [] : insight.taskOperations).forEach((operation) => {
       if (operation.operation === "create") {
-        const id = `conversation-${recording.recording_id}-task-${index}`;
-        if (quests.some((item) => item.id === id)) {
-          taskIds.add(id);
+        const decision = decideTask(operation.evidence, {
+          speakerPersonId: insight.speakerPersonId,
+          people: snapshot.people,
+        });
+        if (
+          !["create", "candidate"].includes(decision.kind) ||
+          !conversationText.includes(operation.evidence)
+        )
+          return;
+        const dedupeKey = `request:${recording.conversation_id ?? recording.recording_id}:${stableKey(compactUtterance(operation.evidence))}`;
+        const id = `task-${stableKey(dedupeKey)}`;
+        const existing = quests.find(
+          (item) => item.id === id || item.dedupeKey === dedupeKey,
+        );
+        if (existing) {
+          taskIds.add(existing.id);
           return;
         }
         const person = people.find((item) => item.id === operation.personId);
         const quest: Quest = {
           id,
           group: "对话任务",
-          title: sanitizeText(operation.title).slice(0, 48),
+          title: sanitizeText(operation.evidence).slice(0, 48),
+          realTitle: sanitizeText(operation.evidence).slice(0, 48),
+          displayTitle: `现实委托 · ${sanitizeText(operation.title).slice(0, 32)}`,
           meta: `${operation.deadline || "待安排"} · LLM 提取 ${Math.round(operation.confidence * 100)}%`,
           body: sanitizeText(operation.evidence || insight.summary).slice(
             0,
@@ -154,11 +197,26 @@ export async function processRecordingPipeline(
             ? "首要"
             : "普通",
           progress: 0,
-          steps: operation.steps.map(sanitizeText).filter(Boolean),
+          steps: [sanitizeText(operation.evidence)],
           personId: person?.id,
           person: person?.name,
           reward: "完成后获得一件共同记忆纪念品",
           status: "inbox",
+          lifecycle:
+            !snapshot.requireTaskConfirmation && decision.kind === "create"
+              ? "accepted"
+              : "candidate",
+          ownerPersonId: decision.assigneePersonId ?? undefined,
+          dedupeKey,
+          acceptanceCriteria:
+            decision.acceptanceCriteria || "请确认执行者、具体行动与完成结果",
+          candidateExpiresAt: new Date(Date.now() + 30 * 60000).toISOString(),
+          sourceEvidence: {
+            sourceId,
+            excerpt: operation.evidence,
+            speakerPersonId: insight.speakerPersonId,
+            mentionedPersonIds: insight.mentionedPersonIds,
+          },
           source: "glasses",
           assignerPersonId: person?.id,
           deadline: operation.deadline || undefined,
@@ -166,7 +224,7 @@ export async function processRecordingPipeline(
         };
         quest.category = inferQuestCategory(quest);
         quest.reward = `纪念品 · ${souvenirForQuest(quest, person).name}`;
-        quests.unshift(quest);
+        quests.unshift(normalizeQuest(quest));
         taskIds.add(id);
         return;
       }
@@ -174,52 +232,80 @@ export async function processRecordingPipeline(
       const linked = quests.find((item) => item.id === operation.taskId);
       if (!linked) return;
       taskIds.add(linked.id);
-      for (const step of operation.steps.map(sanitizeText)) {
-        if (step && !linked.steps.includes(step)) linked.steps.push(step);
-      }
+      // Model progress is a candidate, never an arbitrary percentage or a new step.
+      const candidate = recordEvidence(linked, {
+        id: `evidence-${stableKey(`${sourceId}:${linked.id}`)}`,
+        taskId: linked.id,
+        sourceType: "asr",
+        sourceId,
+        excerpt: operation.evidence,
+        observedAt: new Date().toISOString(),
+        confidence: operation.confidence,
+        verificationStatus: "candidate",
+        dedupeKey: `${sourceId}:${linked.id}`,
+      });
+      quests[quests.findIndex((item) => item.id === linked.id)] = candidate;
       // Progress/completion are deliberately not applied from LLM inference.
       // The candidate remains auditable in memory and the user completes it.
     });
 
-    // The glasses task flow is intentional: once the user starts recording
-    // with a recognized person, it must end in a persisted, auditable task.
-    // Cloud extraction can legitimately return no create operation for an
-    // indirect request, so provide a conservative inbox item instead of
-    // leaving the exclusive workflow locked forever.
+    const pending = quests.filter(
+      (q) =>
+        q.lifecycle === "candidate" &&
+        q.source === "glasses" &&
+        q.candidateExpiresAt &&
+        Date.parse(q.candidateExpiresAt) > Date.now(),
+    );
+    const unique = pending.length === 1 ? pending[0] : undefined;
+    const decision = decideTask(conversationText, {
+      speakerPersonId: insight.speakerPersonId,
+      people: snapshot.people,
+      uniquePendingCandidateId: unique?.id,
+      pendingCandidateIds: pending.map((q) => q.id),
+      notExpired: !!unique,
+    });
     if (
-      snapshot.requireTask &&
-      !quests.some((item) => !originalQuestIds.has(item.id))
+      !snapshot.requireTaskConfirmation &&
+      decision.kind === "confirm_existing" &&
+      unique &&
+      (!insight.speakerPersonId ||
+        unique.ownerPersonId === insight.speakerPersonId)
     ) {
-      const person = people.find(
-        (item) => item.id === snapshot.selectedPersonId,
-      );
-      const id = `conversation-${recording.recording_id}-task-fallback`;
-      const summary = sanitizeText(insight.summary || conversationText)
-        .replace(/[。！？!?]+$/g, "")
-        .slice(0, 40);
-      const quest: Quest = {
-        id,
-        group: "对话任务",
-        title: summary
-          ? `跟进 · ${summary}`
-          : `跟进与${person?.name ?? "对话人物"}的约定`,
-        meta: "待确认 · 对话流程兜底任务",
-        body: sanitizeText(conversationText).slice(0, 1_200),
-        priority: "普通",
-        progress: 0,
-        steps: ["确认约定的具体要求", "完成并向对方反馈"],
-        personId: person?.id,
-        person: person?.name,
-        reward: "完成后获得一件共同记忆纪念品",
-        status: "inbox",
-        source: "glasses",
-        assignerPersonId: person?.id,
-        createdAt: new Date().toISOString(),
-      };
-      quest.category = inferQuestCategory(quest);
-      quest.reward = `纪念品 · ${souvenirForQuest(quest, person).name}`;
-      quests.unshift(quest);
-      taskIds.add(id);
+      const accepted = normalizeQuest(unique);
+      accepted.lifecycle = "accepted";
+      accepted.status = "active";
+      accepted.ownerPersonId ??= "player";
+      accepted.revision!++;
+      accepted.progressEvents!.push({
+        eventId: `accept-${stableKey(sourceId + unique.id)}`,
+        taskId: unique.id,
+        operation: "accept",
+        recordedAt: new Date().toISOString(),
+        actor: insight.speakerPersonId ?? "player",
+        evidenceIds: [],
+        rulesVersion: "evidence-v1",
+        dedupeKey: sourceId + unique.id,
+      });
+      quests[quests.findIndex((q) => q.id === unique.id)] = accepted;
+      taskIds.add(unique.id);
+    }
+    if (["progress_candidate", "cancel_candidate"].includes(decision.kind)) {
+      const target = quests.find((q) => q.id === snapshot.activeQuestId);
+      if (target) {
+        const candidate = recordEvidence(target, {
+          id: `evidence-${stableKey(sourceId + target.id)}`,
+          taskId: target.id,
+          sourceType: "asr",
+          sourceId,
+          excerpt: conversationText.slice(0, 280),
+          observedAt: new Date().toISOString(),
+          confidence: 0.6,
+          verificationStatus: "candidate",
+          dedupeKey: sourceId + target.id,
+        });
+        quests[quests.findIndex((q) => q.id === target.id)] = candidate;
+        taskIds.add(target.id);
+      }
     }
 
     const generatedQuestIds = quests
@@ -257,6 +343,23 @@ export async function processRecordingPipeline(
         title: sanitizeText(item.summary).slice(0, 48),
         meta: `${person?.name ?? "未关联人物"} · ${Math.round(item.confidence * 100)}% · ${model.model}`,
         kind: "person",
+        memoryKind:
+          item.kind === "promise"
+            ? "commitment"
+            : item.kind === "conversation"
+              ? "episode"
+              : item.kind === "relationship"
+                ? "fact"
+                : item.kind,
+        subjectPersonIds: [item.personId],
+        speakerPersonId: insight.speakerPersonId,
+        mentionedPersonIds: insight.mentionedPersonIds,
+        sourceType: "asr",
+        speakerVoiceId: recording.speaker?.id,
+        speakerSourceRecordingId: recording.speaker?.sourceRecordingId,
+        sourceId,
+        observedAt: new Date().toISOString(),
+        revision: 1,
         summary: sanitizeText(item.summary),
         transcript: sanitizeText(conversationText).slice(0, 1_200),
         personIds: [item.personId],
@@ -313,6 +416,18 @@ export async function processRecordingPipeline(
         1_200,
       );
       recordingMemory.personIds = insight.personIds;
+      recordingMemory.subjectPersonIds = insight.speakerPersonId
+        ? [insight.speakerPersonId]
+        : [];
+      recordingMemory.speakerPersonId = insight.speakerPersonId;
+      recordingMemory.speakerVoiceId = recording.speaker?.id;
+      recordingMemory.speakerSourceRecordingId =
+        recording.speaker?.sourceRecordingId;
+      recordingMemory.mentionedPersonIds = insight.mentionedPersonIds;
+      recordingMemory.sourceType = "asr";
+      recordingMemory.sourceId = sourceId;
+      recordingMemory.observedAt = new Date().toISOString();
+      recordingMemory.memoryKind = "episode";
       recordingMemory.taskIds = [...taskIds];
       recordingMemory.sourceRecordingId = recording.recording_id;
       recordingMemory.meta = `${
@@ -333,7 +448,7 @@ export async function processRecordingPipeline(
     return {
       quests,
       people,
-      memories,
+      memories: mergeMemoryRecords(snapshot.memories, memories),
       interactions: insight.interactionEvents,
       transcript: conversationText,
       speakerPersonId: insight.speakerPersonId,
