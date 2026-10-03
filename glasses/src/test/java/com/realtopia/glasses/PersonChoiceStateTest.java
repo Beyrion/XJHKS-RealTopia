@@ -4,6 +4,34 @@ import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
 public class PersonChoiceStateTest {
+    @Test public void taskOffersPreserveAcceptRejectContext(){
+        PersonChoiceState state=new PersonChoiceState();
+        state.reset("小蔡","task_offer","task-offer:session:task:1",
+            new String[]{"accept","reject"},new String[]{"接受任务","拒绝任务"});
+        assertEquals(true,state.isTaskOffer());
+        state.next();
+        assertEquals("reject",state.selection().choiceId);
+        assertEquals("task-offer:session:task:1",state.selection().contextId);
+        state.reset("小蔡","task_offer","task-offer:session:task:1",
+            new String[]{"accept","reject"},new String[]{"接受任务","拒绝任务"});
+        assertEquals("reject",state.selection().choiceId);
+    }
+    @Test public void taskOffersStopAtEdgesInsteadOfCyclingBack(){
+        PersonChoiceState state=new PersonChoiceState();
+        state.reset("__task__","task_offer","offer-1",new String[]{"accept","reject"},new String[]{"接受任务","拒绝任务"});
+        state.previous();assertEquals("accept",state.selection().choiceId);
+        state.next();state.next();assertEquals("reject",state.selection().choiceId);
+        state.previous();state.previous();assertEquals("accept",state.selection().choiceId);
+    }
+    @Test public void scrollingFreezesSameContextButNewContextCanReset(){
+        PersonChoiceState state=new PersonChoiceState();
+        state.reset("xiaocai","dialogue","turn-1",new String[]{"a","b"},new String[]{"本地建议一","本地建议二"});
+        state.next();
+        state.reset("xiaocai","dialogue","turn-1",new String[]{"c","d"},new String[]{"迟到云端一","迟到云端二"});
+        assertEquals(1,state.selectedIndex());assertEquals("本地建议二",state.selectedLabel());
+        state.reset("laosun","dialogue","turn-2",new String[]{"c","d"},new String[]{"新对话一","新对话二"});
+        assertEquals(0,state.selectedIndex());assertEquals("新对话一",state.selectedLabel());
+    }
     @Test public void startsAtFirstChoiceAndCarriesPersonIdentity(){
         PersonChoiceState state=new PersonChoiceState();state.reset("老孙");
         PersonChoiceState.Selection selected=state.selection();

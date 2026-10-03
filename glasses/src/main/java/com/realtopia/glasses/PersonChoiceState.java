@@ -16,9 +16,12 @@ final class PersonChoiceState {
     private String personId="",kind="person",contextId="";
     private String[] ids=DEFAULT_IDS,labels=DEFAULT_LABELS;
     private int selected;
+    private boolean interacted;
 
     void reset(String nextPersonId){reset(nextPersonId,"person","",DEFAULT_IDS,DEFAULT_LABELS);}
     void reset(String nextPersonId,String nextKind,String nextContextId,String[] nextIds,String[] nextLabels){
+        if(interacted&&nextContextId!=null&&!nextContextId.isEmpty()&&hasContext(nextContextId))return;
+        interacted=false;
         personId=nextPersonId==null?"":nextPersonId;kind=nextKind==null?"person":nextKind;
         contextId=nextContextId==null?"":nextContextId;
         if(nextIds!=null&&nextLabels!=null&&nextIds.length>=2&&nextIds.length<=3&&nextIds.length==nextLabels.length){ids=nextIds.clone();labels=nextLabels.clone();}
@@ -26,11 +29,13 @@ final class PersonChoiceState {
         selected=0;
     }
     int selectedIndex(){return selected;}
+    boolean isTaskOffer(){return "task_offer".equals(kind);}
     boolean hasContext(String value){return value!=null&&value.equals(contextId);}
     int size(){return labels.length;}
     String labelAt(int index){return labels[index];}
     String selectedLabel(){return labels[selected];}
-    void previous(){selected=(selected+labels.length-1)%labels.length;}
-    void next(){selected=(selected+1)%labels.length;}
+    boolean isFrozen(String value){return interacted&&value!=null&&!value.isEmpty()&&hasContext(value);}
+    void previous(){interacted=true;selected=isTaskOffer()?Math.max(0,selected-1):(selected+labels.length-1)%labels.length;}
+    void next(){interacted=true;selected=isTaskOffer()?Math.min(labels.length-1,selected+1):(selected+1)%labels.length;}
     Selection selection(){return new Selection(personId,selected,ids[selected],labels[selected],kind,contextId);}
 }
