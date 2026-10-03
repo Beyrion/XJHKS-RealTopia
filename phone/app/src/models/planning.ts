@@ -1,5 +1,16 @@
 export interface MemoryContext {
-  tasks: { id: string; title: string; body: string; personId: string | null }[];
+  sessionSummary?: boolean;
+  memories?: import("./domain").Memory[];
+  activeQuestId?: string | null;
+  tasks: {
+    id: string;
+    title: string;
+    body: string;
+    personId: string | null;
+    lifecycle?: import("./lifecycle").TaskLifecycle;
+    participantIds?: string[];
+    ownerPersonId?: string;
+  }[];
   people: { id: string; name: string }[];
   selectedPersonId?: string | null;
   recentConversation?: { transcript: string; speakerPersonId: string | null }[];
@@ -34,12 +45,18 @@ export interface ExtractedInteractionEvent {
 }
 
 export interface DialogueSuggestion {
+  usedMemoryIds?: string[];
   id: string;
   label: string;
   intent: "warm" | "curious" | "helpful" | "honest" | "exit";
 }
 
 export interface ConversationTurn {
+  speakerVoiceId?: string | null;
+  speakerSourceRecordingId?: number;
+  speakerAttribution?: "unconfirmed" | "player" | "person";
+  usedMemoryIds?: string[];
+  evidenceRefs?: import("./lifecycle").SocialPromptResult["evidenceRefs"];
   id: string;
   conversationId: number;
   recordingId: number;
@@ -66,6 +83,7 @@ export interface ConversationTurn {
 }
 
 export interface ConversationInsight {
+  socialPrompt?: import("./lifecycle").SocialPromptResult;
   summary: string;
   story: string;
   personIds: string[];

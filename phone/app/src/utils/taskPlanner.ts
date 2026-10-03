@@ -1,5 +1,6 @@
 import type { ModelResponse, PlannedQuest, PlanningContext } from "../models";
 import { modelHub } from "../services/modelHub";
+import { decideTask } from "./taskGate";
 
 interface RawPlan extends Partial<Omit<PlannedQuest, "priority">> {
   priority?: string;
@@ -56,6 +57,7 @@ function resolveParent(
     let shared = 0;
     for (const token of goalTokens)
       if (token.length > 1 && taskTokens.has(token)) shared++;
+    if (shared < 2 && !goal.includes(task.title)) continue;
     const score =
       shared +
       (personId && task.personId === personId ? 3 : 0) +
@@ -70,7 +72,12 @@ export async function planQuest(
   context: PlanningContext,
 ): Promise<{ quest: PlannedQuest; model: ModelResponse }> {
   const clean = goal.trim();
-  if (!clean) throw new Error("goal is empty");
+  const decision = decideTask(clean, {
+    entryPoint: "explicit_goal_input",
+    people: context.people,
+  });
+  if (decision.kind !== "create" && decision.kind !== "candidate")
+    throw new Error(decision.reason);
   const compactContext = {
     tasks: context.tasks.map((item) => ({
       id: item.id,
@@ -89,21 +96,16 @@ export async function planQuest(
   const raw = parseJson(model.text),
     person = resolvePerson(clean, raw, context),
     parentTaskId = resolveParent(clean, person?.id ?? null, raw, context);
-  const steps = Array.isArray(raw.steps)
-    ? raw.steps
-        .filter(
-          (item): item is string =>
-            typeof item === "string" && item.trim().length > 0,
-        )
-        .slice(0, 6)
-    : [];
+  // The model may decorate a goal, not add actions the user never promised.
+  const steps = clean
+    .split(/然后|再(?:去|来)|并且|；/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 6);
   return {
     model,
     quest: {
-      title:
-        typeof raw.title === "string" && raw.title.trim()
-          ? raw.title.trim()
-          : clean.slice(0, 28),
+      title: clean.slice(0, 48),
       deadline: typeof raw.deadline === "string" ? raw.deadline : "待安排",
       priority: raw.priority === "首要" ? "首要" : "普通",
       personId: person?.id ?? null,

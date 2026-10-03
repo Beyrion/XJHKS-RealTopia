@@ -6,6 +6,8 @@ import type {
   Quest,
   QuestCategory,
 } from "../models";
+import { isFormalQuest, questLifecycle } from "./questEvidence";
+import { isUsableMemory } from "./socialMemory";
 
 export const questCategoryMeta: Record<
   QuestCategory,
@@ -70,6 +72,9 @@ export function recommendedQuest(
   quests: Quest[],
   activeQuestId?: string | null,
 ) {
+  quests = quests.filter(
+    (q) => isFormalQuest(q) && questLifecycle(q) !== "completed",
+  );
   const active = quests.find(
     (item) =>
       item.id === activeQuestId &&
@@ -183,6 +188,11 @@ export function calculateVitality(
   memories: Memory[],
   events: GameEvent[],
 ) {
+  quests = quests.filter(isFormalQuest);
+  memories = memories.filter(
+    (m) => isUsableMemory(m) && m.memoryKind !== "working_context",
+  );
+  events = events.filter((event) => event.status !== "revoked");
   const averageProgress = quests.length
     ? quests.reduce((sum, quest) => sum + quest.progress, 0) / quests.length
     : 0;

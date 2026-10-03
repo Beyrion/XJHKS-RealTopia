@@ -7,6 +7,8 @@ import type {
   ModelResponse,
 } from "../models";
 import { modelHub } from "../services/modelHub";
+import { decideTask, isAcknowledgement, semanticOverlap } from "./taskGate";
+import { buildSocialPrompt } from "./socialMemory";
 
 interface RawInsight extends Partial<
   Omit<
@@ -106,7 +108,11 @@ function validateReplies(
       typeof item.intent === "string" && allowed.has(item.intent)
         ? (item.intent as ConversationInsight["replySuggestions"][number]["intent"])
         : "honest";
-    return [{ id: `reply_${index}`, label, intent }];
+    const allowedMemoryIds = new Set(
+      fallback.flatMap((reply) => reply.usedMemoryIds ?? []),
+    );
+    const usedMemoryIds = validIds(item.usedMemoryIds, allowedMemoryIds);
+    return [{ id: `reply_${index}`, label, intent, usedMemoryIds }];
   });
   return replies.length === 3 ? replies : fallback;
 }
@@ -155,9 +161,7 @@ export function localConversationInsight(
   )
     ? (context.selectedPersonId ?? null)
     : null;
-  const speakerPersonId =
-    selectedPersonId ??
-    (explicitlyMentioned.length === 1 ? explicitlyMentioned[0] : null);
+  const speakerPersonId = selectedPersonId;
   const mentionedPersonIds = explicitlyMentioned.filter(
     (id) => id !== speakerPersonId,
   );
@@ -171,7 +175,7 @@ export function localConversationInsight(
   const ranked = context.tasks
     .map((task) => {
       const target = tokens(`${task.title} ${task.body}`);
-      let score = personIds.includes(task.personId ?? "") ? 3 : 0;
+      let score = 0;
       for (const token of source)
         if (token.length > 1 && target.has(token)) score++;
       return { id: task.id, score };
@@ -185,14 +189,26 @@ export function localConversationInsight(
     .map((item) => item.trim())
     .filter(Boolean);
   const followUps = sentences
-    .filter((item) =>
-      /(下次|记得|需要|应该|准备|别忘|计划|帮我|麻烦|能不能|可以.{0,8}(?:吗|嘛)|发给我|今天|今晚|周[一二三四五六日天]|明天|后天)/.test(
-        item,
-      ),
+    .filter(
+      (item, index) =>
+        ["create", "candidate"].includes(
+          decideTask(item, { speakerPersonId, people: context.people }).kind,
+        ) &&
+        (!context.sessionSummary ||
+          !sentences
+            .slice(index + 1)
+            .some(
+              (later, offset) =>
+                /算了|不用了|不需要|取消|别再|不要/.test(later) &&
+                (semanticOverlap(item, later) >= 2 ||
+                  (offset === 0 &&
+                    /^(算了|不用了|取消吧|不需要了)/.test(later))),
+            )),
     )
-    .slice(0, 4);
+    .slice(0, context.sessionSummary ? 12 : 4);
+  const worthwhile = !isAcknowledgement(transcript);
   const memories: ExtractedPersonMemory[] = (
-    speakerPersonId ? [speakerPersonId] : personIds
+    speakerPersonId && worthwhile ? [speakerPersonId] : []
   ).map((personId) => ({
     kind: /答应|承诺|一定会|交给我/.test(transcript)
       ? "promise"
@@ -226,24 +242,44 @@ export function localConversationInsight(
         confidence: 0.75,
       });
   }
-  const taskOps: ExtractedTaskOperation[] = followUps.length
-    ? [
-        {
-          operation: ranked.length ? "update" : "create",
-          taskId: ranked[0] ?? null,
-          title: compact(followUps[0], 48),
-          deadline:
-            followUps[0].match(
-              /(今天|今晚|明天|后天|周[一二三四五六日天])/,
-            )?.[1] ?? "",
-          personId: speakerPersonId,
-          steps: followUps.map((item) => compact(item, 80)),
-          evidence: compact(followUps.join("。"), 240),
-          confidence: 0.68,
-        },
-      ]
-    : [];
+  const taskOps: ExtractedTaskOperation[] = context.sessionSummary
+    ? [...new Set(followUps)].map((evidence) => ({
+        operation: "create",
+        taskId: null,
+        title: compact(evidence, 48),
+        deadline:
+          evidence.match(/(今天|今晚|明天|后天|周[一二三四五六日天])/)?.[1] ??
+          "",
+        personId: null,
+        steps: [compact(evidence, 80)],
+        evidence: compact(evidence, 240),
+        confidence: 0.68,
+      }))
+    : followUps.length
+      ? [
+          {
+            operation: ranked.length ? "update" : "create",
+            taskId: ranked[0] ?? null,
+            title: compact(followUps[0], 48),
+            deadline:
+              followUps[0].match(
+                /(今天|今晚|明天|后天|周[一二三四五六日天])/,
+              )?.[1] ?? "",
+            personId: speakerPersonId,
+            steps: followUps.map((item) => compact(item, 80)),
+            evidence: compact(followUps.join("。"), 240),
+            confidence: 0.68,
+          },
+        ]
+      : [];
   return {
+    socialPrompt: buildSocialPrompt(
+      speakerPersonId,
+      transcript,
+      context.memories ?? [],
+      context.tasks as import("../models").Quest[],
+      context.activeQuestId,
+    ),
     summary: compact(sentences[0] ?? transcript, 80),
     story: compact(sentences.slice(0, 3).join("。"), 220),
     personIds,
@@ -255,14 +291,30 @@ export function localConversationInsight(
     memories,
     taskOperations: taskOps,
     interactionEvents: interactions,
-    replySuggestions: heuristicReplies(transcript),
+    replySuggestions: (() => {
+      const prompt = buildSocialPrompt(
+        speakerPersonId,
+        transcript,
+        context.memories ?? [],
+        context.tasks as import("../models").Quest[],
+        context.activeQuestId,
+      );
+      return prompt.suggestions.length
+        ? prompt.suggestions
+        : heuristicReplies(transcript);
+    })(),
     enhanceReplySuggestions: false,
     enhancementReason: "本地即时建议",
   };
 }
 
-function validateMemories(raw: unknown, context: MemoryContext) {
+function validateMemories(
+  raw: unknown,
+  context: MemoryContext,
+  transcript: string,
+) {
   if (!Array.isArray(raw)) return [];
+  if (isAcknowledgement(transcript)) return [];
   const people = new Set(context.people.map((item) => item.id));
   return raw.flatMap((value): ExtractedPersonMemory[] => {
     if (!value || typeof value !== "object") return [];
@@ -274,6 +326,19 @@ function validateMemories(raw: unknown, context: MemoryContext) {
       !people.has(item.personId) ||
       typeof item.summary !== "string" ||
       confidence(item.confidence) < 0.6
+    )
+      return [];
+    if (
+      typeof item.evidence !== "string" ||
+      !item.evidence.trim() ||
+      !transcript.includes(item.evidence.trim())
+    )
+      return [];
+    if (
+      item.personId !== context.selectedPersonId &&
+      !transcript.includes(
+        context.people.find((p) => p.id === item.personId)?.name ?? "\0",
+      )
     )
       return [];
     return [
@@ -289,7 +354,11 @@ function validateMemories(raw: unknown, context: MemoryContext) {
   });
 }
 
-function validateTaskOperations(raw: unknown, context: MemoryContext) {
+function validateTaskOperations(
+  raw: unknown,
+  context: MemoryContext,
+  transcript: string,
+) {
   if (!Array.isArray(raw)) return [];
   const people = new Set(context.people.map((item) => item.id));
   const tasks = new Set(context.tasks.map((item) => item.id));
@@ -305,11 +374,48 @@ function validateTaskOperations(raw: unknown, context: MemoryContext) {
     )
       return [];
     const operation = item.operation as ExtractedTaskOperation["operation"];
+    const decision = decideTask(transcript, {
+      speakerPersonId: context.selectedPersonId,
+      people: context.people,
+    });
+    if (
+      operation === "create" &&
+      !context.sessionSummary &&
+      !["create", "candidate"].includes(decision.kind)
+    )
+      return [];
+    if (
+      typeof item.evidence !== "string" ||
+      !item.evidence.trim() ||
+      !transcript.includes(item.evidence.trim())
+    )
+      return [];
+    if (
+      operation === "create" &&
+      !["create", "candidate"].includes(
+        decideTask(item.evidence, {
+          speakerPersonId: context.selectedPersonId,
+          people: context.people,
+        }).kind,
+      )
+    )
+      return [];
     const taskId =
       typeof item.taskId === "string" && tasks.has(item.taskId)
         ? item.taskId
         : null;
     if (operation !== "create" && !taskId) return [];
+    if (taskId) {
+      const task = context.tasks.find((t) => t.id === taskId)!;
+      if (
+        semanticOverlap(transcript, `${task.title} ${task.body}`) < 2 &&
+        !(
+          taskId === context.activeQuestId &&
+          decision.kind === "progress_candidate"
+        )
+      )
+        return [];
+    }
     return [
       {
         operation,
@@ -372,6 +478,9 @@ export async function analyzeConversation(
   if (!clean) throw new Error("transcript is empty");
   const fallback = localConversationInsight(clean, context);
   const promptContext = {
+    sessionSummary: context.sessionSummary === true,
+    retrievedMemories: fallback.socialPrompt?.evidenceRefs,
+    usedMemoryIds: fallback.socialPrompt?.usedMemoryIds,
     people: context.people,
     selectedPersonId: context.selectedPersonId ?? null,
     tasks: context.tasks.map((item) => ({
@@ -383,14 +492,25 @@ export async function analyzeConversation(
     currentScene: context.sceneSummary ?? null,
     localReplySuggestions: fallback.replySuggestions,
   };
-  const model = await modelHub.complete({
-    purpose: "memory",
-    prompt: `<transcript>${clean}</transcript>\n<context>${JSON.stringify(promptContext)}</context>\nReturn one JSON object matching this shape: {summary, story, speakerPersonId, mentionedPersonIds, personIds, taskIds, memories:[{kind,personId,summary,evidence,confidence}], taskOperations:[{operation,taskId,title,deadline,personId,steps,evidence,confidence}], interactionEvents:[{type,personId,evidence,confidence}], replySuggestions:[{label,intent}], enhanceReplySuggestions, enhancementReason}. replySuggestions must contain exactly 3 natural first-person Chinese utterances that the wearer can say next, each at most 18 Chinese characters; make them meaningfully different and grounded in the transcript. intent must be warm,curious,helpful,honest,or exit. Compare replySuggestions with context.localReplySuggestions. Set enhanceReplySuggestions=true only when the new suggestions are materially more specific, useful, or contextually correct enough to justify interrupting and replacing the suggestions already visible to the user; otherwise set it false. enhancementReason must briefly explain that display decision in Chinese. speakerPersonId is the current interlocutor; mentionedPersonIds are third parties only. selectedPersonId, when present, was explicitly confirmed by the user and must be the speaker. Allowed memory kinds: conversation,fact,preference,promise,relationship. Allowed task operations: create,update,progress,complete_candidate. Allowed interaction types: meaningful_conversation,gratitude,help,promise,conflict. Use only IDs from context. Do not invent a person.`,
-    system:
-      "You extract auditable durable memory and real task operations from a Chinese conversation. Distinguish the current interlocutor from third parties merely mentioned in speech. Every claim must include a short verbatim evidence span and confidence from 0 to 1. Do not assign relationship scores. Return JSON only.",
-    json: true,
-    timeoutMs: 7_000,
-  });
+  const model = await modelHub
+    .complete({
+      purpose: "memory",
+      prompt: `<transcript>${clean}</transcript>\n<context>${JSON.stringify(promptContext)}</context>\nReturn one JSON object matching this shape: {summary, story, speakerPersonId, mentionedPersonIds, personIds, taskIds, memories:[{kind,personId,summary,evidence,confidence}], taskOperations:[{operation,taskId,title,deadline,personId,steps,evidence,confidence}], interactionEvents:[{type,personId,evidence,confidence}], replySuggestions:[{label,intent}], enhanceReplySuggestions, enhancementReason}. replySuggestions must contain exactly 3 natural first-person Chinese utterances that the wearer can say next, each at most 18 Chinese characters; make them meaningfully different and grounded in the transcript. intent must be warm,curious,helpful,honest,or exit. Compare replySuggestions with context.localReplySuggestions. Set enhanceReplySuggestions=true only when the new suggestions are materially more specific, useful, or contextually correct enough to justify interrupting and replacing the suggestions already visible to the user; otherwise set it false. enhancementReason must briefly explain that display decision in Chinese. speakerPersonId is the current interlocutor; mentionedPersonIds are third parties only. selectedPersonId, when present, was explicitly confirmed by the user and must be the speaker. Allowed memory kinds: conversation,fact,preference,promise,relationship. Allowed task operations: create,update,progress,complete_candidate. Allowed interaction types: meaningful_conversation,gratitude,help,promise,conflict. Use only IDs from context. Do not invent a person.`,
+      system:
+        "You extract auditable durable memory and real task operations from a Chinese conversation. Distinguish the current interlocutor from third parties merely mentioned in speech. Every claim must include a short verbatim evidence span and confidence from 0 to 1. Do not assign relationship scores. Return JSON only." +
+        (context.sessionSummary
+          ? " This is the FULL chronological transcript of a completed perception session, containing multiple speakers without verified identities. Generate zero, one or multiple independent candidate tasks. One create operation per independent action; do not merge unrelated requests. Deduplicate repeated requests; omit requests later cancelled, declined or already finished. Backchannels, chat, hypotheticals and questions are not tasks. Never guess an assignee or speaker. taskOperations=[] is valid. Do not generate replies or person memories."
+          : ""),
+      json: true,
+      timeoutMs: 7_000,
+    })
+    .catch((): ModelResponse => ({
+      text: "{}",
+      side: "edge",
+      provider: "local-fallback",
+      model: "local-memory-fallback",
+      latencyMs: 0,
+    }));
   let raw: RawInsight;
   try {
     raw = parseJson(model.text);
@@ -405,8 +525,8 @@ export async function analyzeConversation(
     raw.taskIds ?? raw.tasks,
     new Set(context.tasks.map((item) => item.id)),
   );
-  const memories = validateMemories(raw.memories, context);
-  const operations = validateTaskOperations(raw.taskOperations, context);
+  const memories = validateMemories(raw.memories, context, clean);
+  const operations = validateTaskOperations(raw.taskOperations, context, clean);
   const interactions = validateInteractions(raw.interactionEvents, context);
   const replySuggestions = validateReplies(
     raw.replySuggestions,
@@ -417,13 +537,7 @@ export async function analyzeConversation(
     context.selectedPersonId && allowedPeople.has(context.selectedPersonId)
       ? context.selectedPersonId
       : null;
-  const modelSpeaker =
-    typeof raw.speakerPersonId === "string" &&
-    allowedPeople.has(raw.speakerPersonId)
-      ? raw.speakerPersonId
-      : null;
-  const speakerPersonId =
-    selectedPersonId ?? modelSpeaker ?? fallback.speakerPersonId;
+  const speakerPersonId = selectedPersonId;
   const mentionedPersonIds = validIds(
     raw.mentionedPersonIds,
     allowedPeople,
@@ -444,6 +558,7 @@ export async function analyzeConversation(
   return {
     model,
     insight: {
+      socialPrompt: fallback.socialPrompt,
       summary:
         typeof raw.summary === "string"
           ? compact(raw.summary, 80)
@@ -461,12 +576,22 @@ export async function analyzeConversation(
       affinityDelta: 0,
       followUps: fallback.followUps,
       memories: memories.length ? memories : fallback.memories,
-      taskOperations: operations.length ? operations : fallback.taskOperations,
+      taskOperations:
+        context.sessionSummary &&
+        model.side === "cloud" &&
+        Array.isArray(raw.taskOperations)
+          ? operations
+          : operations.length
+            ? operations
+            : fallback.taskOperations,
       interactionEvents: speakerInteractions.length
         ? speakerInteractions
         : fallback.interactionEvents,
       replySuggestions,
-      enhanceReplySuggestions: raw.enhanceReplySuggestions === true,
+      enhanceReplySuggestions:
+        raw.enhanceReplySuggestions === true &&
+        (!fallback.socialPrompt?.usedMemoryIds.length ||
+          replySuggestions.some((reply) => reply.usedMemoryIds?.length)),
       enhancementReason:
         typeof raw.enhancementReason === "string"
           ? compact(raw.enhancementReason, 80)

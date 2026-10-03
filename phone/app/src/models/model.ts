@@ -10,6 +10,9 @@ export interface ModelRequest {
   private?: boolean;
   json?: boolean;
   timeoutMs?: number;
+  maxCompletionTokens?: number;
+  fast?: boolean;
+  temperature?: number;
 }
 
 export interface ModelResponse {

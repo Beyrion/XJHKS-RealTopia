@@ -1,3 +1,11 @@
+import type {
+  TaskLifecycle,
+  QuestStep,
+  TaskEvidence,
+  ProgressEvent,
+  BadgeAward,
+  DurableMemoryKind,
+} from "./lifecycle";
 export type Tab = "topia" | "quests" | "people" | "settings";
 export type Setting = "glasses" | "intelligence" | "memory" | "testing";
 export type PersonPanel = "quests" | "memories" | "profile";
@@ -42,6 +50,36 @@ export interface GlassSettings {
 }
 
 export interface Quest {
+  /** Suggestions are not claims that someone requested or promised this action. */
+  generationKind?: "extracted" | "suggested";
+  generationModel?: string;
+  generationMemoryIds?: string[];
+  lifecycle?: TaskLifecycle;
+  realTitle?: string;
+  displayTitle?: string;
+  chapter?: string;
+  characterClass?: "造梦者" | "匠造者" | "创造者" | "讲述者";
+  ownerPersonId?: string;
+  participantIds?: string[];
+  prerequisiteTaskIds?: string[];
+  requiredChildTaskIds?: string[];
+  stepRecords?: QuestStep[];
+  evidence?: TaskEvidence[];
+  progressEvents?: ProgressEvent[];
+  badgeAwards?: BadgeAward[];
+  badgeDefinitionId?: string;
+  revision?: number;
+  acceptanceCriteria?: string;
+  sourceEvidence?: {
+    sourceId: string;
+    segmentId?: string;
+    excerpt: string;
+    speakerPersonId: string | null;
+    mentionedPersonIds: string[];
+  };
+  dedupeKey?: string;
+  candidateExpiresAt?: string;
+  demo?: boolean;
   id: string;
   group: string;
   title: string;
@@ -90,6 +128,7 @@ export type PersonMemoryKind =
   | "relationship";
 
 export interface GameEvent {
+  status?: "valid" | "revoked";
   id: string;
   type: GameEventType;
   createdAt: string;
@@ -106,6 +145,8 @@ export interface GameEvent {
 }
 
 export interface Person {
+  characterClass?: Quest["characterClass"];
+  aliases?: string[];
   id: string;
   name: string;
   role: string;
@@ -129,6 +170,19 @@ export interface RecentStranger {
 }
 
 export interface Memory {
+  speakerVoiceId?: string | null;
+  speakerSourceRecordingId?: number;
+  memoryKind?: DurableMemoryKind;
+  subjectPersonIds?: string[];
+  speakerPersonId?: string | null;
+  mentionedPersonIds?: string[];
+  sourceType?: string;
+  sourceId?: string;
+  validUntil?: string;
+  revision?: number;
+  supersedesId?: string;
+  factKey?: string;
+  confirmed?: boolean;
   id: string;
   time: string;
   title: string;
@@ -145,7 +199,7 @@ export interface Memory {
   evidence?: string;
   confidence?: number;
   sourceRecordingId?: number;
-  status?: "active" | "superseded" | "dismissed";
+  status?: "active" | "superseded" | "dismissed" | "pending" | "deleted";
   dedupeKey?: string;
 }
 
@@ -186,6 +240,7 @@ export interface WorldEvent {
 export interface Souvenir {
   designState?: "pending" | "ready" | "fallback";
   viewedAt?: string;
+  status?: "valid" | "revoked";
   id: string;
   questId: string;
   personId?: string;
