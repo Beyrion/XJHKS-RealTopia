@@ -3,6 +3,7 @@
 
 #include <MNN/expr/ExprCreator.hpp>
 #include <MNN/expr/Module.hpp>
+#include <MNN/expr/ExecutorScope.hpp>
 #include <llm/llm.hpp>
 
 #include "turnsense_engine.h"
@@ -40,16 +41,23 @@ struct Engine {
 };
 
 struct VadEngine {
-    explicit VadEngine(MNN::Express::Module* value) : module(value) { reset(); }
-    ~VadEngine() { if (module != nullptr) MNN::Express::Module::destroy(module); }
+    VadEngine(MNN::Express::Module* value, std::shared_ptr<MNN::Express::Executor> owner)
+        : executor(std::move(owner)), module(value) { reset(); }
+    ~VadEngine() {
+        MNN::Express::ExecutorScope scope(executor);
+        if (module != nullptr) MNN::Express::Module::destroy(module);
+        h = nullptr; c = nullptr;
+    }
 
     void reset() {
+        MNN::Express::ExecutorScope scope(executor);
         std::vector<float> zeros(2 * 1 * 64, 0.0f);
         h = _Const(zeros.data(), {2, 1, 64}, NCHW, halide_type_of<float>());
         c = _Const(zeros.data(), {2, 1, 64}, NCHW, halide_type_of<float>());
         residual.clear();
     }
 
+    std::shared_ptr<MNN::Express::Executor> executor;
     MNN::Express::Module* module = nullptr;
     VARP h;
     VARP c;
@@ -230,6 +238,12 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_com_realtopia_phone_vad_VadNative_createVad(JNIEnv* env, jobject, jstring modelPath) {
     const std::string path = fromJString(env, modelPath);
     if (path.empty()) return 0;
+    MNN::BackendConfig backend;
+    backend.precision = MNN::BackendConfig::Precision_Normal;
+    // Continuous VAD must not share the default Express allocator/runtime with
+    // concurrent face/TurnSense inference. Enter this owner on every JNI call.
+    auto executor = MNN::Express::Executor::newExecutor(MNN_FORWARD_CPU, backend, 1);
+    MNN::Express::ExecutorScope scope(executor);
     std::vector<std::string> inputs = {"x", "h", "c"};
     std::vector<std::string> outputs = {"prob", "new_h", "new_c"};
     auto* module = MNN::Express::Module::load(inputs, outputs, path.c_str());
@@ -237,7 +251,7 @@ Java_com_realtopia_phone_vad_VadNative_createVad(JNIEnv* env, jobject, jstring m
         __android_log_print(ANDROID_LOG_ERROR, "RealTopiaVad", "could not load VAD model at %s", path.c_str());
         return 0;
     }
-    return reinterpret_cast<jlong>(new VadEngine(module));
+    return reinterpret_cast<jlong>(new VadEngine(module, executor));
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -246,6 +260,7 @@ Java_com_realtopia_phone_vad_VadNative_analyzeVad(
     constexpr size_t kWindowSamples = 512;
     auto* engine = reinterpret_cast<VadEngine*>(handle);
     if (engine == nullptr || engine->module == nullptr) return errorJson(env, "VAD engine is not loaded");
+    MNN::Express::ExecutorScope scope(engine->executor);
     std::vector<float> samples;
     std::string error;
     if (!readPcm16(fromJString(env, pcmPath), &samples, &error)) return errorJson(env, error);

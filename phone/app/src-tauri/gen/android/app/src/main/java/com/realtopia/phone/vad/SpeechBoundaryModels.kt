@@ -9,6 +9,7 @@ internal data class AcousticVadResult(
   val probabilities: List<Double>,
   val maxProbability: Double,
   val latencyMs: Double,
+  val recoveredInvalidState: Boolean = false,
 )
 
 internal data class SemanticTurnResult(
@@ -24,15 +25,24 @@ internal class SileroVadModel(
   private val activity: Context,
   private val native: VadNative,
 ) : AutoCloseable {
-  private var handle = 0L
+  @Volatile private var handle = 0L
+
+  val loaded: Boolean get() = handle != 0L
+  fun warmup() = ensureLoaded()
 
   fun analyze(pcm: File): AcousticVadResult {
     ensureLoaded()
     val result = JSONObject(native.analyzeVad(handle, pcm.absolutePath))
     checkNativeResult(result, "Silero VAD")
     val values = result.getJSONArray("probabilities")
+    val probabilities = finiteVadProbabilities(values)
+    // A non-finite recurrent state must not become an endpoint or stop AudioRecord.
+    if (probabilities == null) {
+      native.resetVad(handle)
+      return AcousticVadResult(emptyList(), 0.0, result.optDouble("latency_ms", 0.0), true)
+    }
     return AcousticVadResult(
-      probabilities = (0 until values.length()).map(values::getDouble),
+      probabilities = probabilities,
       maxProbability = result.optDouble("max_probability", 0.0),
       latencyMs = result.optDouble("latency_ms", 0.0),
     )
@@ -70,12 +80,20 @@ internal class SileroVadModel(
   }
 }
 
+internal fun finiteVadProbabilities(values: org.json.JSONArray): List<Double>? {
+  val probabilities = (0 until values.length()).map { values.optDouble(it, Double.NaN) }
+  return probabilities.takeIf { it.all { value -> value.isFinite() && value in 0.0..1.0 } }
+}
+
 /** Extracts, validates, and owns the FP16 TurnSense model bundled in the APK. */
 internal class TurnSenseModel(
   private val activity: Context,
   private val native: VadNative,
 ) : AutoCloseable {
-  private var handle = 0L
+  @Volatile private var handle = 0L
+
+  val loaded: Boolean get() = handle != 0L
+  fun warmup() = ensureLoaded()
 
   val artifact: File
     get() = File(activity.noBackupFilesDir, "turnsense/$FILE_NAME")

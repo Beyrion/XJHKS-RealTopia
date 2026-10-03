@@ -6,6 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VadEndpointStateTest {
+  @Test fun longIdleDoesNotForceFirstSpokenWordToEndImmediately() {
+    val state = VadEndpointState()
+    state.accept(List(2000) { 0.01 })
+    assertFalse(state.accept(List(10) { 0.9 }).endpoint)
+    assertTrue(state.accept(List(16) { 0.01 }).endpoint)
+  }
   @Test
   fun silenceDoesNotCreateAnEndpoint() {
     val state = VadEndpointState()

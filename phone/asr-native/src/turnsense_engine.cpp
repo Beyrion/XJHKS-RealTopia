@@ -2,6 +2,7 @@
 
 #include <MNN/MNNForwardType.h>
 #include <MNN/expr/Executor.hpp>
+#include <MNN/expr/ExecutorScope.hpp>
 #include <MNN/expr/ExprCreator.hpp>
 #include <MNN/expr/Module.hpp>
 
@@ -20,6 +21,7 @@ public:
     explicit Impl(const std::string& cmvnPath) : frontend(cmvnPath) {}
 
     TurnSenseFrontend frontend;
+    std::shared_ptr<Executor> executor;
     std::shared_ptr<Executor::RuntimeManager> runtime;
     std::unique_ptr<Module, decltype(&Module::destroy)> module{nullptr, Module::destroy};
 };
@@ -34,6 +36,8 @@ TurnSenseEngine::TurnSenseEngine(const std::string& modelPath, const std::string
     // The vivo MT6993 produced NaNs with Precision_Low. FP16 weights remain
     // compressed in the model while FP32 accumulation keeps output stable.
     backend.precision = MNN::BackendConfig::Precision_Normal;
+    impl_->executor = Executor::newExecutor(MNN_FORWARD_CPU, backend, 4);
+    MNN::Express::ExecutorScope scope(impl_->executor);
     schedule.backendConfig = &backend;
     impl_->runtime.reset(
         Executor::RuntimeManager::createRuntimeManager(schedule),
@@ -45,7 +49,12 @@ TurnSenseEngine::TurnSenseEngine(const std::string& modelPath, const std::string
         {"feats", "feat_lengths"}, {"logits"}, modelPath.c_str(), impl_->runtime, &config));
 }
 
-TurnSenseEngine::~TurnSenseEngine() = default;
+TurnSenseEngine::~TurnSenseEngine() {
+    if (impl_->executor) {
+        MNN::Express::ExecutorScope scope(impl_->executor);
+        impl_->module.reset(); impl_->runtime.reset();
+    }
+}
 
 bool TurnSenseEngine::valid() const {
     return impl_ && impl_->frontend.valid() && impl_->module != nullptr;
@@ -57,6 +66,7 @@ TurnSenseResult TurnSenseEngine::classify(const std::vector<float>& normalizedPc
         result.error = "TurnSense engine is not loaded";
         return result;
     }
+    MNN::Express::ExecutorScope scope(impl_->executor);
     const auto frontendStarted = std::chrono::steady_clock::now();
     TurnSenseFeatures features = impl_->frontend.extract(normalizedPcm);
     result.frontendMs = std::chrono::duration<double, std::milli>(

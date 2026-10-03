@@ -13,7 +13,7 @@ internal class VadEndpointState {
 
   fun accept(probabilities: List<Double>): Decision {
     for (probability in probabilities) {
-      elapsedFrames += 1
+      if (speechDetected) elapsedFrames += 1
       if (!speechDetected) {
         speechFrames = if (probability >= START_THRESHOLD) speechFrames + 1 else 0
         if (speechFrames >= MIN_SPEECH_FRAMES) speechDetected = true
