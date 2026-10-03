@@ -1,0 +1,17 @@
+RealTopia consecutive speaker identification.
+
+Android library: Alibaba MNN 3.6, bundled sherpa-mnn 1.10.46,
+https://github.com/alibaba/MNN, Apache-2.0. Kotlin speaker JNI wrappers
+adapted from k2-fsa/sherpa-onnx v1.13.8 (Apache-2.0) to sherpa-mnn.
+All model inference uses MNN; ONNX Runtime is not linked or packaged.
+CAM++ Chinese speaker embeddings: Alibaba 3D-Speaker / iic,
+speech_campplus_sv_zh-cn_16k-common, Apache-2.0.
+Pyannote segmentation-3.0 FP32 source: k2-fsa/sherpa-onnx,
+original Copyright (c) 2022 CNRS, MIT.
+Both models exported with MNNConvert 3.6, retaining original metadata.
+Model interchange files are build inputs in the host cache only.
+Corresponding license texts accompany these assets.
+
+This is turn segmentation and temporary voice clustering, not a source
+separator. It does not produce isolated overlapping-speaker audio tracks.
+No performance or identity accuracy is guaranteed for a user's room/noise.

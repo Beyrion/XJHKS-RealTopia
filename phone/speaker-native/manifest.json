@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 2,
+  "scope": "consecutive-speaker-diarization-not-source-separation",
+  "runtime": {
+    "name": "sherpa-mnn",
+    "version": "1.10.46",
+    "mnnVersion": "3.6",
+    "mnnRevision": "bc85588f29e42b521dcff8a7a573c6423d7e09ad",
+    "library": "libsherpa-mnn-jni.so",
+    "source": "phone/MNN/apps/frameworks/sherpa-mnn",
+    "inference": "MNN CPU only; no ONNX Runtime"
+  },
+  "conversion": {
+    "precision": "FP32",
+    "bizCode": "speaker",
+    "sourceFiles": "host .cache only, never Android assets",
+    "converter": "phone/.build/mnn-converter-host/MNNConvert"
+  },
+  "models": [
+    {
+      "role": "embedding",
+      "name": "CAM++ Chinese (200k-speaker pretrained model)",
+      "file": "campplus-zh.mnn",
+      "sha256": "dbf15cf7ce1ed8c1888649928ad48f01d17888e9d303696aab16f0afe2ae001f",
+      "sourceFile": "campplus-zh.onnx",
+      "exportConfig": "phone/speaker-native/export-campplus.json",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "sourceSha256": "f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11",
+      "upstream": "https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common",
+      "license": "Apache-2.0"
+    },
+    {
+      "role": "segmentation",
+      "file": "segmentation.mnn",
+      "sha256": "3baa4c39e2626e3d4b86d92e7b958702dd9d91360b9ddfb6045d063b87585fba",
+      "sourceFile": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
+      "exportConfig": "phone/speaker-native/export-segmentation.json",
+      "sourceArchive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+      "archiveSha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+      "sourceSha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+      "license": "MIT"
+    }
+  ],
+  "policy": {
+    "audio": "16kHz mono PCM16",
+    "voiceprints": "session RAM only; never persisted or uploaded",
+    "binding": "explicit user confirmation; cleared on sensing restart",
+    "unconfirmed": "transcript only; no person memory or task extraction",
+    "overlap": "not separated; attribution suppressed",
+    "thresholds": "match cosine >= 0.45 with top-1 margin >= 0.10; new voice if best cosine < 0.40; not calibrated probabilities",
+    "inferenceThreadsPerModel": 4
+  }
+}
