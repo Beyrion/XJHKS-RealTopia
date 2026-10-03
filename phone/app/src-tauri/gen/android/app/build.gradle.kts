@@ -75,6 +75,11 @@ android {
     }
     androidResources {
         noCompress += "mnn"
+        // Defense in depth: interchange files belong only in host build caches.
+        ignoreAssetsPattern = listOfNotNull(ignoreAssetsPattern, "*.onnx", "*.ort").joinToString(":")
+    }
+    packaging {
+        jniLibs.excludes += setOf("**/*onnx*.so", "**/*onnxruntime*.so")
     }
 }
 

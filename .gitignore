@@ -40,6 +40,9 @@ model/face/*
 !model/face/README.md
 !model/face/manifest.json
 
+# Speaker weights are reproducibly downloaded; do not commit binary models.
+model/speaker/*.mnn
+
 # Local Gradle cache used only when the shared reference cache is unavailable.
 /phone/.gradle-home/
 

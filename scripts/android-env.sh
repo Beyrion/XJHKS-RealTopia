@@ -49,11 +49,14 @@ realtopia_require_env() {
 realtopia_detect_device() {
   local kind="$1"
   local override=""
+  local serial_variable=""
   local -a matches=()
   if [[ "$kind" == "phone" ]]; then
     override="${PHONE_SERIAL:-}"
+    serial_variable=PHONE_SERIAL
   elif [[ "$kind" == "glasses" ]]; then
     override="${GLASS_SERIAL:-}"
+    serial_variable=GLASS_SERIAL
   else
     echo "Unknown Android device kind: $kind" >&2
     return 1
@@ -64,7 +67,8 @@ realtopia_detect_device() {
   fi
   while read -r serial state details; do
     [[ -n "$serial" && "$state" == "device" ]] || continue
-    local identity="${details,,}"
+    local identity
+    identity="$(printf '%s' "$details" | tr '[:upper:]' '[:lower:]')"
     if [[ "$kind" == "glasses" ]]; then
       if [[ "$identity" == *glass* ]]; then
         matches+=("$serial")
@@ -74,7 +78,7 @@ realtopia_detect_device() {
     fi
   done < <($REALTOPIA_ADB_BIN devices -l | tail -n +2)
   if [[ ${#matches[@]} -ne 1 ]]; then
-    echo "Expected exactly one connected $kind device, found ${#matches[@]}. Set ${kind^^}_SERIAL to disambiguate." >&2
+    echo "Expected exactly one connected $kind device, found ${#matches[@]}. Set $serial_variable to disambiguate." >&2
     return 1
   fi
   printf '%s\n' "${matches[0]}"
@@ -87,7 +91,7 @@ realtopia_install_apk() {
   [[ -f "$apk" ]] || { echo "APK is missing: $apk" >&2; return 1; }
   "$REALTOPIA_ADB_BIN" -s "$serial" push "$apk" "$remote" >/dev/null
   local host_size device_size
-  host_size="$(stat -c %s "$apk")"
+  host_size="$(wc -c < "$apk" | tr -d '[:space:]')"
   device_size="$($REALTOPIA_ADB_BIN -s "$serial" shell stat -c %s "$remote" | tr -d '\r')"
   if [[ "$host_size" != "$device_size" ]]; then
     echo "APK transfer size mismatch: host=$host_size device=$device_size" >&2
