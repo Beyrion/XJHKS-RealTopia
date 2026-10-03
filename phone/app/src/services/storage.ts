@@ -3,7 +3,6 @@ import {
   personIdByName,
   starterMemories,
   starterPeople,
-  starterQuests,
 } from "../data/appData";
 import {
   moodKinds,
@@ -19,6 +18,7 @@ import {
   type WorldEvent,
 } from "../models";
 import { inferQuestCategory } from "../utils/gameRules";
+import { normalizeQuest } from "../utils/questEvidence";
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -44,26 +44,28 @@ export const storage = {
     }
   },
   loadQuests(): Quest[] {
-    const value = loadJson<Quest[]>("realtopia.quests", []);
-    return (value.length ? value : structuredClone(starterQuests)).map(
-      (item) => ({
-        ...item,
-        personId:
-          item.personId ??
-          (item.person ? personIdByName[item.person] : undefined),
-        assignerPersonId: item.assignerPersonId ?? item.personId,
-        category: item.category ?? inferQuestCategory(item),
-        status:
-          item.status ??
-          (item.progress >= 100
-            ? "done"
-            : item.progress > 0
-              ? "active"
-              : "inbox"),
-        source: item.source ?? "seed",
-        createdAt: item.createdAt ?? new Date(0).toISOString(),
-      }),
-    );
+    const saved = loadJson<Quest[]>("realtopia.quests", []);
+    const value = saved;
+    const normalized = value.map((item) => ({
+      ...item,
+      personId:
+        item.personId ??
+        (item.person ? personIdByName[item.person] : undefined),
+      assignerPersonId: item.assignerPersonId ?? item.personId,
+      category: item.category ?? inferQuestCategory(item),
+      status:
+        item.status ??
+        (item.progress >= 100
+          ? "done"
+          : item.progress > 0
+            ? "active"
+            : "inbox"),
+      source: item.source ?? "seed",
+      createdAt: item.createdAt ?? new Date(0).toISOString(),
+    }));
+    if (JSON.stringify(saved) !== JSON.stringify(normalized))
+      localStorage.setItem("realtopia.quests", JSON.stringify(normalized));
+    return normalized.map(normalizeQuest);
   },
   saveQuests(value: Quest[]) {
     localStorage.setItem("realtopia.quests", JSON.stringify(value));
@@ -79,10 +81,7 @@ export const storage = {
     return loadJson("realtopia.memories", starterMemories);
   },
   saveMemories(value: Memory[]) {
-    localStorage.setItem(
-      "realtopia.memories",
-      JSON.stringify(value.slice(0, 200)),
-    );
+    localStorage.setItem("realtopia.memories", JSON.stringify(value));
   },
   loadConversationHistory(): ConversationTurn[] {
     return loadJson<ConversationTurn[]>("realtopia.conversationHistory.v1", [])
@@ -150,13 +149,10 @@ export const storage = {
     localStorage.setItem("realtopia.mood", JSON.stringify(value));
   },
   loadGameEvents(): GameEvent[] {
-    return loadJson<GameEvent[]>("realtopia.gameEvents.v1", []).slice(0, 500);
+    return loadJson<GameEvent[]>("realtopia.gameEvents.v1", []);
   },
   saveGameEvents(value: GameEvent[]) {
-    localStorage.setItem(
-      "realtopia.gameEvents.v1",
-      JSON.stringify(value.slice(0, 500)),
-    );
+    localStorage.setItem("realtopia.gameEvents.v1", JSON.stringify(value));
   },
   loadSouvenirs(): Souvenir[] {
     return loadJson<Souvenir[]>("realtopia.souvenirs.v1", []).slice(0, 100);
@@ -168,17 +164,27 @@ export const storage = {
     );
   },
   loadActiveQuestId() {
-    return localStorage.getItem("realtopia.activeQuestId");
+    const current = localStorage.getItem("realtopia.activeQuestId");
+    const valid = loadJson<Quest[]>("realtopia.quests", []).find(
+      (q) =>
+        q.id === current &&
+        !q.demo &&
+        q.lifecycle !== "candidate" &&
+        q.lifecycle !== "cancelled",
+    );
+    if (!valid) localStorage.removeItem("realtopia.activeQuestId");
+    return valid?.id ?? null;
   },
   saveActiveQuestId(value: string | null) {
     if (value) localStorage.setItem("realtopia.activeQuestId", value);
     else localStorage.removeItem("realtopia.activeQuestId");
   },
   loadPerception() {
-    return localStorage.getItem("realtopia.perception") !== "off";
+    // Ignore the old default-on continuous perception setting during migration.
+    return localStorage.getItem("realtopia.activeCapture") === "on";
   },
   savePerception(value: boolean) {
-    localStorage.setItem("realtopia.perception", value ? "on" : "off");
+    localStorage.setItem("realtopia.activeCapture", value ? "on" : "off");
   },
   loadSceneObservationEnabled() {
     return localStorage.getItem("realtopia.sceneObservation") !== "off";
