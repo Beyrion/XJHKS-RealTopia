@@ -9,19 +9,23 @@ final class RokidCommandBridge {
     static final String CAPTURE_COMMAND="Realia_Capture";
     static final String CONTROL_COMMAND="Realia_Control";
     static final String PERSON_COMMAND="Realia_Person";
+    static final String HUD_COMMAND="Realia_Hud";
     interface Listener{void onCapture(long requestId,int width,int jpegQuality,boolean forceCold);}
     interface ControlListener{void onPerception(boolean enabled,int framesPerSecond,int width,int jpegQuality);}
     interface PersonListener{void onPerson(String personId,String name,String title,int affinity,String quest,String story,String kind,String contextId,String[] choiceIds,String[] choiceLabels);}
+    interface HudSnapshotListener{void onHudSnapshot(String action,String configJson);}
     private final CXRServiceBridge bridge=new CXRServiceBridge();
     private final Listener listener;
     private final ControlListener controlListener;
     private final PersonListener personListener;
-    RokidCommandBridge(Listener listener,ControlListener controlListener,PersonListener personListener){this.listener=listener;this.controlListener=controlListener;this.personListener=personListener;}
+    private final HudSnapshotListener hudSnapshotListener;
+    private final Runnable disconnected;
+    RokidCommandBridge(Listener listener,ControlListener controlListener,PersonListener personListener,HudSnapshotListener hudSnapshotListener,Runnable disconnected){this.listener=listener;this.controlListener=controlListener;this.personListener=personListener;this.hudSnapshotListener=hudSnapshotListener;this.disconnected=disconnected;}
     void start(){
         bridge.setStatusListener(new CXRServiceBridge.StatusListener(){
             @Override public void onConnected(String name,String address,int type){Log.i("RealiaCxr","CONNECTED name="+name+" type="+type);}
             @Override public void onConnecting(String name,String address,int type){Log.i("RealiaCxr","CONNECTING name="+name);}
-            @Override public void onDisconnected(){Log.i("RealiaCxr","DISCONNECTED");}
+            @Override public void onDisconnected(){Log.i("RealiaCxr","DISCONNECTED");disconnected.run();}
             @Override public void onARTCStatus(float health,boolean reset){Log.d("RealiaCxr","health="+health);}
             @Override public void onRokidAccountChanged(String account){Log.d("RealiaCxr","account changed");}
         });
@@ -52,5 +56,13 @@ final class RokidCommandBridge {
                     caps.at(3).getInt(),caps.at(4).getString(),caps.at(5).getString(),kind,contextId,ids,labels);
         });
         Log.i("RealiaCxr","SUBSCRIBED result="+personResult+" command="+PERSON_COMMAND);
+        int hudSnapshotResult=bridge.subscribe(HUD_COMMAND,(command,caps,data)->{
+            if(caps==null||caps.size()<1){Log.e("RealiaCxr","invalid hudSnapshot command");return;}
+            String action=caps.at(0).getString();
+            if(!"sync".equals(action)){Log.e("RealiaCxr","invalid HUD action="+action);return;}
+            String configJson=caps.size()>1?caps.at(1).getString():"";
+            hudSnapshotListener.onHudSnapshot(action,configJson==null?"":configJson);
+        });
+        Log.i("RealiaCxr","SUBSCRIBED result="+hudSnapshotResult+" command="+HUD_COMMAND);
     }
 }
