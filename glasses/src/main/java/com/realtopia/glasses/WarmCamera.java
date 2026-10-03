@@ -75,6 +75,8 @@ final class WarmCamera implements AutoCloseable {
     private SurfaceTexture previewTexture;
     private long cameraOpenedAtMs, previewReadyAtMs, generation;
     private long activeRequestId = -1;
+    private Pending activePending;
+    private int configuredWidth, configuredQuality;
     private int pictureWidth=4032, pictureHeight=3024, previewWidth=1280,
             previewHeight=720, previewFormat=ImageFormat.NV21, rotationDegrees;
     private boolean opening, captureInFlight, closed;
@@ -84,9 +86,8 @@ final class WarmCamera implements AutoCloseable {
     private StreamCallback streamCallback;
 
     WarmCamera(Context context) { this.context=context; thread.start(); handler=new Handler(thread.getLooper()); }
-    void prepare() { handler.post(() -> ensureCamera(null)); }
     void suspend(Runnable completion){handler.post(()->{
-        streamEnabled=false;streamCallback=null;nextStreamFrameAtMs=0;captureInFlight=false;activeRequestId=-1;
+        streamEnabled=false;streamCallback=null;nextStreamFrameAtMs=0;captureInFlight=false;activeRequestId=-1;activePending=null;
         releaseCamera();
         if(completion!=null)new Handler(Looper.getMainLooper()).post(completion);
     });}
@@ -101,8 +102,9 @@ final class WarmCamera implements AutoCloseable {
         });
     }
     void stopStream(){handler.post(()->{
+        boolean wasStreaming=streamEnabled;
         streamEnabled=false;streamCallback=null;nextStreamFrameAtMs=0;
-        if(camera!=null)camera.setPreviewCallbackWithBuffer(null);
+        if(camera!=null&&wasStreaming)camera.setPreviewCallbackWithBuffer(null);
         Log.i(TAG,"STREAM_STOP");
     });}
     void capture(long requestId, int requestedWidth, int jpegQuality, boolean forceCold, Callback callback) {
@@ -110,10 +112,15 @@ final class WarmCamera implements AutoCloseable {
         handler.post(() -> {
             if (closed) { callback.onError(requestId,"camera closed"); return; }
             if (captureInFlight) { callback.onError(requestId,"capture busy"); return; }
-            if (forceCold && camera != null) releaseCamera();
+            int width=Math.max(1280,Math.min(4032,requestedWidth));
+            int quality=Math.max(50,Math.min(100,jpegQuality));
+            // Parameter changes need a fresh configured preview + cold warmup.
+            // Never reconfigure the legacy HAL immediately before takePicture.
+            if (camera != null && (forceCold || configuredWidth!=width || configuredQuality!=quality)) releaseCamera();
             captureInFlight=true;
             activeRequestId=requestId;
-            Pending pending=new Pending(requestId,requestedAt,Math.max(1280,Math.min(4032,requestedWidth)),Math.max(50,Math.min(100,jpegQuality)),callback,camera==null);
+            Pending pending=new Pending(requestId,requestedAt,width,quality,callback,camera==null);
+            activePending=pending;
             // ensureCamera schedules the first capture after opening. Scheduling
             // again here races two takePicture calls on Rokid's legacy HAL.
             if (camera == null) ensureCamera(pending);
@@ -130,10 +137,15 @@ final class WarmCamera implements AutoCloseable {
         try {
             Camera.CameraInfo info=new Camera.CameraInfo(); Camera.getCameraInfo(0,info); rotationDegrees=info.orientation;
             Camera opened=Camera.open(0); camera=opened;
+            opened.setErrorCallback((error,source)->handler.post(()->{
+                if(!closed&&source==camera)fail(activePending,"camera HAL error: "+error);
+            }));
             Camera.Parameters p=opened.getParameters();
             Camera.Size picture=choosePicture(p.getSupportedPictureSizes(),pending==null?4032:pending.width);
             pictureWidth=picture.width; pictureHeight=picture.height; p.setPictureSize(picture.width,picture.height);
             p.setPictureFormat(ImageFormat.JPEG); p.setJpegQuality(pending==null?90:pending.quality);
+            configuredWidth=pending==null?4032:pending.width;
+            configuredQuality=pending==null?90:pending.quality;
             if(p.getSupportedJpegThumbnailSizes()!=null)p.setJpegThumbnailSize(0,0);
             Camera.Size preview=choosePreview(p.getSupportedPreviewSizes(),1280);
             previewWidth=preview.width;previewHeight=preview.height;p.setPreviewSize(preview.width,preview.height);
@@ -195,7 +207,7 @@ final class WarmCamera implements AutoCloseable {
         try{source.addCallbackBuffer(data);}catch(RuntimeException ignored){}
     }
     private void scheduleCapture(Pending pending) {
-        if (!captureInFlight || closed) return;
+        if (!captureInFlight || closed || activePending!=pending) return;
         if (camera==null) { if(!opening)ensureCamera(pending); handler.postDelayed(()->scheduleCapture(pending),30); return; }
         long warmup=(pending.cold?COLD_WARMUP_MS:HOT_WARMUP_MS)-(SystemClock.elapsedRealtime()-previewReadyAtMs);
         if(warmup>0){handler.postDelayed(()->scheduleCapture(pending),warmup);return;}
@@ -208,24 +220,42 @@ final class WarmCamera implements AutoCloseable {
         try {
             active.takePicture(null,null,(jpeg,source)->handler.post(()->{
                 if(closed||currentGeneration!=generation||!captureInFlight
-                        || activeRequestId!=pending.id)return;
+                        || activePending!=pending)return;
                 if(jpeg==null||jpeg.length==0){fail(pending,"empty JPEG");return;}
                 try{source.startPreview();previewReadyAtMs=SystemClock.elapsedRealtime()-COLD_WARMUP_MS+HOT_WARMUP_MS;if(streamEnabled)configureStreamCallback();}catch(RuntimeException e){releaseCamera();}
-                long ready=SystemClock.elapsedRealtime();captureInFlight=false;activeRequestId=-1;
+                long ready=SystemClock.elapsedRealtime();captureInFlight=false;activeRequestId=-1;activePending=null;
                 Log.i(TAG,"JPEG_READY requestId="+pending.id+" cold="+pending.cold+" captureMs="+(ready-started)+" bytes="+jpeg.length);
                 pending.callback.onPhoto(new Photo(pending.id,pending.requestedAt,
                         cameraOpenedAtMs,previewForCapture,started,ready,pictureWidth,
                         pictureHeight,rotationDegrees,pending.cold,jpeg));
             }));
             handler.postDelayed(()->{if(captureInFlight&&generation==currentGeneration
-                    &&activeRequestId==pending.id)fail(pending,"capture timeout");},CAPTURE_TIMEOUT_MS);
+                    &&activePending==pending)fail(pending,"capture timeout");},CAPTURE_TIMEOUT_MS);
         } catch(RuntimeException e){fail(pending,"capture failed: "+e.getMessage());}
     }
 
-    private void fail(Pending pending,String message){captureInFlight=false;activeRequestId=-1;if(pending!=null)pending.callback.onError(pending.id,message);Log.e(TAG,message);}
+    private void fail(Pending pending,String message){
+        if(pending!=null&&activePending!=pending)return;
+        captureInFlight=false;activeRequestId=-1;activePending=null;
+        // A timeout leaves Camera1 preview stopped even though camera!=null.
+        // Release the poisoned session so the next 10s tick cold-opens again.
+        releaseCamera();
+        Log.e(TAG,message+" · camera released for next capture");
+        if(pending!=null)pending.callback.onError(pending.id,message);
+    }
     private static Camera.Size choosePicture(List<Camera.Size> sizes,int requested){return sizes.stream().filter(s->s.width<=requested).max(Comparator.comparingInt(s->s.width*s.height)).orElseGet(()->sizes.get(0));}
     private static Camera.Size choosePreview(List<Camera.Size> sizes,int requested){return sizes.stream().min(Comparator.comparingInt(s->Math.abs(s.width-requested))).orElseGet(()->sizes.get(0));}
-    private void releaseCamera(){generation++;streamEncoding.set(false);if(camera!=null){camera.setPreviewCallbackWithBuffer(null);try{camera.stopPreview();}catch(RuntimeException ignored){}camera.release();camera=null;}if(previewTexture!=null){previewTexture.release();previewTexture=null;}}
-    @Override public void close(){handler.post(()->{closed=true;streamEnabled=false;streamCallback=null;captureInFlight=false;activeRequestId=-1;releaseCamera();streamEncoder.shutdownNow();thread.quitSafely();});}
+    private void releaseCamera(){
+        generation++;streamEncoding.set(false);
+        Camera old=camera;camera=null;
+        if(old!=null){
+            try{old.setErrorCallback(null);}catch(RuntimeException ignored){}
+            try{old.setPreviewCallbackWithBuffer(null);}catch(RuntimeException ignored){}
+            try{old.stopPreview();}catch(RuntimeException ignored){}
+            try{old.release();}catch(RuntimeException ignored){}
+        }
+        if(previewTexture!=null){previewTexture.release();previewTexture=null;}
+    }
+    @Override public void close(){handler.post(()->{closed=true;streamEnabled=false;streamCallback=null;captureInFlight=false;activeRequestId=-1;activePending=null;releaseCamera();streamEncoder.shutdownNow();thread.quitSafely();});}
     private static final class Pending{final long id,requestedAt;final int width,quality;final Callback callback;final boolean cold;Pending(long id,long requestedAt,int width,int quality,Callback callback,boolean cold){this.id=id;this.requestedAt=requestedAt;this.width=width;this.quality=quality;this.callback=callback;this.cold=cold;}}
 }
