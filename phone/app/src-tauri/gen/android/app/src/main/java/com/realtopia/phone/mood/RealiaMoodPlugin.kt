@@ -98,15 +98,24 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.reject("手机无法初始化麦克风录音")
         return@runOnUiThread
       }
-      val audioRecord = AudioRecord(
+      if (!MicrophoneLease.acquire(this)) {
+        invoke.reject("主动感知正在使用麦克风，请先关闭感知再录入心情语音")
+        return@runOnUiThread
+      }
+      val audioRecord = try { AudioRecord(
         MediaRecorder.AudioSource.VOICE_RECOGNITION,
         SAMPLE_RATE,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
         max(minimum * 2, SAMPLE_RATE * 2),
-      )
+      ) } catch (error: Exception) {
+        MicrophoneLease.release(this)
+        invoke.reject("手机麦克风初始化失败：${error.message}")
+        return@runOnUiThread
+      }
       if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
         audioRecord.release()
+        MicrophoneLease.release(this)
         invoke.reject("手机麦克风录音器初始化失败")
         return@runOnUiThread
       }
@@ -252,6 +261,7 @@ class RealiaMoodPlugin(private val activity: Activity) : Plugin(activity) {
     recording = false
     try { recorder?.release() } catch (_: Exception) { }
     recorder = null
+    MicrophoneLease.release(this)
     outputFile = null
     endpoint.reset()
     acousticModel.reset()
