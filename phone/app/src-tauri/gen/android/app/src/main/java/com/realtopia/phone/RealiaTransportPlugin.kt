@@ -30,6 +30,9 @@ class PairTransportArgs {
 }
 
 @InvokeArg
+class HudSnapshotArgs { var configJson: String = "" }
+
+@InvokeArg
 class CaptureTransportArgs {
   var requestId: Long = 0
   var mode: String = "hot"
@@ -158,10 +161,22 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
         phase = "bt_connecting"
         transportName = "CXR Bluetooth"
         detail = "starting transport"
-        transport = RokidPhotoTransport(activity, this).also { it.start(args.glassAddress) }
+        transport = RokidPhotoTransport(activity, this).also {
+          val debugUuid = if (BuildConfig.DEBUG) activity.intent?.getStringExtra("cxrSocketUuid") else null
+          if (debugUuid != null) it.startWithEndpoint(args.glassAddress, debugUuid)
+          else it.start(args.glassAddress)
+        }
       }
     }
     invoke.resolve(snapshot())
+  }
+
+  @Command
+  fun syncHud(invoke: Invoke) {
+    val args = invoke.parseArgs(HudSnapshotArgs::class.java)
+    if (args.configJson.length > 16_384) return invoke.reject("HUD snapshot is too large")
+    val accepted = synchronized(lock) { transport }?.syncHud(args.configJson) == true
+    invoke.resolve(JSObject().apply { put("accepted", accepted) })
   }
 
   @Command
@@ -193,20 +208,21 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
     val width = args.width.coerceIn(1280, 4032)
     val quality = args.quality.coerceIn(50, 100)
     val active = synchronized(lock) {
-      desiredPerceptionEnabled = args.enabled
-      desiredPerceptionFramesPerSecond = framesPerSecond
-      desiredPerceptionWidth = width
-      desiredPerceptionQuality = quality
-      transport
+      transport?.also {
+        desiredPerceptionEnabled = args.enabled
+        desiredPerceptionFramesPerSecond = framesPerSecond
+        desiredPerceptionWidth = width
+        desiredPerceptionQuality = quality
+      }
     }
     val accepted = active?.setPerception(args.enabled, framesPerSecond, width, quality) == true
     if (!accepted) active?.ensureConnected()
     if (accepted) {
-      synchronized(lock) { detail = if (args.enabled) "continuous perception enabled" else "continuous perception paused" }
+      synchronized(lock) { detail = if (args.enabled) "active capture enabled: 10s interval" else "active capture paused" }
       invoke.resolve(JSObject().apply { put("accepted", true) })
     } else if (active != null) {
       synchronized(lock) {
-        detail = if (args.enabled) "continuous perception queued for reconnect" else "perception pause queued for reconnect"
+        detail = if (args.enabled) "active capture queued for reconnect" else "active capture pause queued for reconnect"
       }
       // The desired setting is durable and onPhase("ready") reapplies it. A
       // transient link loss must not make the UI revert the user's toggle.
@@ -271,6 +287,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
 
   override fun onPhase(nextPhase: String, nextTransport: String, nextDetail: String?) {
     var activeToResume: RokidPhotoTransport? = null
+    var resumeEnabled = false
     var resumeFramesPerSecond = 2
     var resumeWidth = 1280
     var resumeQuality = 75
@@ -279,8 +296,9 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
       transportName = nextTransport
       detail = nextDetail ?: ""
       if (nextPhase != "error") lastError = null
-      if (nextPhase == "ready" && desiredPerceptionEnabled) {
+      if (nextPhase == "ready") {
         activeToResume = transport
+        resumeEnabled = desiredPerceptionEnabled
         resumeFramesPerSecond = desiredPerceptionFramesPerSecond
         resumeWidth = desiredPerceptionWidth
         resumeQuality = desiredPerceptionQuality
@@ -289,7 +307,7 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
     Log.i("RealiaTransportPlugin", "STATE phase=$nextPhase transport=$nextTransport detail=$nextDetail")
     if (activeToResume != null) {
       val accepted = activeToResume?.setPerception(
-        true, resumeFramesPerSecond, resumeWidth, resumeQuality,
+        resumeEnabled, resumeFramesPerSecond, resumeWidth, resumeQuality,
       )
       Log.i("RealiaTransportPlugin", "PERCEPTION_RESUME accepted=$accepted")
     }
@@ -300,17 +318,18 @@ class RealiaTransportPlugin(private val activity: Activity) : Plugin(activity),
     val startedAt = requestedAt.remove(frame.requestId())
     val metadata = frame.metadata()
     val stream = metadata.optBoolean("stream", false)
+    val automatic = metadata.optBoolean("automatic", false)
     val outputDir = File(activity.getExternalFilesDir(null), "captures").apply { mkdirs() }
     val output = File(outputDir, if (stream) "realia-stream-${frame.requestId()}.jpg" else "realia-${frame.requestId()}.jpg")
     try {
       output.writeBytes(frame.jpeg())
-      if (stream) synchronized(streamFiles) {
+      if (stream || automatic) synchronized(streamFiles) {
         streamFiles.addLast(output)
         while (streamFiles.size > MAX_STREAM_FILES) streamFiles.removeFirst().delete()
       }
       val sample = JSObject()
       sample.put("request_id", frame.requestId())
-      sample.put("mode", if (stream) "stream" else if (metadata.optBoolean("cold")) "cold" else "hot")
+      sample.put("mode", if (automatic) "interval" else if (stream) "stream" else if (metadata.optBoolean("cold")) "cold" else "hot")
       sample.put("stream", stream)
       sample.put("bytes", frame.jpeg().size)
       sample.put("width", metadata.optInt("width"))

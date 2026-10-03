@@ -19,7 +19,7 @@ final class PhotoSocketServer implements AutoCloseable {
     private volatile boolean running;
     private ServerSocket server;
     private Socket client;
-    private DataOutputStream output;
+    private volatile DataOutputStream output;
     private final ArrayDeque<PendingChoice> pendingChoices=new ArrayDeque<>();
     private final ArrayDeque<PendingAudio> pendingAudio=new ArrayDeque<>();
     private int pendingAudioBytes;
@@ -62,6 +62,8 @@ final class PhotoSocketServer implements AutoCloseable {
             if (running) Log.e(TAG, "server failed", e);
         }
     }
+
+    boolean isConnected() { return output != null; }
 
     synchronized boolean send(long requestId, JSONObject metadata, byte[] jpeg) {
         if (output == null) return false;
