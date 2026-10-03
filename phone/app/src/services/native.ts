@@ -10,11 +10,14 @@ import type {
   NativeCloudResult,
   PairedGlass,
   SessionState,
+  SensingAudioState,
+  SensingModelPreparation,
   RecentStranger,
   SceneObservationResult,
   RealWorldContext,
   Recording,
   VadChunkResult,
+  SpeakerDiarizationResult,
 } from "../models";
 
 export const nativeService = {
@@ -23,6 +26,8 @@ export const nativeService = {
   removePerson: (personId: string) =>
     invoke<number>("remove_person", { personId }),
   sessionState: () => invoke<SessionState>("session_state"),
+  capturePreview: (requestId: number) =>
+    invoke<string>("capture_preview", { requestId }),
   pairedGlasses: () => invoke<PairedGlass[]>("paired_glasses"),
   pairGlasses: (glassAddress: string) =>
     invoke<void>("pair_glasses", { glassAddress }),
@@ -33,13 +38,15 @@ export const nativeService = {
     invoke<void>("set_person_alert", { enabled }),
   setPerception: (
     enabled: boolean,
-    framesPerSecond: number,
+    _framesPerSecond: number,
     width: number,
     quality: number,
   ) =>
     invoke<void>("set_perception", {
       enabled,
-      framesPerSecond,
+      // Legacy wire field retained for installed CXR clients; cadence lives on
+      // the glasses and is fixed at one still image every ten seconds.
+      framesPerSecond: 2,
       width,
       quality,
     }),
@@ -54,7 +61,9 @@ export const nativeService = {
     story: string;
     choices_json: string;
   }) => invoke<void>("show_choice_card", { request }),
-  dismissChoiceCard: (contextId: string) =>
+  syncGlassHud: (configJson: string) =>
+    invoke<void>("sync_glass_hud", { configJson }),
+  dismissChoiceCard: (contextId: string, message = "") =>
     invoke<void>("show_choice_card", {
       request: {
         person_id: "__dismiss__",
@@ -62,7 +71,7 @@ export const nativeService = {
         title: "",
         affinity: -2,
         quest: "",
-        story: "",
+        story: message,
         choices_json: JSON.stringify({ kind: "dismiss", contextId }),
       },
     }),
@@ -91,6 +100,24 @@ export const nativeService = {
       sampleRate,
       channels,
     }),
+  diarizeAudioPath: (
+    path: string,
+    sampleRate: number,
+    channels: number,
+    sessionId: number,
+  ) =>
+    invoke<SpeakerDiarizationResult>("diarize_audio_path", {
+      path,
+      sampleRate,
+      channels,
+      sessionId,
+    }),
+  releaseSpeakerTurns: () => invoke<void>("release_speaker_turns"),
+  resetSpeakerSession: () => invoke<void>("reset_speaker_session"),
+  warmupSpeakerModel: () =>
+    invoke<{ loaded: boolean; reused: boolean; load_ms: number }>(
+      "warmup_speaker_model",
+    ),
   acceptVadChunk: (recordingId: number) =>
     invoke<VadChunkResult>("accept_vad_chunk", { recordingId }),
   listenMood: () => invoke<MoodSpeechResult>("listen_mood"),
@@ -103,6 +130,24 @@ export const nativeService = {
     }),
   finishMoodListen: () => invoke<void>("finish_mood_listen"),
   cancelMoodListen: () => invoke<void>("cancel_mood_listen"),
+  startSensingAudio: (sessionId: number) =>
+    invoke<SensingAudioState>("start_sensing_audio", { sessionId }),
+  prepareSensingModels: (
+    includeAsr: boolean,
+    visionModelId: string | null,
+    includeSpeakers = false,
+  ) =>
+    invoke<SensingModelPreparation>("prepare_sensing_models", {
+      includeAsr,
+      includeSpeakers,
+      visionModelId,
+    }),
+  stopSensingAudio: (sessionId: number, drain = false) =>
+    invoke<void>("stop_sensing_audio", { sessionId, drain }),
+  sensingAudioState: (take: boolean) =>
+    invoke<SensingAudioState>("sensing_audio_state", { take }),
+  acknowledgeSensingAudio: (recordingId: number) =>
+    invoke<void>("acknowledge_sensing_audio", { recordingId }),
 
   modelDownloadStatus: () =>
     invoke<ModelDownloadStatus>("model_download_status"),
@@ -135,6 +180,7 @@ export const nativeService = {
     width: number,
     quality: number,
     maxNewTokens = 96,
+    latestCaptureOnly = false,
   ) =>
     invoke<SceneObservationResult>("observe_scene_with_vl", {
       modelId,
@@ -142,6 +188,7 @@ export const nativeService = {
       width,
       quality,
       maxNewTokens,
+      latestCaptureOnly,
     }),
 
   cloudComplete: (
@@ -149,12 +196,18 @@ export const nativeService = {
     system: string | null,
     json: boolean,
     timeoutMs = 12_000,
+    options: {
+      maxCompletionTokens?: number;
+      fast?: boolean;
+      temperature?: number;
+    } = {},
   ) =>
     invoke<NativeCloudResult>("cloud_complete", {
       prompt,
       system,
       json,
       timeoutMs,
+      ...options,
     }),
   cloudConfig: () => invoke<NativeCloudConfig>("cloud_config"),
   saveCloudConfig: (config: {

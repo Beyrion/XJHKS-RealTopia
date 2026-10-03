@@ -147,6 +147,36 @@ struct RecordingMetric {
     turn_label: Option<String>,
     #[serde(default)]
     turn_latency_ms: Option<f64>,
+    #[serde(default)]
+    sensing: bool,
+    #[serde(default)]
+    sensing_session_id: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SensingAudioState {
+    #[serde(default)]
+    audio_level: f64,
+    #[serde(default)]
+    vad_probability: f64,
+    #[serde(default)]
+    vad_latency_ms: f64,
+    #[serde(default)]
+    speech_detected: bool,
+    #[serde(default)]
+    listening_phase: String,
+    #[serde(default)]
+    last_sample_at_ms: u64,
+    last_turn_label: Option<String>,
+    #[serde(default)]
+    vad_recoveries: u32,
+    active: bool,
+    session_id: u64,
+    queued_segments: u32,
+    completed_segments: u32,
+    dropped_segments: u32,
+    last_error: Option<String>,
+    recording: Option<RecordingMetric>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -211,6 +241,61 @@ struct LocalAsrResult {
     generated_tokens: i32,
     status: i32,
     model_load_ms: i64,
+    #[serde(default)]
+    load_this_call_ms: Option<i64>,
+    #[serde(default)]
+    model_reused: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct NativeModelWarmup {
+    loaded: bool,
+    reused: bool,
+    load_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embedding_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embedding_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inference_threads: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    match_threshold: Option<f32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PreparedModel {
+    model_id: String,
+    loaded: bool,
+    reused: bool,
+    load_ms: u64,
+    error: Option<String>,
+}
+
+impl PreparedModel {
+    fn from_result(model_id: &str, result: Result<NativeModelWarmup, String>) -> Self {
+        match result {
+            Ok(status) => Self {
+                model_id: model_id.into(),
+                loaded: status.loaded,
+                reused: status.reused,
+                load_ms: status.load_ms,
+                error: None,
+            },
+            Err(error) => Self {
+                model_id: model_id.into(),
+                loaded: false,
+                reused: false,
+                load_ms: 0,
+                error: Some(error),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SensingModelPreparation {
+    models: Vec<PreparedModel>,
+    elapsed_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -325,55 +410,13 @@ const STRANGER_HUD_ID: &str = "__stranger__";
 
 #[cfg(mobile)]
 fn person_hud(person_id: &str) -> PersonHud<'_> {
-    match person_id {
-        STRANGER_HUD_ID => PersonHud {
-            id: person_id,
-            name: "陌生人",
-            title: "？？？",
-            affinity: -1,
-            quest: "？？？",
-            story: "？？？",
-        },
-        "lin" => PersonHud {
-            id: person_id,
-            name: "林澄",
-            title: "植物研究员 / 老朋友",
-            affinity: 86,
-            quest: "让阳台重新生长",
-            story: "在大学旧温室认识。她记得每一株植物的名字，也记得你忘记吃晚饭的日子。",
-        },
-        "zhou" => PersonHud {
-            id: person_id,
-            name: "周野",
-            title: "青苔书店主理人",
-            affinity: 64,
-            quest: "把书还给周野",
-            story: "老街尽头的书店老板。认识之后，你的借阅时间总比别人长一些。",
-        },
-        "shen" => PersonHud {
-            id: person_id,
-            name: "沈弦",
-            title: "独立音乐人",
-            affinity: 41,
-            quest: "整理城市声音采样",
-            story: "她正在收集城市里被忽略的声音，偶尔会请你做第一个听众。",
-        },
-        "mom" => PersonHud {
-            id: person_id,
-            name: "妈妈",
-            title: "家人",
-            affinity: 92,
-            quest: "整理母亲的旧相册",
-            story: "她会把每一次通话的日期写在厨房日历上。",
-        },
-        _ => PersonHud {
-            id: person_id,
-            name: person_id,
-            title: "已相认的人物",
-            affinity: 50,
-            quest: "暂无关联任务",
-            story: "这段相遇已经被记录到你的 RealTopia。",
-        },
+    PersonHud {
+        id: person_id,
+        name: "陌生人",
+        title: "身份未确认",
+        affinity: -1,
+        quest: "不显示私人任务",
+        story: "未引用人物历史",
     }
 }
 
@@ -422,6 +465,12 @@ mod mobile_transport {
     struct RecoverRequest<'a> {
         request_id: u64,
         reason: &'a str,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct HudSnapshotRequest<'a> {
+        config_json: &'a str,
     }
 
     #[derive(Serialize)]
@@ -565,6 +614,13 @@ mod mobile_transport {
             }
         }
 
+        pub fn sync_hud(&self, config_json: &str) -> Result<(), String> {
+            let response: AcceptedResponse = self.0
+                .run_mobile_plugin("syncHud", HudSnapshotRequest { config_json })
+                .map_err(|error| error.to_string())?;
+            if response.accepted { Ok(()) } else { Err("transport rejected HUD snapshot".into()) }
+        }
+
         pub fn show_person(
             &self,
             person: &PersonHud<'_>,
@@ -605,6 +661,15 @@ mod mobile_transport {
             })
             .build()
     }
+}
+
+#[tauri::command]
+fn sync_glass_hud(config_json: String, app: tauri::AppHandle) -> Result<(), String> {
+    if config_json.len() > 16_384 { return Err("HUD snapshot is too large".into()); }
+    #[cfg(mobile)]
+    { app.state::<mobile_transport::RealiaTransport<tauri::Wry>>().sync_hud(&config_json) }
+    #[cfg(not(mobile))]
+    { let _ = (config_json, app); Err("HUD synchronization requires Android".into()) }
 }
 
 #[tauri::command]
@@ -690,6 +755,11 @@ mod mobile_face {
     }
 
     impl<R: Runtime> RealiaFace<R> {
+        pub fn warmup(&self) -> Result<super::NativeModelWarmup, String> {
+            self.0
+                .run_mobile_plugin("warmup", ())
+                .map_err(|e| e.to_string())
+        }
         pub fn analyze(
             &self,
             path: &str,
@@ -883,7 +953,55 @@ mod mobile_asr {
         max_new_tokens: u32,
     }
 
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SpeakerRequest<'a> {
+        pcm_path: &'a str,
+        sample_rate: u32,
+        channels: u32,
+        session_id: u64,
+    }
+
     impl<R: Runtime> RealiaAsr<R> {
+        pub fn warmup_speakers(&self) -> Result<super::NativeModelWarmup, String> {
+            self.0
+                .run_mobile_plugin("warmupSpeakers", ())
+                .map_err(|e| e.to_string())
+        }
+        pub fn diarize(
+            &self,
+            path: &str,
+            sample_rate: u32,
+            channels: u32,
+            session_id: u64,
+        ) -> Result<serde_json::Value, String> {
+            self.0
+                .run_mobile_plugin(
+                    "diarize",
+                    SpeakerRequest {
+                        pcm_path: path,
+                        sample_rate,
+                        channels,
+                        session_id,
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+        pub fn release_speaker_turns(&self) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin("releaseSpeakerTurns", ())
+                .map_err(|e| e.to_string())
+        }
+        pub fn reset_speaker_session(&self) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin("resetSpeakerSession", ())
+                .map_err(|e| e.to_string())
+        }
+        pub fn warmup(&self) -> Result<super::NativeModelWarmup, String> {
+            self.0
+                .run_mobile_plugin("warmup", ())
+                .map_err(|e| e.to_string())
+        }
         pub fn transcribe(
             &self,
             pcm_path: &str,
@@ -1004,6 +1122,18 @@ mod mobile_vl {
     }
 
     impl<R: Runtime> RealiaVl<R> {
+        pub fn warmup(&self, model_id: &str) -> Result<super::NativeModelWarmup, String> {
+            self.0
+                .run_mobile_plugin(
+                    "warmup",
+                    PickAndAnalyzeRequest {
+                        model_id,
+                        prompt: "",
+                        max_new_tokens: 8,
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
         pub fn analyze(
             &self,
             model_id: &str,
@@ -1173,6 +1303,96 @@ mod mobile_mood {
                 let handle =
                     api.register_android_plugin("com.realtopia.phone.mood", "RealiaMoodPlugin")?;
                 app.manage(RealiaMood(handle));
+                Ok(())
+            })
+            .build()
+    }
+}
+
+#[cfg(mobile)]
+mod mobile_sensing {
+    use super::SensingAudioState;
+    use serde::Serialize;
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        Manager, Runtime,
+    };
+    pub struct RealiaSensing<R: Runtime>(PluginHandle<R>);
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Request {
+        session_id: u64,
+        recording_id: u64,
+        take: bool,
+        drain: bool,
+    }
+    impl<R: Runtime> RealiaSensing<R> {
+        pub fn warmup(&self) -> Result<super::NativeModelWarmup, String> {
+            self.0
+                .run_mobile_plugin("warmup", ())
+                .map_err(|e| e.to_string())
+        }
+        pub fn start(&self, session_id: u64) -> Result<SensingAudioState, String> {
+            self.0
+                .run_mobile_plugin(
+                    "start",
+                    Request {
+                        session_id,
+                        recording_id: 0,
+                        take: false,
+                        drain: false,
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+        pub fn stop(&self, session_id: u64, drain: bool) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin(
+                    "stop",
+                    Request {
+                        session_id,
+                        recording_id: 0,
+                        take: false,
+                        drain,
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+        pub fn state(&self, take: bool) -> Result<SensingAudioState, String> {
+            self.0
+                .run_mobile_plugin(
+                    "state",
+                    Request {
+                        session_id: 0,
+                        recording_id: 0,
+                        take,
+                        drain: false,
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+        pub fn acknowledge(&self, recording_id: u64) -> Result<(), String> {
+            self.0
+                .run_mobile_plugin(
+                    "acknowledge",
+                    Request {
+                        session_id: 0,
+                        recording_id,
+                        take: false,
+                        drain: false,
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+    }
+    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+        Builder::new("realia-sensing")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin(
+                    "com.realtopia.phone.mood",
+                    "RealiaSensingAudioPlugin",
+                )?;
+                app.manage(RealiaSensing(handle));
                 Ok(())
             })
             .build()
@@ -1391,6 +1611,7 @@ async fn observe_scene_with_vl(
     max_new_tokens: Option<u32>,
     width: Option<u32>,
     quality: Option<u8>,
+    latest_capture_only: Option<bool>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<SceneObservationResult, String> {
@@ -1399,7 +1620,7 @@ async fn observe_scene_with_vl(
         let _ = state;
         return run_blocking_command("场景观察", move || {
             let state = app.state::<AppState>();
-            if let Some((mut capture, snapshot_path)) = snapshot_latest_stream_capture(&app)? {
+            if let Some((mut capture, snapshot_path)) = snapshot_latest_capture(&app)? {
                 let snapshot_value = snapshot_path.to_string_lossy().into_owned();
                 let mut analysis_capture = capture.clone();
                 analysis_capture.mode = "scene_snapshot".into();
@@ -1424,6 +1645,9 @@ async fn observe_scene_with_vl(
                 });
             }
 
+            if latest_capture_only.unwrap_or(false) {
+                return Err("暂无近期照片，等待主动拍摄，不额外触发自动拍照".into());
+            }
             let ticket = queue_capture(&app, "hot", width, quality, &state)?;
             let capture = wait_for_capture_metric(&app, ticket.request_id)?;
             wait_for_face_processing(&app, ticket.request_id)?;
@@ -1451,13 +1675,22 @@ async fn observe_scene_with_vl(
     }
     #[cfg(not(mobile))]
     {
-        let _ = (model_id, prompt, max_new_tokens, width, quality, app, state);
+        let _ = (
+            model_id,
+            prompt,
+            max_new_tokens,
+            width,
+            quality,
+            latest_capture_only,
+            app,
+            state,
+        );
         Err("场景观察仅支持 Android 应用".into())
     }
 }
 
 #[cfg(mobile)]
-fn snapshot_latest_stream_capture(
+fn snapshot_latest_capture(
     app: &tauri::AppHandle,
 ) -> Result<Option<(CaptureMetric, PathBuf)>, String> {
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -1465,8 +1698,18 @@ fn snapshot_latest_stream_capture(
         let native = app
             .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
             .state()?;
-        if let Some(capture) = native.last_capture.filter(|item| item.stream) {
+        if let Some(capture) = native.last_capture {
             let source = PathBuf::from(&capture.path);
+            // Reuse a recent still instead of silently triggering another shot.
+            if !source
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.elapsed().ok())
+                .is_some_and(|age| age <= Duration::from_secs(30))
+            {
+                return Ok(None);
+            }
             if let Some(parent) = source.parent() {
                 let suffix = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -1849,6 +2092,92 @@ async fn transcribe_audio_path(
 }
 
 #[tauri::command]
+async fn diarize_audio_path(
+    path: String,
+    sample_rate: u32,
+    channels: u32,
+    session_id: u64,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    if path.trim().is_empty()
+        || sample_rate != 16000
+        || channels != 1
+        || session_id == 0
+        || session_id > 9_007_199_254_740
+    {
+        return Err("invalid speaker audio request".into());
+    }
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("说话人分段", move || {
+            app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().diarize(
+                &path,
+                sample_rate,
+                channels,
+                session_id,
+            )
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("说话人分段仅支持 Android".into())
+    }
+}
+
+#[tauri::command]
+async fn release_speaker_turns(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("清理说话人临时音频", move || {
+            app.state::<mobile_asr::RealiaAsr<tauri::Wry>>()
+                .release_speaker_turns()
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn reset_speaker_session(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("清除会话声音特征", move || {
+            app.state::<mobile_asr::RealiaAsr<tauri::Wry>>()
+                .reset_speaker_session()
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn warmup_speaker_model(app: tauri::AppHandle) -> Result<NativeModelWarmup, String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("预加载说话人模型", move || {
+            app.state::<mobile_asr::RealiaAsr<tauri::Wry>>()
+                .warmup_speakers()
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("说话人模型仅支持 Android".into())
+    }
+}
+
+#[tauri::command]
 async fn accept_vad_chunk(
     recording_id: u64,
     app: tauri::AppHandle,
@@ -1951,6 +2280,9 @@ async fn cloud_complete(
     system: Option<String>,
     json: bool,
     timeout_ms: Option<u32>,
+    max_completion_tokens: Option<u32>,
+    fast: Option<bool>,
+    temperature: Option<f64>,
     app: tauri::AppHandle,
 ) -> Result<CloudModelResult, String> {
     #[cfg(mobile)]
@@ -1962,16 +2294,16 @@ async fn cloud_complete(
                     system: system.as_deref(),
                     json,
                     timeout_ms: timeout_ms.unwrap_or(12_000).clamp(3_000, 300_000),
-                    max_completion_tokens: None,
-                    fast: false,
-                    temperature: None,
+                    max_completion_tokens,
+                    fast: fast.unwrap_or(false),
+                    temperature,
                 })
         })
         .await;
     }
     #[cfg(not(mobile))]
     {
-        let _ = (prompt, system, json, timeout_ms, app);
+        let _ = (prompt, system, json, timeout_ms, max_completion_tokens, fast, temperature, app);
         Err("安全云端调用仅支持 Android 应用".into())
     }
 }
@@ -2092,6 +2424,8 @@ async fn record_phone_conversation(
                 vad_reason: Some("phone_microphone".into()),
                 turn_label: Some("complete".into()),
                 turn_latency_ms: None,
+                sensing: false,
+                sensing_session_id: None,
             })
         })
         .await;
@@ -2100,6 +2434,138 @@ async fn record_phone_conversation(
     {
         let _ = app;
         Err("手机对话录音仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn prepare_sensing_models(
+    include_asr: bool,
+    include_speakers: Option<bool>,
+    vision_model_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<SensingModelPreparation, String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("预加载感知模型", move || {
+            let started = std::time::Instant::now();
+            let mut models = Vec::new();
+            // Serialize heavyweight loads; each plugin retains its own engine.
+            if include_asr {
+                models.push(PreparedModel::from_result(
+                    "Qwen3-ASR",
+                    app.state::<mobile_asr::RealiaAsr<tauri::Wry>>().warmup(),
+                ));
+            }
+            if include_speakers.unwrap_or(false) {
+                models.push(PreparedModel::from_result(
+                    "CAM++ + Pyannote · MNN（轮流讲话）",
+                    app.state::<mobile_asr::RealiaAsr<tauri::Wry>>()
+                        .warmup_speakers(),
+                ));
+            }
+            models.push(PreparedModel::from_result(
+                "SCRFD + ArcFace",
+                app.state::<mobile_face::RealiaFace<tauri::Wry>>().warmup(),
+            ));
+            models.push(PreparedModel::from_result(
+                "Silero VAD + TurnSense",
+                app.state::<mobile_sensing::RealiaSensing<tauri::Wry>>()
+                    .warmup(),
+            ));
+            if let Some(id) = vision_model_id {
+                models.push(PreparedModel::from_result(
+                    &id,
+                    app.state::<mobile_vl::RealiaVl<tauri::Wry>>().warmup(&id),
+                ));
+            }
+            Ok(SensingModelPreparation {
+                models,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            })
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (include_asr, include_speakers, vision_model_id, app);
+        Err("感知模型预加载仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn start_sensing_audio(
+    session_id: u64,
+    app: tauri::AppHandle,
+) -> Result<SensingAudioState, String> {
+    if session_id == 0 || session_id > 9_007_199_254_740 {
+        return Err("invalid sensing session".into());
+    }
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("开始语音感知", move || {
+            app.state::<mobile_sensing::RealiaSensing<tauri::Wry>>()
+                .start(session_id)
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = app;
+        Err("语音感知仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn stop_sensing_audio(session_id: u64, drain: Option<bool>, app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("关闭语音感知", move || {
+            app.state::<mobile_sensing::RealiaSensing<tauri::Wry>>()
+                .stop(session_id, drain.unwrap_or(false))
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (app, session_id, drain);
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn sensing_audio_state(
+    take: bool,
+    app: tauri::AppHandle,
+) -> Result<SensingAudioState, String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("语音感知状态", move || {
+            app.state::<mobile_sensing::RealiaSensing<tauri::Wry>>()
+                .state(take)
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (app, take);
+        Err("语音感知仅支持 Android 应用".into())
+    }
+}
+
+#[tauri::command]
+async fn acknowledge_sensing_audio(recording_id: u64, app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        return run_blocking_command("清理感知语音", move || {
+            app.state::<mobile_sensing::RealiaSensing<tauri::Wry>>()
+                .acknowledge(recording_id)
+        })
+        .await;
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = (app, recording_id);
+        Ok(())
     }
 }
 
@@ -2225,6 +2691,39 @@ fn set_person_alert(enabled: bool, state: tauri::State<'_, AppState>) -> Result<
         .map_err(|_| "state lock poisoned")?
         .person_hud_enabled = enabled;
     Ok(())
+}
+
+#[tauri::command]
+async fn capture_preview(
+    request_id: u64,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    // Do not accept a frontend file path or expose an unrestricted asset scope.
+    let capture = state
+        .session
+        .lock()
+        .map_err(|_| "state lock poisoned")?
+        .last_capture
+        .clone()
+        .filter(|capture| capture.request_id == request_id && !capture.stream)
+        .ok_or_else(|| "照片已更新，请查看最新照片".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || read_capture_preview(&capture.path))
+        .await
+        .map_err(|error| format!("照片读取失败: {error}"))?
+}
+
+fn read_capture_preview(path: &str) -> Result<String, String> {
+    use std::io::Read;
+    const MAX_BYTES: u64 = 20 * 1024 * 1024;
+    let file = std::fs::File::open(path).map_err(|_| "照片不存在或已被清理".to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "照片读取失败".to_string())?;
+    if bytes.len() as u64 > MAX_BYTES || !bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Err("照片不是有效的 JPEG，或超过20MB".into());
+    }
+    Ok(format!("data:image/jpeg;base64,{}", base64_encode(&bytes)))
 }
 
 #[tauri::command]
@@ -2463,6 +2962,10 @@ fn wait_for_capture_and_process(app: &tauri::AppHandle, request_id: u64) -> Resu
     drop(session);
     if show_person_hud {
         if let Some(person_id) = stable_hud_person(&state, recognized_person, capture.stream)? {
+            // The frontend owns current profiles and versioned private memories.
+            if person_id != STRANGER_HUD_ID {
+                return Ok(());
+            }
             let person = person_hud(&person_id);
             if let Err(error) = app
                 .state::<mobile_transport::RealiaTransport<tauri::Wry>>()
@@ -2775,6 +3278,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             session_state,
+            capture_preview,
             begin_session,
             request_capture,
             paired_glasses,
@@ -2783,9 +3287,14 @@ pub fn run() {
             set_perception,
             set_person_alert,
             show_choice_card,
+            sync_glass_hud,
             recording_audio,
             transcribe_recording,
             transcribe_audio_path,
+            diarize_audio_path,
+            release_speaker_turns,
+            reset_speaker_session,
+            warmup_speaker_model,
             accept_vad_chunk,
             cloud_config,
             save_cloud_config,
@@ -2795,6 +3304,11 @@ pub fn run() {
             listen_mood,
             listen_automatic_response,
             record_phone_conversation,
+            start_sensing_audio,
+            prepare_sensing_models,
+            stop_sensing_audio,
+            sensing_audio_state,
+            acknowledge_sensing_audio,
             finish_mood_listen,
             cancel_mood_listen,
             real_world_context,
@@ -2837,6 +3351,7 @@ pub fn run() {
         .plugin(mobile_vl::init())
         .plugin(mobile_cloud::init())
         .plugin(mobile_mood::init())
+        .plugin(mobile_sensing::init())
         .plugin(mobile_context::init());
     builder
         .run(tauri::generate_context!())
@@ -2845,10 +3360,81 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_model_reports_resident_reuse_without_new_load_cost() {
+        let result = PreparedModel::from_result(
+            "Qwen3-ASR",
+            Ok(NativeModelWarmup {
+                loaded: true,
+                reused: true,
+                load_ms: 0,
+                embedding_model: None,
+                embedding_sha256: None,
+                inference_threads: None,
+                match_threshold: None,
+            }),
+        );
+        assert!(result.loaded && result.reused);
+        assert_eq!(result.load_ms, 0);
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn failed_preload_keeps_a_per_model_error_not_a_fake_ready_flag() {
+        let result = PreparedModel::from_result("SCRFD + ArcFace", Err("missing model".into()));
+        assert!(!result.loaded && !result.reused);
+        assert_eq!(result.error.as_deref(), Some("missing model"));
+    }
+    #[test]
+    fn speaker_warmup_preserves_native_model_provenance() {
+        let value: NativeModelWarmup = serde_json::from_str(
+            r#"{"loaded":true,"reused":false,"load_ms":123,"embedding_model":"CAM++ Chinese · MNN","embedding_sha256":"test-checksum","inference_threads":4,"match_threshold":0.45}"#,
+        ).unwrap();
+        let json = serde_json::to_value(value).unwrap();
+        assert_eq!(json["embedding_model"], "CAM++ Chinese · MNN");
+        assert_eq!(json["embedding_sha256"], "test-checksum");
+        assert_eq!(json["inference_threads"], 4);
+        assert!((json["match_threshold"].as_f64().unwrap() - 0.45).abs() < 1e-6);
+        let legacy: NativeModelWarmup = serde_json::from_str(
+            r#"{"loaded":true,"reused":true,"load_ms":0}"#,
+        ).unwrap();
+        assert!(legacy.embedding_model.is_none());
+    }
+    #[test]
+    fn sensing_debug_telemetry_defaults_for_older_native_shells() {
+        let value: SensingAudioState = serde_json::from_str(r#"{"active":false,"session_id":0,"queued_segments":0,"completed_segments":0,"dropped_segments":0}"#).unwrap();
+        assert_eq!(value.audio_level, 0.0);
+        assert_eq!(value.vad_probability, 0.0);
+        assert!(!value.speech_detected);
+        assert_eq!(value.last_sample_at_ms, 0);
+        assert!(value.last_turn_label.is_none());
+    }
     #[test]
     fn validates_bluetooth_addresses() {
         assert!(valid_bluetooth_address("AA:bb:01:23:45:67"));
         assert!(!valid_bluetooth_address("not-an-address"))
+    }
+    #[test]
+    fn capture_preview_reads_jpeg_and_rejects_invalid_missing_or_oversized_files() {
+        let root =
+            std::env::temp_dir().join(format!("realtopia-preview-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("capture.jpg");
+        let value = path.to_str().unwrap();
+        std::fs::write(&path, [0xff, 0xd8, 0xff, 0xd9]).unwrap();
+        assert_eq!(
+            read_capture_preview(value).unwrap(),
+            "data:image/jpeg;base64,/9j/2Q=="
+        );
+        std::fs::write(&path, b"not a jpeg").unwrap();
+        assert!(read_capture_preview(value).is_err());
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(20 * 1024 * 1024 + 1).unwrap();
+        assert!(read_capture_preview(value).is_err());
+        std::fs::remove_file(&path).unwrap();
+        assert!(read_capture_preview(value).is_err());
+        std::fs::remove_dir(&root).unwrap();
     }
     #[test]
     fn noop_gateway_never_processes_image() {

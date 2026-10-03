@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
@@ -59,6 +60,28 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
   private var modelLoadMs: Long = -1
   private var lastError: String? = null
   private val pickerActive = AtomicBoolean(false)
+
+  @Command
+  fun warmup(invoke: Invoke) {
+    worker.execute {
+      try {
+        val reused = engineHandle != 0L
+        val started = SystemClock.elapsedRealtime()
+        ensureEngine()
+        val result = JSObject(native.warmup(engineHandle))
+        if (result.has("error")) throw IllegalStateException(result.getString("error"))
+        val recognizerReused = result.getBoolean("reused")
+        result.put("loaded", true)
+        result.put("reused", reused && recognizerReused)
+        result.put("load_ms", if (reused && recognizerReused) 0 else SystemClock.elapsedRealtime() - started)
+        invoke.resolve(result)
+        Log.i(TAG, "FACE_MODELS_READY reused=${reused && recognizerReused}")
+      } catch (error: Exception) {
+        lastError = error.message ?: error.javaClass.simpleName
+        invoke.reject("人脸模型预加载失败：$lastError")
+      }
+    }
+  }
 
   @Command
   fun analyze(invoke: Invoke) {
@@ -227,6 +250,7 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
     if (replaceModels) installManifest(installedManifest, packagedManifest)
     val startedAt = SystemClock.elapsedRealtime()
     engineHandle = native.create(detector.absolutePath, recognizer.absolutePath, THREADS)
+    check(engineHandle != 0L) { "MNN could not load face detector" }
     modelLoadMs = SystemClock.elapsedRealtime() - startedAt
     Log.i(TAG, "detector engine loaded in ${modelLoadMs}ms; recognizer is lazy")
   }
@@ -266,10 +290,29 @@ class RealiaFacePlugin(private val activity: Activity) : Plugin(activity) {
     }
     val decoded = BitmapFactory.decodeFile(file.absolutePath, options)
       ?: throw IllegalStateException("JPEG decode failed: ${file.absolutePath}")
-    return if (decoded.config == Bitmap.Config.ARGB_8888) {
+    val argb = if (decoded.config == Bitmap.Config.ARGB_8888) {
       decoded
     } else {
       decoded.copy(Bitmap.Config.ARGB_8888, false).also { decoded.recycle() }
+    }
+    // File decoding does not honor JPEG EXIF (the gallery URI decoder does).
+    // Transform only this in-memory inference bitmap; original bytes are kept.
+    val orientation = runCatching {
+      ExifInterface(file.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    val matrix = Matrix()
+    when (orientation) {
+      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+      ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+      ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+      ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+      ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+      ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+      ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+      else -> return argb
+    }
+    return Bitmap.createBitmap(argb, 0, 0, argb.width, argb.height, matrix, true).also {
+      if (it !== argb) argb.recycle()
     }
   }
 

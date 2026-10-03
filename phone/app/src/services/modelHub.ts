@@ -82,12 +82,17 @@ class SecureCloudProvider implements ModelProvider {
   constructor(private readonly settings: ModelSettings["cloud"]) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    if (!this.settings.hasApiKey) throw new Error("请先安全配置百炼 API Key");
+    if (!this.settings.hasApiKey) throw new Error("请先安全配置云端 API Key");
     const result = await nativeService.cloudComplete(
       request.prompt,
       request.system ?? null,
       request.json ?? false,
       request.timeoutMs,
+      {
+        maxCompletionTokens: request.maxCompletionTokens,
+        fast: request.fast,
+        temperature: request.temperature,
+      },
     );
     return {
       text: result.text,
@@ -139,7 +144,7 @@ class ModelHub {
   async completeCloud(request: ModelRequest) {
     const settings = this.load();
     if (!settings.cloud.hasApiKey)
-      throw new Error("请先在设置 → 智能中安全配置百炼 API Key");
+      throw new Error("请先在设置 → 智能中安全配置云端 API Key");
     return new SecureCloudProvider(settings.cloud).complete({
       ...request,
       private: false,
@@ -148,12 +153,13 @@ class ModelHub {
 
   async testCloud() {
     const settings = this.load();
-    if (!settings.cloud.hasApiKey) throw new Error("请先安全保存百炼 API Key");
+    if (!settings.cloud.hasApiKey) throw new Error("请先安全保存云端 API Key");
     return new SecureCloudProvider(settings.cloud).complete({
       purpose: "memory",
       prompt: "Reply with REALTOPIA_OK only.",
       system: "This is a provider connectivity check.",
       private: false,
+      fast: true,
     });
   }
 

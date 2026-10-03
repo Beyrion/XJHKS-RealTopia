@@ -1,6 +1,6 @@
 export interface CaptureMetric {
   request_id: number;
-  mode: "cold" | "hot" | "stream";
+  mode: "cold" | "hot" | "stream" | "interval";
   stream?: boolean;
   bytes: number;
   width: number;
@@ -14,12 +14,25 @@ export interface CaptureMetric {
   path: string;
 }
 
+export interface FaceMatch {
+  decision: string;
+  person_id: string | null;
+  score: number;
+  second_score?: number;
+  margin?: number;
+  bbox?: [number, number, number, number];
+  detection_score?: number;
+}
+
 export interface FaceResult {
   request_id: number;
   detected_count: number;
   eligible_count: number;
   recognition_invoked: boolean;
-  matches: { decision: string; person_id: string | null; score: number }[];
+  matches: FaceMatch[];
+  image_width?: number;
+  image_height?: number;
+  gallery_size?: number;
   detection_ms: number;
   recognition_ms: number;
   recognizer_load_ms: number;
@@ -46,6 +59,15 @@ export interface FaceEnrollmentReceipt {
 }
 
 export interface Recording {
+  speaker?: {
+    id: string | null;
+    decision: string;
+    similarity: number | null;
+    startMs: number;
+    endMs: number;
+    latencyMs: number;
+    sourceRecordingId: number;
+  };
   recording_id: number;
   bytes: number;
   sample_rate: number;
@@ -63,6 +85,89 @@ export interface Recording {
   vad_reason?: string;
   turn_label?: "complete" | "incomplete" | "invalid";
   turn_latency_ms?: number;
+  sensing?: boolean;
+  sensing_session_id?: number;
+}
+
+export interface SensingAudioState {
+  model_preparation?: SensingModelPreparation & {
+    loading: boolean;
+    last_error?: string;
+  };
+  audio_level?: number;
+  vad_probability?: number;
+  vad_latency_ms?: number;
+  speech_detected?: boolean;
+  listening_phase?: string;
+  last_sample_at_ms?: number;
+  last_turn_label?: string | null;
+  vad_recoveries?: number;
+  active: boolean;
+  session_id: number;
+  queued_segments: number;
+  completed_segments: number;
+  dropped_segments: number;
+  last_error: string | null;
+  recording?: Recording | null;
+}
+
+export interface SensingModelPreparation {
+  models: Array<{
+    model_id: string;
+    loaded: boolean;
+    reused: boolean;
+    load_ms: number;
+    error: string | null;
+  }>;
+  elapsed_ms: number;
+}
+
+export interface SensingSpeechDebug {
+  speaker?: Recording["speaker"];
+  speakerBinding?: string;
+  attributionPending?: boolean;
+  recordingId: number;
+  sessionId: number;
+  sequence: number;
+  startedAt: string;
+  durationMs: number;
+  bytes: number;
+  vadReason?: string;
+  vadLatencyMs?: number;
+  turnLabel?: string;
+  turnLatencyMs?: number;
+  status:
+    | "transcribing"
+    | "analyzing"
+    | "complete"
+    | "response"
+    | "empty"
+    | "error"
+    | "cancelled";
+  transcript?: string;
+  asrLatencyMs?: number;
+  realtimeFactor?: number;
+  modelLoadMs?: number;
+  loadThisCallMs?: number;
+  modelReused?: boolean;
+  error?: string;
+}
+
+export interface SpeakerDiarizationResult {
+  session_id: number;
+  latency_ms: number;
+  model_reused: boolean;
+  scope: "consecutive-only";
+  turns: Array<{
+    speaker_id: string | null;
+    decision: string;
+    similarity: number | null;
+    start_ms: number;
+    end_ms: number;
+    path: string;
+    bytes: number;
+    duration_ms: number;
+  }>;
 }
 
 export interface VadChunkResult {
@@ -107,6 +212,8 @@ export interface LocalAsrResult {
   generated_tokens: number;
   status: number;
   model_load_ms: number;
+  load_this_call_ms?: number;
+  model_reused?: boolean;
 }
 
 export interface LocalVisionResult {

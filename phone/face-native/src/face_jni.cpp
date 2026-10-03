@@ -4,6 +4,7 @@
 
 #include <MNN/Interpreter.hpp>
 #include <MNN/expr/Executor.hpp>
+#include <MNN/expr/ExecutorScope.hpp>
 #include <MNN/expr/ExprCreator.hpp>
 #include <MNN/expr/Module.hpp>
 
@@ -311,6 +312,8 @@ public:
         backendConfig.precision = BackendConfig::Precision_Normal;
         backendConfig.power = BackendConfig::Power_High;
         backendConfig.memory = BackendConfig::Memory_Normal;
+        mExecutor = Executor::newExecutor(MNN_FORWARD_CPU, backendConfig, threads);
+        MNN::Express::ExecutorScope scope(mExecutor);
         MNN::ScheduleConfig schedule;
         schedule.type = MNN_FORWARD_CPU;
         schedule.backupType = MNN_FORWARD_CPU;
@@ -331,6 +334,11 @@ public:
         }
     }
 
+    ~FaceEngine() {
+        MNN::Express::ExecutorScope scope(mExecutor);
+        mRecognizer.reset(); mDetector.reset(); mRuntime.reset();
+    }
+
     bool valid() const {
         return mError.empty() && mDetector;
     }
@@ -339,7 +347,16 @@ public:
         return mError;
     }
 
+    std::string warmup() {
+        MNN::Express::ExecutorScope scope(mExecutor);
+        const bool reused = static_cast<bool>(mRecognizer);
+        double loadMilliseconds = 0.0;
+        if (!ensureRecognizer(&loadMilliseconds)) return errorJson(mError);
+        return std::string("{\"reused\":") + (reused ? "true" : "false") + "}";
+    }
+
     std::string analyze(const RgbImage& image, float minimumFaceAt640) {
+        MNN::Express::ExecutorScope scope(mExecutor);
         const auto totalStarted = std::chrono::steady_clock::now();
         const auto preprocessStarted = std::chrono::steady_clock::now();
         float detectorScale = 1.0f;
@@ -511,6 +528,7 @@ private:
         return "{\"error\":\"" + escapeJson(message) + "\"}";
     }
 
+    std::shared_ptr<Executor> mExecutor;
     std::shared_ptr<Executor::RuntimeManager> mRuntime;
     std::shared_ptr<Module> mDetector;
     std::shared_ptr<Module> mRecognizer;
@@ -549,6 +567,16 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_realtopia_phone_face_FaceNative_crea
         return 0;
     }
     return reinterpret_cast<jlong>(engine.release());
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_realtopia_phone_face_FaceNative_warmup(
+        JNIEnv* environment, jobject, jlong handle) {
+    auto* engine = reinterpret_cast<FaceEngine*>(handle);
+    if (!engine) {
+        throwIllegalState(environment, "face engine is null");
+        return nullptr;
+    }
+    return environment->NewStringUTF(engine->warmup().c_str());
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_com_realtopia_phone_face_FaceNative_analyze(

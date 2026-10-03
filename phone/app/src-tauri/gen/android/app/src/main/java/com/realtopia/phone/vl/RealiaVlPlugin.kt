@@ -62,6 +62,21 @@ class RealiaVlPlugin(private val activity: Activity) : Plugin(activity) {
   private var lastError: String? = null
 
   @Command
+  fun warmup(invoke: Invoke) {
+    val args = invoke.parseArgs(PickAndAnalyzeVisionArgs::class.java)
+    worker.execute {
+      try {
+        val reused = engineHandle != 0L && loadedModelId == args.modelId
+        ensureEngine(args.modelId)
+        invoke.resolve(JSObject().apply {
+          put("loaded", true); put("reused", reused)
+          put("load_ms", if (reused) 0 else modelLoadMs)
+        })
+      } catch (error: Exception) { reject(invoke, error) }
+    }
+  }
+
+  @Command
   fun analyze(invoke: Invoke) {
     val args = invoke.parseArgs(AnalyzeVisionArgs::class.java)
     worker.execute {

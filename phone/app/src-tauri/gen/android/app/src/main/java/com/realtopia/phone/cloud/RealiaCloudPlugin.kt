@@ -20,7 +20,6 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
-import org.json.JSONArray
 import org.json.JSONObject
 
 @InvokeArg
@@ -44,7 +43,7 @@ class CloudCompleteArgs {
 }
 
 /**
- * OpenAI-compatible cloud gateway. The API key is encrypted with an
+ * OpenAI / Anthropic-compatible cloud gateway. The API key is encrypted with an
  * AndroidKeyStore AES/GCM key and never returned to Rust or the WebView.
  */
 @TauriPlugin
@@ -101,34 +100,13 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
         }
         val started = android.os.SystemClock.elapsedRealtime()
         val model = preferences.getString(KEY_MODEL, DEFAULT_MODEL) ?: DEFAULT_MODEL
-        val body = JSONObject().apply {
-          put("model", model)
-          put("messages", JSONArray().apply {
-            put(JSONObject().put("role", "system").put("content", args.system ?: DEFAULT_SYSTEM))
-            put(JSONObject().put("role", "user").put("content", args.prompt))
-          })
-          put("temperature", (args.temperature ?: 0.2).coerceIn(0.0, 1.5))
-          if (args.json) put("response_format", JSONObject().put("type", "json_object"))
-          args.maxCompletionTokens?.let {
-            put("max_completion_tokens", it.coerceIn(256, 16_384))
-          }
-          if (args.fast) {
-            // Qwen 3.5/3.6/3.7 default to thinking mode. Qwen 3.8 Max is
-            // thinking-first, but accepts a lower reasoning effort.
-            if (model.startsWith("deepseek", ignoreCase = true)) {
-              put("thinking", JSONObject().put("type", "disabled"))
-            } else if (model.contains("qwen3.8", ignoreCase = true)) {
-              put("reasoning_effort", "low")
-            } else {
-              put("enable_thinking", false)
-            }
-          }
-        }
+        val baseUrl = validateBaseUrl(preferences.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL)
+        val body = CloudProtocol.request(baseUrl, model, args.system ?: DEFAULT_SYSTEM,
+          args.prompt, args.json, args.maxCompletionTokens, args.fast, args.temperature)
         val remaining = (deadline - android.os.SystemClock.elapsedRealtime()).toInt()
         require(remaining > 0) { "请求超时（等待云端队列）" }
-        val response = postJson("chat/completions", body, remaining)
-        val content = response.optJSONArray("choices")
-          ?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim().orEmpty()
+        val response = postJson(baseUrl, body, remaining)
+        val content = CloudProtocol.text(baseUrl, response)
         require(content.isNotEmpty()) { "cloud model returned empty content" }
         invoke.resolve(JSObject().apply {
           put("text", content)
@@ -144,19 +122,23 @@ class RealiaCloudPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun postJson(relativePath: String, body: JSONObject, requestedTimeoutMs: Int): JSONObject {
+  private fun postJson(baseUrl: String, body: JSONObject, requestedTimeoutMs: Int): JSONObject {
     val apiKey = loadApiKey() ?: throw IllegalStateException("API Key 尚未安全配置")
-    val baseUrl = validateBaseUrl(
-      preferences.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL,
-    )
-    val connection = URL("${baseUrl.trimEnd('/')}/$relativePath").openConnection() as HttpURLConnection
+    val connection = URL(CloudProtocol.endpoint(baseUrl)).openConnection() as HttpURLConnection
     connection.requestMethod = "POST"
     val timeoutMs = requestedTimeoutMs.coerceIn(1, 300_000)
     connection.connectTimeout = minOf(timeoutMs, 10_000)
     connection.readTimeout = timeoutMs
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-    connection.setRequestProperty("Authorization", "Bearer $apiKey")
+    // Never forward credentials across a redirect to another host.
+    connection.instanceFollowRedirects = false
+    if (CloudProtocol.isAnthropic(baseUrl)) {
+      connection.setRequestProperty("x-api-key", apiKey)
+      connection.setRequestProperty("anthropic-version", "2023-06-01")
+    } else {
+      connection.setRequestProperty("Authorization", "Bearer $apiKey")
+    }
     connection.setRequestProperty("Accept", "application/json")
     // A readTimeout applies to each read, not the whole HTTP exchange. Disconnect
     // at the absolute request budget so slow streaming/connects cannot extend it.

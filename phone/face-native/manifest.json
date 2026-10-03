@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "model_pack": "insightface/buffalo_m",
+  "runtime": "MNN 3.6.0",
+  "models": [
+    {
+      "file": "det_2.5g.mnn",
+      "bytes": 3293360,
+      "role": "SCRFD 2.5GF face detector",
+      "sha256": "eeffd890dcbbf5a2794e9efc8338f68c67c483587085a8e1ec5a0de43cc01e97"
+    },
+    {
+      "file": "w600k_r50.mnn",
+      "bytes": 174346372,
+      "role": "ArcFace ResNet-50 recognizer",
+      "sha256": "c1eaa1b852e430999286abe61473a18c60463ff13f0f50a3bb800aa954cc1ee1"
+    }
+  ]
+}

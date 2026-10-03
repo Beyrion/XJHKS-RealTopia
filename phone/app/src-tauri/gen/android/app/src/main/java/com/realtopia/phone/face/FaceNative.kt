@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 
 internal class FaceNative {
   external fun create(detectorPath: String, recognizerPath: String, threads: Int): Long
+  external fun warmup(handle: Long): String
   external fun analyze(
     handle: Long,
     bitmap: Bitmap,
@@ -20,4 +21,3 @@ internal class FaceNative {
     }
   }
 }
-
