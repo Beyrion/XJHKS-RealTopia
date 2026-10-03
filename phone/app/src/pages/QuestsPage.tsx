@@ -1,76 +1,42 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { QuestDetail } from "../components/quests/QuestDetail";
 import { QuestList } from "../components/quests/QuestList";
 import type { QuestFilter } from "../models";
 import { useAppStore } from "../store/AppStore";
-
+import { questLifecycle } from "../utils/questEvidence";
 export default function QuestsPage() {
   const location = useLocation();
   const { quests, activeQuestId, focusQuest, toggleQuestStep } = useAppStore();
-  const [selectedId, setSelectedId] = useState(quests[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState(
+    quests.find((q) => !q.demo)?.id ?? "",
+  );
   const [filter, setFilter] = useState<QuestFilter>("active");
   const [collapsed, setCollapsed] = useState(new Set<string>());
-  const visibleQuests = useMemo(
-    () =>
-      quests.filter(
-        (item) =>
-          filter === "all" ||
-          (filter === "done" ? item.progress === 100 : item.progress < 100),
-      ),
-    [filter, quests],
+  const available = quests.filter((q) => !q.demo);
+  const visible = available.filter(
+    (q) =>
+      filter === "all" ||
+      (filter === "done"
+        ? questLifecycle(q) === "completed"
+        : !["completed", "cancelled"].includes(questLifecycle(q))),
   );
-  const selected = useMemo(
-    () =>
-      visibleQuests.find((item) => item.id === selectedId) ?? visibleQuests[0],
-    [selectedId, visibleQuests],
-  );
-
+  const selected = visible.find((q) => q.id === selectedId) ?? visible[0];
   useEffect(() => {
-    const questId = (location.state as { questId?: string } | null)?.questId;
-    const target = quests.find((item) => item.id === questId);
-    if (!target) return;
-    setSelectedId(target.id);
-    setFilter((current) => {
-      if (
-        current === "all" ||
-        (current === "done" && target.progress === 100) ||
-        (current === "active" && target.progress < 100)
-      )
-        return current;
-      return target.progress === 100 ? "done" : "active";
-    });
+    const id = (location.state as { questId?: string } | null)?.questId;
+    if (id) {
+      setSelectedId(id);
+      setFilter("all");
+    }
   }, [location.key]);
-
-  useEffect(() => {
-    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
-  }, [selected, selectedId]);
-
-  const changeFilter = (next: QuestFilter) => {
-    setFilter(next);
-    const visible = quests.filter(
-      (item) =>
-        next === "all" ||
-        (next === "done" ? item.progress === 100 : item.progress < 100),
-    );
-    if (!visible.some((item) => item.id === selectedId) && visible[0])
-      setSelectedId(visible[0].id);
-  };
-
-  const toggleStep = (index: number) => {
-    if (!selected) return;
-    toggleQuestStep(selected.id, index);
-  };
-
-  if (!selected) return null;
   return (
     <div className="quests">
       <QuestList
-        quests={quests}
+        quests={available}
         selectedId={selected?.id ?? ""}
         filter={filter}
         collapsed={collapsed}
-        onFilter={changeFilter}
+        onFilter={setFilter}
         onSelect={setSelectedId}
         onToggleGroup={(group) =>
           setCollapsed((current) => {
@@ -80,15 +46,19 @@ export default function QuestsPage() {
           })
         }
       />
-      {selected && (
+      {selected ? (
         <QuestDetail
           quest={selected}
           quests={quests}
           onSelect={setSelectedId}
-          onToggleStep={toggleStep}
+          onToggleStep={(index) => toggleQuestStep(selected.id, index)}
           isFocused={selected.id === activeQuestId}
           onFocus={() => focusQuest(selected.id)}
         />
+      ) : (
+        <p className="empty-panel">
+          暂无此类任务。结束对话感知后会整理生成任务。
+        </p>
       )}
     </div>
   );

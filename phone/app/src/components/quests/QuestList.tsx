@@ -1,5 +1,6 @@
 import type { Quest, QuestFilter } from "../../models";
 import { Icon } from "../ui/Icon";
+import { questLifecycle, lifecycleLabels } from "../../utils/questEvidence";
 
 interface QuestListProps {
   quests: Quest[];
@@ -23,7 +24,9 @@ export function QuestList({
   const filtered = quests.filter(
     (item) =>
       filter === "all" ||
-      (filter === "done" ? item.progress === 100 : item.progress < 100),
+      (filter === "done"
+        ? questLifecycle(item) === "completed"
+        : !["completed", "cancelled"].includes(questLifecycle(item))),
   );
   const groups = [...new Set(filtered.map((item) => item.group))];
   return (
@@ -83,7 +86,7 @@ export function QuestList({
                         {item.title}
                       </b>
                       <small>
-                        {item.meta}
+                        {lifecycleLabels[questLifecycle(item)]} · {item.meta}
                         {item.person ? ` · ${item.person}` : ""}
                       </small>
                     </span>

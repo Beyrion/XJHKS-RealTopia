@@ -13,10 +13,7 @@ import { TopiaScene } from "../components/topia/TopiaScene";
 import { TopiaStudioDialog } from "../components/topia/TopiaStudioDialog";
 import { Icon } from "../components/ui/Icon";
 import { moodEmoji, moodProfiles } from "../data/appData";
-import {
-  type QuickVoiceKind,
-  useQuickVoiceRecording,
-} from "../hooks/useQuickVoiceRecording";
+import { useQuickVoiceRecording } from "../hooks/useQuickVoiceRecording";
 import type {
   MoodKind,
   TopiaLandmark,
@@ -69,7 +66,9 @@ export default function TopiaPage() {
     currentMood,
     activeQuestId,
     gameEvents,
-    session,
+    perception,
+    updatePerception,
+    sensingAudio,
     souvenirs,
     markSouvenirViewed,
     notify,
@@ -84,7 +83,6 @@ export default function TopiaPage() {
   const [topiaPayload, setTopiaPayload] = useState<TopiaWorldPayload | null>(
     null,
   );
-  const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
   const [topiaStudioOpen, setTopiaStudioOpen] = useState(false);
   const [hadPersistedUserData] = useState(hadPersistedUserDataAtBoot);
   const [topiaGenerating, setTopiaGenerating] = useState(false);
@@ -196,7 +194,7 @@ export default function TopiaPage() {
     () =>
       topiaPayload
         ? attachSouvenirsToTopia(topiaPayload.world, [
-            ...souvenirs,
+            ...souvenirs.filter((s) => s.status !== "revoked"),
           ])
         : null,
     [souvenirs, topiaPayload],
@@ -221,38 +219,12 @@ export default function TopiaPage() {
     setMoodMenuOpen(false);
     notify(`心情已切换为「${nextProfile.label}」`);
   };
-  const quickAction = (kind: QuickVoiceKind) => {
-    if (quickVoice.kind === kind && quickVoice.phase === "listening") {
+  const recordMood = () => {
+    if (quickVoice.phase === "listening") {
       void quickVoice.stop();
       return;
     }
-    if (kind === "conversation") {
-      setConversationPickerOpen(true);
-      return;
-    }
-    void quickVoice.start(kind);
-  };
-  const quickActionIcon = (kind: QuickVoiceKind) => {
-    if (quickVoice.kind !== kind)
-      return kind === "task"
-        ? "ListTodo"
-        : kind === "conversation"
-          ? "UsersRound"
-          : "Heart";
-    return quickVoice.phase === "listening" ? "Square" : "LoaderCircle";
-  };
-  const recentlyRecognizedIds = [
-    ...new Set(
-      (session.last_face?.matches ?? []).flatMap((match) =>
-        match.decision === "known" && match.person_id ? [match.person_id] : [],
-      ),
-    ),
-  ];
-  const suggestedPersonId =
-    recentlyRecognizedIds.length === 1 ? recentlyRecognizedIds[0] : null;
-  const beginConversation = (personId: string | null) => {
-    setConversationPickerOpen(false);
-    void quickVoice.start("conversation", personId);
+    void quickVoice.start("mood");
   };
   const worldContext = { quests, people, memories };
   const runTopiaAction = async (
@@ -546,55 +518,17 @@ export default function TopiaPage() {
         </div>
       </TopiaScene>
       <div className="today-column">
-        <div className="quick-actions" aria-label="快速记录">
-          <button
-            id="record-task"
-            className={
-              quickVoice.kind === "task" ? `is-${quickVoice.phase}` : undefined
-            }
-            aria-label={
-              quickVoice.kind === "task" && quickVoice.phase === "listening"
-                ? "停止记录新任务"
-                : "新任务"
-            }
-            aria-busy={
-              quickVoice.kind === "task" && quickVoice.phase === "processing"
-            }
-            disabled={
-              quickVoice.phase === "processing" ||
-              (quickVoice.phase === "listening" && quickVoice.kind !== "task")
-            }
-            onClick={() => quickAction("task")}
-          >
-            <Icon name={quickActionIcon("task")} />
-            新任务
-          </button>
+        <div className="quick-actions" aria-label="感知与心情">
           <button
             id="record-conversation"
-            className={
-              quickVoice.kind === "conversation"
-                ? `is-${quickVoice.phase}`
-                : undefined
-            }
-            aria-label={
-              quickVoice.kind === "conversation" &&
-              quickVoice.phase === "listening"
-                ? "停止对话感知"
-                : "对话感知"
-            }
-            aria-busy={
-              quickVoice.kind === "conversation" &&
-              quickVoice.phase === "processing"
-            }
-            disabled={
-              quickVoice.phase === "processing" ||
-              (quickVoice.phase === "listening" &&
-                quickVoice.kind !== "conversation")
-            }
-            onClick={() => quickAction("conversation")}
+            className={perception ? "is-listening" : undefined}
+            aria-label={perception ? "关闭对话感知" : "开启对话感知"}
+            aria-pressed={perception}
+            disabled={!perception && quickVoice.phase !== "idle"}
+            onClick={() => updatePerception(!perception)}
           >
-            <Icon name={quickActionIcon("conversation")} />
-            对话感知
+            <Icon name={perception ? "Square" : "UsersRound"} />
+            对话感知 · {perception ? "开" : "关"}
           </button>
           <button
             id="record-mood"
@@ -610,12 +544,22 @@ export default function TopiaPage() {
               quickVoice.kind === "mood" && quickVoice.phase === "processing"
             }
             disabled={
+              perception ||
+              sensingAudio.active ||
               quickVoice.phase === "processing" ||
               (quickVoice.phase === "listening" && quickVoice.kind !== "mood")
             }
-            onClick={() => quickAction("mood")}
+            onClick={recordMood}
           >
-            <Icon name={quickActionIcon("mood")} />
+            <Icon
+              name={
+                quickVoice.phase === "idle"
+                  ? "Heart"
+                  : quickVoice.phase === "listening"
+                    ? "Square"
+                    : "LoaderCircle"
+              }
+            />
             记录心情
           </button>
         </div>
@@ -705,70 +649,6 @@ export default function TopiaPage() {
             </button>
           </div>
         </section>
-      )}
-      {conversationPickerOpen && (
-        <div
-          className="person-enroll-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget)
-              setConversationPickerOpen(false);
-          }}
-        >
-          <section
-            className="person-enroll-dialog conversation-person-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="conversation-person-title"
-          >
-            <header>
-              <span>
-                <small>人物记忆</small>
-                <h2 id="conversation-person-title">你正在和谁对话？</h2>
-              </span>
-              <button
-                type="button"
-                aria-label="关闭人物选择"
-                onClick={() => setConversationPickerOpen(false)}
-              >
-                <Icon name="X" />
-              </button>
-            </header>
-            <p>
-              先确认对话对象，系统才能把任务、共同记忆和好感度记到正确的人身上。
-            </p>
-            <div className="conversation-person-list">
-              {people.map((person) => (
-                <button
-                  key={person.id}
-                  type="button"
-                  className={
-                    person.id === suggestedPersonId ? "suggested" : undefined
-                  }
-                  onClick={() => beginConversation(person.id)}
-                >
-                  <span>
-                    <b>{person.name}</b>
-                    <small>{person.role}</small>
-                  </span>
-                  {person.id === suggestedPersonId && (
-                    <em>眼镜最近识别 · 建议</em>
-                  )}
-                  <Icon name="ChevronRight" />
-                </button>
-              ))}
-            </div>
-            <button
-              className="conversation-unknown"
-              type="button"
-              onClick={() => beginConversation(null)}
-            >
-              暂时不确定，先保存为待关联对话
-            </button>
-            <small className="conversation-privacy">
-              最近人脸只用于提供建议；未经你点击确认，不会自动绑定。
-            </small>
-          </section>
-        </div>
       )}
       <TopiaStudioDialog
         open={topiaStudioOpen}

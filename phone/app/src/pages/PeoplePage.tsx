@@ -25,12 +25,16 @@ export default function PeoplePage() {
     updatePeople,
   } = useAppStore();
   const [selectedId, setSelectedId] = useState(people[0]?.id ?? "");
+  const [peopleFilter, setPeopleFilter] = useState<"recent" | "all">("all");
   const [panel, setPanel] = useState<Panel>("quests");
   const [enrolling, setEnrolling] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
   const [strangers, setStrangers] = useState<RecentStranger[]>([]);
   const [strangerOpen, setStrangerOpen] = useState(false);
+  const [strangerFilter, setStrangerFilter] = useState<"all" | "waiting">(
+    "all",
+  );
   const [selectedStrangerId, setSelectedStrangerId] = useState("");
   const [strangerIdentity, setStrangerIdentity] = useState("");
   const [strangerRelationship, setStrangerRelationship] = useState("");
@@ -45,20 +49,49 @@ export default function PeoplePage() {
     const timer = window.setInterval(refresh, 2_000);
     return () => window.clearInterval(timer);
   }, []);
-  const person = useMemo(
-    () => people.find((item) => item.id === selectedId) ?? people[0],
-    [people, selectedId],
-  );
-  if (!person) return null;
   const live = session.last_face;
-  const selectedStranger = strangers.find(
+  const visiblePeople = useMemo(() => {
+    if (peopleFilter === "all") return people;
+    const seenAt = new Map<string, number>();
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (const memory of memories) {
+      if (
+        memory.sourceType !== "face" ||
+        memory.status === "deleted" ||
+        memory.status === "dismissed"
+      )
+        continue;
+      const at = Date.parse(memory.observedAt ?? "");
+      if (!Number.isFinite(at) || at < since || at > Date.now()) continue;
+      for (const id of memory.subjectPersonIds ?? memory.personIds ?? [])
+        seenAt.set(id, Math.max(seenAt.get(id) ?? 0, at));
+    }
+    for (const match of live?.matches ?? [])
+      if (match.decision === "known" && match.person_id)
+        seenAt.set(match.person_id, Date.now());
+    return people
+      .filter((item) => seenAt.has(item.id))
+      .sort((a, b) => seenAt.get(b.id)! - seenAt.get(a.id)!);
+  }, [people, memories, live, peopleFilter]);
+  const person =
+    visiblePeople.find((item) => item.id === selectedId) ?? visiblePeople[0];
+  const visibleStrangers = strangers.filter(
+    (item) => strangerFilter === "all" || !item.identity,
+  );
+  const selectedStranger = visibleStrangers.find(
     (item) => item.id === selectedStrangerId,
   );
+  const openStrangers = (filter: "all" | "waiting") => {
+    setStrangerFilter(filter);
+    setSelectedStrangerId("");
+    setStrangerOpen(true);
+  };
   const relatedMemories = memories.filter(
     (item) =>
-      item.personIds?.includes(person.id) ||
-      item.title.includes(person.name) ||
-      item.meta.includes(person.name),
+      person &&
+      (item.personIds?.includes(person.id) ||
+        item.title.includes(person.name) ||
+        item.meta.includes(person.name)),
   ).length;
 
   const enrollFromGallery = async (target: Person) => {
@@ -124,11 +157,13 @@ export default function PeoplePage() {
       { ...created, photoPaths: receipt.photo_paths },
     ]);
     setSelectedId(created.id);
+    setPeopleFilter("all");
     setNewPersonName("");
     setCreateOpen(false);
   };
 
   const enrollRecentFace = async () => {
+    if (!person) return;
     try {
       const receipt = await nativeService.enrollLastFace(person.id);
       if (receipt.photo_paths.length) {
@@ -229,9 +264,30 @@ export default function PeoplePage() {
             <h1>人物</h1>
           </div>
           <div className="chips">
-            <b>最近相遇</b>
-            <span>全部人物</span>
-            <button type="button" onClick={() => setStrangerOpen(true)}>
+            <button
+              type="button"
+              data-people-filter="recent"
+              className={peopleFilter === "recent" ? "active" : ""}
+              aria-pressed={peopleFilter === "recent"}
+              onClick={() => setPeopleFilter("recent")}
+            >
+              最近相遇
+            </button>
+            <button
+              type="button"
+              data-people-filter="all"
+              className={peopleFilter === "all" ? "active" : ""}
+              aria-pressed={peopleFilter === "all"}
+              onClick={() => setPeopleFilter("all")}
+            >
+              全部人物
+            </button>
+            <button
+              type="button"
+              data-people-filter="waiting"
+              aria-expanded={strangerOpen && strangerFilter === "waiting"}
+              onClick={() => openStrangers("waiting")}
+            >
               等待相认 {strangers.filter((item) => !item.identity).length}
             </button>
           </div>
@@ -239,7 +295,7 @@ export default function PeoplePage() {
         <button
           className="stranger-inbox"
           type="button"
-          onClick={() => setStrangerOpen(true)}
+          onClick={() => openStrangers("all")}
         >
           <span>
             <b>最近陌生人</b>
@@ -249,10 +305,17 @@ export default function PeoplePage() {
           </span>
         </button>
         <div className="p-grid">
-          {people.map((item) => (
+          {visiblePeople.length === 0 && (
+            <p className="empty-panel">
+              {peopleFilter === "recent"
+                ? "最近 7 天暂无人物识别记录"
+                : "还没有录入人物"}
+            </p>
+          )}
+          {visiblePeople.map((item) => (
             <button
               key={item.id}
-              className={`p-card ${person.id === item.id ? "active" : ""}`}
+              className={`p-card ${person?.id === item.id ? "active" : ""}`}
               data-person={item.id}
               onClick={() => {
                 setSelectedId(item.id);
@@ -273,18 +336,20 @@ export default function PeoplePage() {
         </div>
         <button
           className="enroll-recent"
-          disabled={enrolling || !live?.eligible_count}
+          disabled={!person || enrolling || !live?.eligible_count}
           onClick={() => void enrollRecentFace()}
         >
           {live?.eligible_count ? "录入最近拍摄的人脸" : "最近拍摄暂无可用人脸"}
         </button>
-        <button
-          className="enroll-recent enroll-existing"
-          disabled={enrolling}
-          onClick={() => void enrollFromGallery(person)}
-        >
-          为 {person.name} 追加 9 张图库照片
-        </button>
+        {person && (
+          <button
+            className="enroll-recent enroll-existing"
+            disabled={enrolling}
+            onClick={() => void enrollFromGallery(person)}
+          >
+            为 {person.name} 追加 9 张图库照片
+          </button>
+        )}
         <button
           className="import"
           id="enroll-person"
@@ -296,86 +361,105 @@ export default function PeoplePage() {
           <small>选择 9 张同一人的清晰照片</small>
         </button>
       </aside>
-      <article className="p-info">
-        <section className="person-overview">
-          <div className="p-hero">
-            <Portrait person={person} big />
-            <small>
-              第 {String(people.indexOf(person) + 1).padStart(2, "0")} 位
-            </small>
-          </div>
-          <div className="person-bio">
-            <h1>{person.name}</h1>
-            <p className="role">{person.role}</p>
-            <div className="affinity">
-              <span>
-                <Icon name="Heart" />
-                好感度 · {affinityLevel(person.affinity)}
-              </span>
-              <b>
-                {person.affinity}
-                <small>/100</small>
-              </b>
-              <i>
-                <em style={{ width: `${person.affinity}%` }} />
-              </i>
+      {person ? (
+        <article className="p-info">
+          <section className="person-overview">
+            <div className="p-hero">
+              <Portrait person={person} big />
+              <small>
+                第 {String(people.indexOf(person) + 1).padStart(2, "0")} 位
+              </small>
             </div>
-            <blockquote>“{person.quote}”</blockquote>
-            <p>{person.story}</p>
+            <div className="person-bio">
+              <h1>{person.name}</h1>
+              <p className="role">{person.role}</p>
+              <div className="affinity">
+                <span>
+                  <Icon name="Heart" />
+                  好感度 · {affinityLevel(person.affinity)}
+                </span>
+                <b>
+                  {person.affinity}
+                  <small>/100</small>
+                </b>
+                <i>
+                  <em style={{ width: `${person.affinity}%` }} />
+                </i>
+              </div>
+              <blockquote>“{person.quote}”</blockquote>
+              <p>{person.story}</p>
+            </div>
+          </section>
+          <div className="p-tabs">
+            <button
+              data-person-panel="quests"
+              className={panel === "quests" ? "active" : ""}
+              onClick={() => setPanel("quests")}
+            >
+              关联任务{" "}
+              {
+                quests.filter(
+                  (q) =>
+                    !q.demo &&
+                    (q.personId === person.id ||
+                      q.ownerPersonId === person.id ||
+                      q.participantIds?.includes(person.id)),
+                ).length
+              }
+            </button>
+            <button
+              data-person-panel="memories"
+              className={panel === "memories" ? "active" : ""}
+              onClick={() => setPanel("memories")}
+            >
+              共同记忆 {relatedMemories}
+            </button>
+            <button
+              data-person-panel="profile"
+              className={panel === "profile" ? "active" : ""}
+              onClick={() => setPanel("profile")}
+            >
+              人物档案
+            </button>
           </div>
-        </section>
-        <div className="p-tabs">
-          <button
-            data-person-panel="quests"
-            className={panel === "quests" ? "active" : ""}
-            onClick={() => setPanel("quests")}
-          >
-            关联任务 {person.quests.length}
-          </button>
-          <button
-            data-person-panel="memories"
-            className={panel === "memories" ? "active" : ""}
-            onClick={() => setPanel("memories")}
-          >
-            共同记忆 {relatedMemories}
-          </button>
-          <button
-            data-person-panel="profile"
-            className={panel === "profile" ? "active" : ""}
-            onClick={() => setPanel("profile")}
-          >
-            人物档案
-          </button>
-        </div>
-        <div className="person-related">
-          <PersonPanel
-            person={person}
-            panel={panel}
-            quests={quests}
-            memories={memories}
-            gameEvents={gameEvents}
-            onOpenQuest={(id) =>
-              navigate("/quests", { state: { questId: id } })
-            }
-            onOpenMemory={(id) =>
-              navigate("/settings/memory", { state: { memoryId: id } })
-            }
-          />
-        </div>
-        <small className="seen">
-          <Icon name="ScanFace" />
-          {person.seen} · 由眼镜感知
-        </small>
-        {live && (
-          <div className="face-live">
-            <b>最近识别 #{live.request_id}</b>
-            <span>
-              检测 {live.detected_count} · 可匹配 {live.eligible_count} ·{" "}
-              {live.processing_total_ms} 毫秒
-            </span>
+          <div className="person-related">
+            <PersonPanel
+              person={person}
+              panel={panel}
+              quests={quests}
+              memories={memories}
+              gameEvents={gameEvents}
+              onOpenQuest={(id) =>
+                navigate("/quests", { state: { questId: id } })
+              }
+              onOpenMemory={(id) =>
+                navigate("/settings/memory", { state: { memoryId: id } })
+              }
+            />
           </div>
-        )}
-      </article>
+          <small className="seen">
+            <Icon name="ScanFace" />
+            {person.seen} · 由眼镜感知
+          </small>
+          {live && (
+            <div className="face-live">
+              <b>最近识别 #{live.request_id}</b>
+              <span>
+                检测 {live.detected_count} · 可匹配 {live.eligible_count} ·{" "}
+                {live.processing_total_ms} 毫秒
+              </span>
+            </div>
+          )}
+        </article>
+      ) : (
+        <article className="p-info">
+          <p className="empty-panel">
+            {peopleFilter === "recent"
+              ? "这里仅显示最近 7 天实际识别到的人物。可以切换“全部人物”查看已有档案。"
+              : "点击“新建并录入人物”，建立第一份人物档案。"}
+          </p>
+        </article>
+      )}
       {createOpen && (
         <div className="person-enroll-backdrop">
           <form
@@ -418,10 +502,17 @@ export default function PeoplePage() {
       )}
       {strangerOpen && (
         <div className="person-enroll-backdrop">
-          <section className="stranger-dialog" role="dialog" aria-modal="true">
+          <section
+            className="stranger-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="stranger-dialog-title"
+          >
             <header>
               <span>
-                <h2>最近陌生人</h2>
+                <h2 id="stranger-dialog-title">
+                  {strangerFilter === "waiting" ? "等待相认" : "最近陌生人"}
+                </h2>
                 <small>最近 10 人，每人最多保留 9 张裁剪图</small>
               </span>
               <button type="button" onClick={() => setStrangerOpen(false)}>
@@ -430,10 +521,14 @@ export default function PeoplePage() {
             </header>
             <div className="stranger-body">
               <aside className="stranger-list">
-                {strangers.length === 0 && (
-                  <p>眼镜还没有遇到可匹配尺寸的陌生人。</p>
+                {visibleStrangers.length === 0 && (
+                  <p>
+                    {strangerFilter === "waiting"
+                      ? "暂无等待相认的人物。"
+                      : "眼镜还没有遇到可匹配尺寸的陌生人。"}
+                  </p>
                 )}
-                {strangers.map((item, index) => (
+                {visibleStrangers.map((item, index) => (
                   <button
                     type="button"
                     key={item.id}

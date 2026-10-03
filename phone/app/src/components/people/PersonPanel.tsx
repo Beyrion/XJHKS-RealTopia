@@ -6,6 +6,7 @@ import type {
   Quest,
 } from "../../models";
 import { personMemoryLabel } from "../../utils/personMemory";
+import { isUsableMemory } from "../../utils/socialMemory";
 import { Icon } from "../ui/Icon";
 
 interface PersonPanelProps {
@@ -53,13 +54,14 @@ export function PersonPanel({
   if (panel === "memories") {
     const related = memories.filter(
       (item) =>
-        item.personIds?.includes(person.id) ||
-        item.title.includes(person.name) ||
-        item.meta.includes(person.name),
+        isUsableMemory(item) &&
+        (item.subjectPersonIds ?? item.personIds ?? []).includes(person.id),
     );
     const affinityEvents = gameEvents.filter(
       (event) =>
-        event.personId === person.id && event.type === "affinity_changed",
+        event.status !== "revoked" &&
+        event.personId === person.id &&
+        event.type === "affinity_changed",
     );
     if (!related.length && !affinityEvents.length)
       return (
@@ -109,15 +111,21 @@ export function PersonPanel({
     );
   }
 
-  if (!person.quests.length)
+  const relatedQuests = quests.filter(
+    (q) =>
+      q.personId === person.id ||
+      q.ownerPersonId === person.id ||
+      q.participantIds?.includes(person.id),
+  );
+  if (!relatedQuests.length)
     return <p className="empty-panel">暂时没有关联任务。</p>;
   return (
     <>
-      {person.quests.map((title, index) => {
-        const item = quests.find((quest) => quest.title === title);
+      {relatedQuests.map((item, index) => {
+        const title = item.realTitle ?? item.title;
         return (
           <button
-            key={title}
+            key={item.id}
             className="linked"
             data-quest={item?.id}
             data-open-quest={item ? "true" : undefined}

@@ -9,21 +9,34 @@ const PAGE_SIZE = 20;
 
 export default function MemorySettingsPage() {
   const location = useLocation();
-  const { memories, people, quests, gameEvents, updateMemories, notify } =
-    useAppStore();
+  const {
+    memories,
+    people,
+    quests,
+    gameEvents,
+    deleteMemory,
+    editMemory,
+    notify,
+  } = useAppStore();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return memories.filter(
       (item) =>
-        !needle ||
-        `${item.title} ${item.meta} ${item.summary ?? ""} ${item.transcript ?? ""}`
-          .toLowerCase()
-          .includes(needle),
+        item.status !== "deleted" &&
+        (showHistory ||
+          !["superseded", "dismissed", "pending"].includes(
+            item.status ?? "active",
+          )) &&
+        (!needle ||
+          `${item.title} ${item.meta} ${item.summary ?? ""} ${item.transcript ?? ""}`
+            .toLowerCase()
+            .includes(needle)),
     );
-  }, [memories, query]);
+  }, [memories, query, showHistory]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const pageItems = filtered.slice(
@@ -42,7 +55,7 @@ export default function MemorySettingsPage() {
   const deleteSelected = () => {
     if (!selected || !confirm(`删除记忆“${selected.title}”？此操作无法撤销。`))
       return;
-    updateMemories((items) => items.filter((item) => item.id !== selected.id));
+    deleteMemory(selected.id);
     setSelectedId(null);
     notify("记忆已删除");
   };
@@ -53,7 +66,9 @@ export default function MemorySettingsPage() {
       !confirm(`清除本机全部 ${memories.length} 条记忆？此操作无法撤销。`)
     )
       return;
-    updateMemories([]);
+    memories
+      .filter((item) => item.status !== "deleted")
+      .forEach((item) => deleteMemory(item.id));
     setPage(0);
     setSelectedId(null);
     notify("全部记忆已清除");
@@ -66,7 +81,7 @@ export default function MemorySettingsPage() {
           {
             version: 2,
             exportedAt: new Date().toISOString(),
-            memories,
+            memories: memories.filter((item) => item.status !== "deleted"),
             affinityLedger: gameEvents.filter(
               (event) =>
                 event.type === "affinity_changed" ||
@@ -96,6 +111,14 @@ export default function MemorySettingsPage() {
       <SettingCard title="记忆条目">
         <div className="memory-browser">
           <div className="memory-toolbar">
+            <label>
+              <input
+                type="checkbox"
+                checked={showHistory}
+                onChange={(e) => setShowHistory(e.target.checked)}
+              />
+              显示旧版本与待确认记录
+            </label>
             <label className="search" aria-label="搜索记忆">
               <Icon name="Search" />
               <input
@@ -170,6 +193,11 @@ export default function MemorySettingsPage() {
           quests={quests}
           onClose={() => setSelectedId(null)}
           onDelete={deleteSelected}
+          onEdit={(text) => {
+            editMemory(selected.id, text);
+            setSelectedId(null);
+            notify("纠正已保存为新版本，旧记录退出检索");
+          }}
         />
       )}
     </div>
